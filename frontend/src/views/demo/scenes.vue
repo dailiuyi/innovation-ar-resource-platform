@@ -1,6 +1,6 @@
 <template>
   <div class="app-container">
-    <h2>场景管理</h2><p>场景列表分别提供“场景信息”和“版本与文件”入口：前者维护名称、地址、坐标，后者直接打开该场景的资源管理面板。</p>
+    <h2>场景管理</h2><p>场景列表分别提供“场景信息”和“版本与文件”入口：前者维护名称、地址、坐标，后者直接打开该场景的资源管理面板。点击版本与文件可直接管理该场景资源。</p>
     <el-form inline @submit.prevent="search">
       <el-form-item label="场景名称"><el-input v-model="name" clearable placeholder="搜索场景" /></el-form-item>
       <el-form-item>
