@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" width="100%" height="auto" role="img" aria-label="AR Resource Platform Header Banner">
+  <title>AR Resource Platform Hero</title>
+  <style><![CDATA[
+    .bg { fill: #0b0f19; }
+    .grid { stroke: #1e293b; stroke-width: 1; stroke-dasharray: 4,4; }
+    .panel { fill: #111827; stroke: #1e293b; stroke-width: 1.5; }
+    .badge { fill: #1e293b; stroke: #334155; stroke-width: 1; }
+    .txt-tag { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 600; fill: #38bdf8; letter-spacing: 0.12em; text-transform: uppercase; }
+    .txt-title { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 36px; font-weight: 800; fill: #f8fafc; letter-spacing: -0.02em; }
+    .txt-desc { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 16px; line-height: 1.6; fill: #94a3b8; }
+    .txt-sub { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; fill: #cbd5e1; }
+    .telemetry-txt { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #64748b; }
+    .telemetry-val { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; font-weight: 600; fill: #34d399; }
+    .code-txt { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #cbd5e1; }
+
+    /* Asset Nodes */
+    .flow-edge { stroke: #38bdf8; stroke-width: 1.5; stroke-dasharray: 4,3; fill: none; }
+    .cube-wire { stroke: #38bdf8; stroke-width: 1.5; fill: none; }
+
+    @media (prefers-color-scheme: light) {
+      .bg { fill: #f8fafc; }
+      .grid { stroke: #e2e8f0; }
+      .panel { fill: #ffffff; stroke: #e2e8f0; }
+      .badge { fill: #f1f5f9; stroke: #cbd5e1; }
+      .txt-tag { fill: #0284c7; }
+      .txt-title { fill: #0f172a; }
+      .txt-desc { fill: #475569; }
+      .txt-sub { fill: #334155; }
+      .telemetry-txt { fill: #64748b; }
+      .telemetry-val { fill: #059669; }
+      .code-txt { fill: #334155; }
+      .flow-edge { stroke: #0284c7; }
+      .cube-wire { stroke: #0284c7; }
+    }
+  ]]></style>
+
+  <!-- Background -->
+  <rect width="1200" height="380" rx="16" class="bg" />
+
+  <!-- Grid -->
+  <g class="grid">
+    <line x1="60" y1="0" x2="60" y2="380" />
+    <line x1="320" y1="0" x2="320" y2="380" />
+    <line x1="600" y1="0" x2="600" y2="380" />
+    <line x1="880" y1="0" x2="880" y2="380" />
+    <line x1="0" y1="70" x2="1200" y2="70" />
+    <line x1="0" y1="190" x2="1200" y2="190" />
+    <line x1="0" y1="310" x2="1200" y2="310" />
+  </g>
+
+  <!-- Left: Content -->
+  <g transform="translate(60, 42)">
+    <rect x="0" y="0" width="280" height="26" rx="13" class="badge" />
+    <circle cx="12" cy="13" r="4" fill="#38bdf8" />
+    <text x="24" y="17" class="txt-tag">AR ASSET INFRA // RUOYI + SPRING 3</text>
+
+    <text x="0" y="70" class="txt-title">AR 场景资源管理平台</text>
+    <text x="0" y="106" class="txt-desc">面向团队制作与终端分发的 AR 场景资源全生命周期中台。</text>
+    <text x="0" y="132" class="txt-desc">三层解耦资产模型 · 分片多文件上传对账 · 发布状态冻结 · 契约驱动架构。</text>
+
+    <!-- Pillars -->
+    <g transform="translate(0, 168)">
+      <g transform="translate(0, 0)">
+        <rect width="235" height="40" rx="8" class="panel" />
+        <circle cx="18" cy="20" r="4" fill="#38bdf8" />
+        <text x="32" y="25" class="txt-sub">场景 ➔ 版本草稿 ➔ 成品文件</text>
+      </g>
+      <g transform="translate(247, 0)">
+        <rect width="235" height="40" rx="8" class="panel" />
+        <circle cx="18" cy="20" r="4" fill="#34d399" />
+        <text x="32" y="25" class="txt-sub">单场景唯一激活版本与发布冻结</text>
+      </g>
+      <g transform="translate(0, 48)">
+        <rect width="235" height="40" rx="8" class="panel" />
+        <circle cx="18" cy="20" r="4" fill="#fb7185" />
+        <text x="32" y="25" class="txt-sub">启动对账校验与失败断点重试</text>
+      </g>
+      <g transform="translate(247, 48)">
+        <rect width="235" height="40" rx="8" class="panel" />
+        <circle cx="18" cy="20" r="4" fill="#a78bfa" />
+        <text x="32" y="25" class="txt-sub">OpenAPI v0.3.0 + Manifest Schema</text>
+      </g>
+    </g>
+
+    <g transform="translate(0, 286)">
+      <text x="0" y="0" class="telemetry-txt">DOCKER COMPOSE READY // POSTGRESQL // LOCAL STORAGE VOLUME</text>
+    </g>
+  </g>
+
+  <!-- Right: 3D AR Scene Box & Pipeline -->
+  <g transform="translate(680, 40)">
+    <rect width="460" height="300" rx="14" class="panel" />
+
+    <!-- Header -->
+    <line x1="0" y1="36" x2="460" y2="36" stroke="#1e293b" class="grid" />
+    <circle cx="20" cy="18" r="4" fill="#38bdf8" />
+    <text x="32" y="22" class="telemetry-txt">AR_PIPELINE // SCENE_INGESTION</text>
+    <rect x="375" y="10" width="65" height="18" rx="4" class="badge" />
+    <text x="388" y="22" class="telemetry-val">FROZEN</text>
+
+    <!-- Isometric 3D Cube (AR Spatial Target) -->
+    <g transform="translate(80, 110)">
+      <!-- Top Face -->
+      <polygon points="60,0 120,30 60,60 0,30" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5" />
+      <!-- Left Face -->
+      <polygon points="0,30 60,60 60,130 0,100" fill="#111827" stroke="#38bdf8" stroke-width="1.5" />
+      <!-- Right Face -->
+      <polygon points="60,60 120,30 120,100 60,130" fill="#1e1b4b" stroke="#38bdf8" stroke-width="1.5" />
+      <text x="35" y="45" class="code-txt" font-size="10" fill="#38bdf8">AR SCENE</text>
+    </g>
+
+    <!-- Steps Stack -->
+    <g transform="translate(230, 60)">
+      <!-- Step 1 -->
+      <rect width="200" height="38" rx="6" class="panel" />
+      <circle cx="16" cy="19" r="4" fill="#38bdf8" />
+      <text x="28" y="23" class="code-txt">1. 创建版本草稿 (Draft)</text>
+
+      <!-- Step 2 -->
+      <rect y="46" width="200" height="38" rx="6" class="panel" />
+      <circle cx="16" cy="65" r="4" fill="#fbbf24" />
+      <text x="28" y="69" class="code-txt">2. 多文件分片校验上传</text>
+
+      <!-- Step 3 -->
+      <rect y="92" width="200" height="38" rx="6" class="panel" />
+      <circle cx="16" cy="111" r="4" fill="#34d399" />
+      <text x="28" y="115" class="code-txt">3. 启动对账与发布冻结</text>
+
+      <!-- Step 4: Terminal Client -->
+      <rect y="138" width="200" height="34" rx="6" class="badge" />
+      <text x="14" y="159" class="telemetry-val">📲 扫码下载清单 Manifest</text>
+    </g>
+
+    <!-- Bottom Telemetry -->
+    <g transform="translate(20, 246)">
+      <rect width="420" height="38" rx="6" class="badge" />
+      <text x="14" y="23" class="telemetry-txt">BOOTSTRAP AUTH:</text>
+      <text x="140" y="23" class="telemetry-val">Auto Disabled on First Admin Created</text>
+    </g>
+  </g>
+</svg>
