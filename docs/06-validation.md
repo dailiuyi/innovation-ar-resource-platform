@@ -414,3 +414,9 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 在新命名卷的数据库中核对公共表 24 张，`ar_audit=199`、`ar_draft=4`、`ar_draft_file=57`、`ar_scene=4`、`sys_user=3`，与迁移前一致。执行 `docker compose -f compose.yaml --env-file config/compose.env build backend gateway` 和 `up -d --wait --wait-timeout 180` 成功；PostgreSQL、Redis、后端、网关四个服务均 healthy。`http://192.168.0.12:43174/` 返回 HTTP 200 且页面标题为新名称，`/prod-api/captchaImage` 返回业务码 200。
 - `python scripts/check_java.py --module ruoyi-ar` 的 22 项测试通过，报告在 `.local/java-check/1d09cc3af862/report.json`。`python scripts/agent_check.py --profile frontend` 通过 quick、契约、专项前端检查及生产构建输入/产物复核，报告在 `.local/harness/20260925T065125Z-p8vme4sp/report.json`，该轮源码指纹 `118e6dd59ce86e33ce0ab359cb8c9c821f8ad4a949a38ed441c97dfbeaf3d03a`、`sourceUnchanged=true`；本条验证文档在该轮之后补记。
 - 限制：未执行真实账号登录、第二台局域网设备或客户端加载验收。原卷与备份作为回退材料保留；若新库已有新增写入，回退前需先处理数据差异。数据库角色重命名未完成，本次不修改其登录凭据。本机目录已更名为 `E:\code\java\innovation-ar-resource-platform`；Codex 桌面应用保存的项目入口另行核对。
+
+## 2026-10-27 公网分发方案文档提交检查
+
+- 本轮仅提交公网分发建议、4DGS 样本任务记录与知识索引，保留原有 `README.md.bak`，没有业务源码变更。
+- `git diff --check` 及两份新增文档的 `git diff --no-index --check /dev/null <文件>` 均无空白错误。
+- `python3 scripts/harness.py doctor --profile quick` 与 `python3 scripts/harness.py check --profile quick` 均返回 blocked（退出码 2）：缺少 contract validators；报告分别为 `.local/harness/20261027T080034Z-9t5d_ybf/report.json`、`.local/harness/20261027T080044Z-8qz0vq69/report.json`。本机无 `python` 命令，使用 `python3`。未执行业务、浏览器或数据库验收。
