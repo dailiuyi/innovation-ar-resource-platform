@@ -168,7 +168,7 @@ quick profile 包含无网络、无凭据的假 App Server 协议测试；Linux 
 
 容器提供 Git、Node、Python、Codex、JDK 21 和 Maven。Java 依赖使用任务自己的 `.local/m2`，首次下载仍有冷启动成本；禁止用“镜像有 Java”代替实际执行测试。Python 验证依赖预装在镜像的只读 venv 中，各任务仍拥有自己的轻量 venv；前端任务按需执行 `npm ci --prefer-offline --no-audit --no-fund`，node_modules 不共享。
 
-当前 [ingestion profile](13-harness.md) 依赖 Windows、PostgreSQL 17、JDK 21、Edge 和 `.local` 环境。容器不能据此声明入库端到端验收通过；相关任务必须返回宿主机完成隔离验收后才能接受。
+`ingestion` profile 与 `review.py` 原生运行时仍依赖 Windows、PostgreSQL 17、JDK 21、Edge 和 `.local` 环境，Linux 容器不能据此声称该 profile 通过。Linux 宿主的入库/真实样包验收使用 [Harness 的固定隔离 Compose 流程](13-harness.md)（`127.0.0.1:18082`）；两条路径都不能用 quick/frontend 代替真实业务验收，也不得操作日常实例。
 
 管理页面 HTTP 200 只证明服务启动；Codex 登录状态不证明模型请求成功；二者都不等同于真实 Issue 到 PR 的验收。当前安装结果见 [验证记录](06-validation.md)。
 

@@ -1,22 +1,20 @@
-# 资源传输框架与待定打包接口
+# 资源传输参考工具
 
 ## 当前边界
 
-只搭可替换框架，资源格式尚未确定。不指定 ZIP、Unity AssetBundle、目录层级、内部清单、平台枚举或 AR 加载入口，也不冻结业务表及生产 HTTP API。
+当前业务格式是 `resource.json` v1 描述加固定文件清单，接口见 [资源入库闭环](12-resource-ingestion.md)。本页只说明 Python 3.11+ 标准库传输工具和独立的打包扩展接口，不另设业务契约。
 
-本轮交付是 Python 3.11+ 标准库参考工具，便于对照管理员下载接口和匿名客户端读取接口联调，不是手机 SDK。旧管理员清单/ZIP 下载接口已随成品版本切换删除；场景级下载由 `scripts/download_scene.py` 编排（见 [资源入库闭环](12-resource-ingestion.md)“匿名客户端读取与完整下载”）：按版本和档位固定清单，`payload/` 与控制区分离，复用本文单文件 `download` 的 Range 续传逻辑。后台上传继续按整包重试，暂不增加分片上传。客户端读取匿名，不含认证。
+场景级下载使用 `scripts/download_scene.py`：按当前发布版本和所选档位固定清单，分离 `payload/` 与控制区，复用 `artifact_transfer.download` 的 Range 续传逻辑。后台上传按文件重试，已入库文件跳过，不整包重传，也没有分片上传协议。匿名客户端读取不带管理员认证；这些工具是联调参考，不是手机 SDK。
 
-## 三个独立边界
+## 工具边界
 
-| 层 | 当前提供 | 格式确定后修改位置 |
+| 层 | 当前提供 | 使用边界 |
 |---|---|---|
-| 打包与解包 | `scripts/artifact_packaging.py` 中的 `PackageCodec` Protocol，无默认实现 | 新增具体适配器，约定文件布局、入口及内部清单 |
-| 文件传输 | `scripts/artifact_transfer.py` 中的下载参考逻辑和本机测试服务 | 对接客户端网络库、鉴权及正式网关 |
-| 场景与版本业务 | 本轮不新增 | 真实交付契约确定后，再接入文件登记、场景版本与授权 |
+| 通用打包扩展 | `scripts/artifact_packaging.py` 中的 `PackageCodec` Protocol，无具体编解码实现 | 独立开发工具，当前 4DGS 目录上传/下载不调用它，也不要求 ZIP 或 Unity AssetBundle |
+| 单文件传输 | `scripts/artifact_transfer.py` 的 `download` 与本机测试服务 | 固定 URL、大小与摘要，提供 Range/If-Range 参考；不解析模型 |
+| 场景与版本下载 | `scripts/download_scene.py` | 经匿名目录/详情选取一个档位的模型与公共文件，完成校验后才写 `ready.json`；版本变化 409 即停止 |
 
-传输层不导入打包接口，不解析资源内容。直接下载原生包时，可以完全跳过打包层。打包接口是可修改的开发工具边界，不是对外稳定 API；客户端的实际解包逻辑需要用对应技术栈实现。
-
-`PackageCodec.pack(source, destination)` 和 `unpack(source, destination, max_bytes=...)` 仅表达基本职责。具体实现负责格式验证、解包容量限制、安全路径和失败清理；源路径允许文件或目录，具体语义待联调。目标不得覆盖已有内容，只有完整结果可以交付。当前没有实现这些能力，也没有声称完成任何格式兼容验证。
+`PackageCodec.pack`/`unpack` 仅表达可选生产工具的扩展职责，没有实现格式验证、安全解包或容量限制，不应当作已可用功能。通用 `restore-manifest` 命令仍能消费调用者提供的文件清单，但旧管理员清单接口已删除，当前业务完整下载使用 `download_scene.py`。
 
 ## 格式无关的传输约定
 
@@ -42,9 +40,8 @@
 python scripts/artifact_transfer.py serve .local/sample.bin --port 18083
 # 另一终端；填写可信来源提供的实际大小与 SHA-256。
 python scripts/artifact_transfer.py download http://127.0.0.1:18083/artifact .local/client/sample.bin --bytes <BYTES> --sha256 <SHA256>
-# 管理员按清单还原目录时，令牌只从环境变量读取。
-$env:AR_TOKEN='<session-token>'
-python scripts/artifact_transfer.py restore-manifest .local/manifest.json .local/restored --base-url http://127.0.0.1:18080
+# 当前业务下载；使用实际网关、sceneId 和档位。
+python scripts/download_scene.py --base-url https://4dgs.elma-gohan.xyz --scene-id <UUID> --variant standard_quality --output .local/downloads
 python scripts/test_artifact_transfer.py
 python scripts/test_download_scene.py
 ```
@@ -55,11 +52,6 @@ python scripts/test_download_scene.py
 
 同一目标用操作系统文件锁（Linux/macOS `fcntl.flock`，Windows `msvcrt.locking`）排除并行写入，锁文件 `<名称>.download.lock`（或控制目录中的 `<key>.lock`）保留为空文件，不靠文件是否存在判断占用：进程退出或被强杀后系统释放锁，残留的空文件不会卡住下一次运行；另一个活动进程持有时抛出 `DownloadBusy`。暂不引入任务调度、自动恢复或清理服务。
 
-## 后续接入顺序
+## 验证边界
 
-1. 客户端提供真实导出物和实际加载过程，确定是否需要打包/解包、目标平台及资源依赖。
-2. 按需实现一个 PackageCodec；针对实际格式验证安全解包、大小限制、校验和客户端加载。
-3. 对接正式上传、文件元数据、下载授权及 Nginx；在真实网关重新验证续传。
-4. 验证真机空间、缓存和现场网络容量。
-
-当前测试只证明通用参考工具的传输行为，不证明生产网关、AR 渲染、打包解包或数百人承载能力。
+单文件本机测试只证明通用传输规则；真实网关、版本变化和样包的既有验证见 [资源入库闭环](12-resource-ingestion.md) 与 [真实样包验收记录](20-4dgs-sample-validation.md)。它们不证明手机解码、可选打包/解包、现场网络容量或数百人承载能力；这些需要对应客户端与真实环境验收。

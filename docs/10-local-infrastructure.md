@@ -1,12 +1,12 @@
 # Docker 部署与本地成品存储基础设施
 
-格式未定阶段的独立开发工具见 [资源传输参考框架](11-artifact-transfer-reference.md)：提供打包扩展接口和下载续传参考测试，尚未接入本页的 Spring Boot/Nginx 服务。
+单文件 Range 续传参考与通用打包扩展边界见 [资源传输参考](11-artifact-transfer-reference.md)；当前场景下载由 `scripts/download_scene.py` 通过匿名 HTTP 接口编排，不需要 ZIP 或解包步骤。
 
 ## 当前实现与交付边界
 
 本阶段已提供四个服务的 Docker Compose 配置：Nginx、Spring Boot、PostgreSQL 17、Redis。业务能力包含账号、场景、成品版本、文件入库与审计。管理员可在后台导入资源目录并上传文件；匿名客户端可只读已发布版本。
 
-`ArtifactStorage` 和 `LocalArtifactStorage` 已实现本地文件暂存、大小/SHA256 校验、不可覆盖确认、读取、校验及文件盘点。存储组件通过场景版本服务接入管理员 HTTP 上传和数据库登记，仍没有公开文件目录。文件确认入库不等于业务发布。
+`ArtifactStorage` 和 `LocalArtifactStorage` 提供 `store`/`recover`、读取、删除和盘点。正常入库同一次读取完成大小/SHA256 校验并无覆盖提交，恢复时仅验证未完成记录的遗留字节。存储组件经场景版本服务接入管理员上传、数据库登记与下载，不开放文件目录。文件确认入库不等于业务发布。
 
 成品版本导入、逐文件上传、发布指针和整版删除已实现，详见 [资源入库闭环](12-resource-ingestion.md)；匿名客户端读取（网关 `/api/v1/client/`）已实现，下载授权不依赖令牌或签名地址。旧候选契约和七表脚本不会参与容器初始化。
 
@@ -14,9 +14,11 @@
 
 要求 Windows Docker Desktop 使用 WSL2/Linux 容器，或 Linux Docker Engine + Compose。准备阶段需要联网构建/获取镜像；运行时不依赖云存储。下面命令从仓库根目录执行，Linux 将 `python` 换成 `python3`。
 
+以下命令仅用于准备新环境，不是更新日常实例的指令。V015 会清空旧成品业务记录；现有数据库升级必须先备份并另行授权，不能直接执行。
+
 ```powershell
-# 1 MiB 仅用于合成数据的基础设施验证，不是产品上传限制。
-python scripts/prepare_compose.py --max-bytes 1048576 --bind-address 127.0.0.1 --http-port 18081
+# 1 GiB 是示例单文件上限，按实际成品调整；已有配置不重复生成。
+python scripts/prepare_compose.py --max-bytes 1073741824 --bind-address 192.168.0.12 --http-port 18081
 docker compose --env-file config/compose.env config --quiet
 docker compose --env-file config/compose.env up -d --build
 docker compose --env-file config/compose.env ps
@@ -24,11 +26,13 @@ docker compose --env-file config/compose.env ps
 
 准备脚本使用独占创建生成随机数据库密码、Token 密钥和引导密码，不打印密码，也不覆盖已有文件。`config/*.env` 已忽略且不进入 Docker 构建上下文。Windows 文件权限继承宿主目录权限，应将仓库置于自己的私有工作目录；Linux 新配置权限为 0600。
 
-默认入口为 `http://127.0.0.1:18081`。首次使用 `bootstrap` 和私有配置内的引导密码登录，在账号管理中创建日常管理员；引导账号随即停用。容器数据库是新库，**不包含现有 Windows Demo 的账号和场景**。
+当前日常入口为 `http://192.168.0.12:18081`，由私有 `config/compose.env` 配置。公网 `https://4dgs.elma-gohan.xyz` 经过 `elma-gohan.xyz` 的 nginx 中继与反向 SSH 隧道到开发机 gateway；开发机或隧道离线即不可用。这不是云端应用迁移或 CDN 部署。
 
-内网开放时把 `AR_BIND_ADDRESS` 改成宿主机实际内网地址，再重新执行 `up -d`，并为该端口配置限定来源的 Windows 防火墙规则。客户端使用可配置的服务地址；前端通过同源 `/prod-api/` 代理，不写死机器 IP。当前提供内网 HTTP，未配置公网入口或 HTTPS。
+Compose/准备脚本在未覆盖参数时仍默认 `127.0.0.1:18081`；隔离验收固定用 `127.0.0.1:18082`，不能混用日常库和配置。首次空库使用 `bootstrap` 和私有配置内的引导密码登录，创建日常管理员后引导账号停用；新容器库不自动导入原生 Demo 数据。
 
-`AR_STORAGE_MAX_BYTES`（单文件上限）是必填的正整数，应按最大模型文件设置；`AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）限制单个版本。产物入口使用原始字节流，由服务端流式检查上限；Nginx 对精确的 `scene-versions/{versionId}/files/{fileId}/content` 路径关闭请求/响应缓冲和网关字节限制，其他接口继续使用 20m 限制。单服务启动后会对已有文件记录核对本地存储。
+内网开放时设置 `AR_BIND_ADDRESS` 为实际内网地址，并限定宿主防火墙来源。客户端服务地址可配置，管理前端使用同源 `/prod-api/`，匿名读取使用 `/api/v1/client/`；仓库内 gateway 提供 HTTP，公网 TLS 在中继终止。
+
+`AR_STORAGE_MAX_BYTES`（单文件上限）是必填正整数，应按最大模型文件设置；`AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）限制单个版本。上传使用原始字节流，由服务端检查上限；Nginx 对精确的 `scene-versions/{versionId}/files/{fileId}/content` 路径关闭请求/响应缓冲和网关字节限制，其他接口保持 20m 限制。启动先恢复未完成整版删除，再只核对有遗留数据的未完成文件，不全量重算可用文件。
 
 ## 持久卷与权限
 
@@ -43,9 +47,9 @@ docker compose --env-file config/compose.env ps
 
 当前 Compose 项目名为 `innovation-ar-resource-platform`，数据库名为 `innovation_ar_resource_platform`。数据库登录角色沿用 `innovation`；已有部署改名时必须先备份并迁移原有四个命名卷，不能直接用新项目名启动空卷。本机 2026-09-25 的迁移与保留的旧卷见 [验证记录](06-validation.md)。
 
-后端以 UID/GID 10001 运行。数据库和 Redis 不映射宿主端口，服务间使用 internal 网络；网关是唯一宿主入口。Nginx 不挂载成品卷，预留的成品路径直接返回 404，尚未提供 `X-Accel-Redirect` 或 Range 成品下载。Redis 的 `/data` 使用 tmpfs，不持久化登录会话，重启后重新登录。
+后端以 UID/GID 10001 运行。数据库和 Redis 不映射宿主端口，服务间使用 internal 网络；网关是唯一宿主入口。Nginx 不挂载成品卷，内部存储路径直接返回 404；Range 下载由后端流式输出，尚无 `X-Accel-Redirect` 静态交付。Redis 的 `/data` 使用 tmpfs，Redis 重启后登录会话丢失，需要重新登录。
 
-PostgreSQL 当前延续 Demo 的初始化/运行同账号模式，该账号拥有较高权限。本阶段用于单机内网 MVP；后续权限拆分需另立迁移方案。健康检查用于确认进程/基础接口可用，不代表客户端业务验收。
+PostgreSQL 当前延续 Demo 的初始化/运行同账号模式，该账号拥有较高权限。此开发机演示实例不是生产安全基线；后续权限拆分需另立迁移方案。健康检查只确认进程/基础接口可用，不代表客户端业务验收。
 
 镜像使用明确版本标签；应用镜像为 `innovation-ar-resource-platform-backend:infra-v1`、`innovation-ar-resource-platform-gateway:infra-v1`。迁移时应传输实际已验收的镜像并核对镜像 ID，不能把同名标签当作内容相同的证明。
 
@@ -65,10 +69,10 @@ PostgreSQL 当前延续 Demo 的初始化/运行同账号模式，该账号拥�
 
 ## 验证
 
-Windows 单元测试使用 Java 21，并明确设置项目 Maven 缓存：
+Java 单元测试使用 Java 21，经项目入口执行，按风险选择模块：
 
 ```powershell
-mvn -f backend/pom.xml -Dmaven.repo.local=.local/m2 -pl ruoyi-ar -am test -B -ntp
+python scripts/check_java.py --module ruoyi-ar
 ```
 
 容器验收只使用独立项目、端口和配置，会创建合成场景与文件：
@@ -93,7 +97,7 @@ docker compose -p innovation-ar-resource-platform-infra-check --env-file config/
 3. 在 PostgreSQL 容器中用 `pg_dump -U innovation -d innovation_ar_resource_platform -Fc -f /tmp/innovation-ar-resource-platform.dump` 导出，再用 `docker compose cp` 复制到宿主。避免 PowerShell 文本重定向处理二进制 dump。
 4. 用一次性维护容器只读挂载成品卷，归档所有文件，并记录相对路径、大小、SHA256。保留暂存状态供后续排查；只迁移文件不改变其业务状态。框架文件及需保留的日志单独归档。
 5. 目标启动新 PostgreSQL，在尚未启动后端的空库中执行 `pg_restore --exit-on-error --no-owner --no-privileges`；不要向已有业务库直接恢复。成品恢复到新命名卷，恢复后端 UID/GID 10001 的读写权限。
-6. 核对数据库记录和逐文件摘要，启动相同版本应用，检查登录、场景和审计。未来资源模块接入后，还必须核对文件引用、发布关系和真实客户端下载。
+6. 核对数据库记录和逐文件摘要，启动相同版本应用，检查登录、场景、审计、文件引用、发布关系及真实客户端下载。
 7. 验收后切换服务地址，源环境保持停止且保留数据。若回退，先停止目标写入，再切回源；目标已有新增数据时不能直接回退而丢弃它。
 
 本轮验证容器重建持久性，不声称已完成上述跨物理主机迁移。

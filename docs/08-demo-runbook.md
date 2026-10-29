@@ -1,26 +1,25 @@
-# PostgreSQL Demo 启动与维护
+# Windows 原生 PostgreSQL Demo 启动与维护
 
-另有 [Docker Compose 部署与本地存储组件](10-local-infrastructure.md)，使用独立数据库卷和账号，不自动导入本文的本机 Demo。资源入库和场景发布指针已接入；预览、单独下线和客户端下载仍未接入，见 [资源入库说明](12-resource-ingestion.md)。
+本文保留 Windows 原生进程工具的启动与维护方式，不是当前 Linux 日常实例的启动入口。日常 Docker Compose、存储和公网链路见 [基础设施说明](10-local-infrastructure.md)；当前资源版本、发布与匿名客户端下载见 [资源入库说明](12-resource-ingestion.md)。
 
 ## 已实现范围
 
 单个 Spring Boot 应用提供若依登录、固定同权账号、登录日志、操作日志、场景管理、成品版本、文件入库、场景发布指针和只读业务审计。Vue3 页面复用若依布局及 Element Plus。
 
-本阶段没有对象存储、标记管理、资源预览、单独下线或游客接口。原七表 PostgreSQL 脚本仍是下一阶段候选材料，不参与 Demo 初始化。
+没有对象存储、标记管理、后台内嵌资源预览或单独下线接口。匿名客户端只读目录、详情和文件已实现；桌面参考播放器验收见 [真实样包验收记录](20-4dgs-sample-validation.md)，不代表手机/Unity 验收。原七表 PostgreSQL 脚本是历史候选材料，不参与 Demo 初始化。
 
 ## 当前本机入口
 
 - 本机 Vite 前端：http://127.0.0.1:43174
-- 局域网 Compose 网关：http://192.168.0.12:43174（使用独立容器后端和数据库）
-- 后端：http://127.0.0.1:18080
-- PostgreSQL 17.6：127.0.0.1:15432
-- 独立 Redis 3.0.504（本机既有版本）：127.0.0.1:16379
+- 日常 Compose 网关：http://192.168.0.12:18081；公网入口：https://4dgs.elma-gohan.xyz（反向 SSH 隧道与 nginx 中继，使用独立容器后端和数据库）
+- 下列端口仅用于本文 Windows 原生工具：后端 `127.0.0.1:18080`、PostgreSQL 17.6 `127.0.0.1:15432`、独立 Redis 3.0.504 `127.0.0.1:16379`。
+- Linux 隔离验收使用 `127.0.0.1:18082`，见 [Harness](13-harness.md)。
 
-当前仅保留 `superadmin`，原密码不变。`bootstrap`、`demo_a`、`demo_b` 已停用并逻辑删除，历史审计保留。早先测试账号文件不再作为登录凭证；依赖这些账号的自动化验收应在独立测试环境运行。
+历史本机 Demo 的账号清理记录见 [验证记录](06-validation.md)：保留 `superadmin`，停用并逻辑删除 `bootstrap`、`demo_a`、`demo_b`，历史审计保留。不要把旧测试账号文件当作当前凭据；自动化验收使用独立测试环境。
 
 ## 首次启动
 
-要求 Java 21、Maven、Node.js、PostgreSQL 17 和 Redis。现有机器已在 `.local/java21`、`.local/postgresql17` 准备便携运行环境。换机器时自行准备对应运行环境，或设置 `AR_JAVA_HOME`、`AR_PG_BIN` 指向安装目录。
+本文原生工具要求 Windows、Java 21、Maven、Node.js、PostgreSQL 17 和 Redis，读取 `.local/java21`、`.local/postgresql17` 的便携运行环境；可设置 `AR_JAVA_HOME`、`AR_PG_BIN`。Linux 使用 Compose 和隔离验收工具，不照搬这些 `.exe` 路径。
 
 在项目根目录执行：
 
@@ -32,7 +31,7 @@ npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-`infra` 只初始化本项目 `.local/pgdata17`，使用固定本机独立端口。已有实例运行时不要重复执行。前端通过 Vite 代理访问本机后端。`npm --prefix frontend run dev` 按 Vite 配置绑定 `127.0.0.1:43174`，可与绑定 `192.168.0.12:43174` 的 Compose 网关并存。Compose 运行时不要执行 `python scripts/local_demo.py frontend`：该脚本读取 `AR_FRONTEND_HOST`，现有局域网绑定会与网关冲突。
+`infra` 只初始化本项目 `.local/pgdata17`，使用固定本机独立端口。已有实例运行时不要重复执行。Vite 监听 `127.0.0.1:43174`，代理到本机后端；日常 Compose 监听 `192.168.0.12:18081`，两者独立。`local_demo.py frontend` 读取 `AR_FRONTEND_HOST`，使用前先核对实际绑定，不能占用已有服务。
 
 首次运行生成 `.local/demo-secrets.json`，包含数据库密码、Token 密钥与引导密码；无共享默认密码。空库启动后用 `bootstrap` 登录，在账号管理中创建第一个日常管理员。创建成功后引导账号失效，重新使用新账号登录即可。
 
@@ -70,7 +69,7 @@ python scripts/harness.py doctor --profile frontend
 python scripts/harness.py check --profile frontend
 ```
 
-入库、存储、发布及恢复变更追加 ingestion；账号变更使用专项账号验收。依赖缺失按 doctor 提示准备，修改契约时才运行生成器。报告保存在 `.local/harness/`，不得以旧 Jar 或历史报告代替当前源码验收。
+Windows 入库、存储、发布及恢复变更追加 ingestion；Linux 使用 [Harness 中的隔离 Compose 流程](13-harness.md)。账号变更使用专项账号验收。依赖缺失按 doctor 提示准备，修改契约时才运行生成器。报告保存在 `.local/harness/`，不得以旧 Jar 或历史报告代替当前源码验收。
 
 旧 `verify_framework.py`、`verify_demo.py`、`verify_initialization.py` 和 `verify_browser.py` 是历史专项入口，部分会连接固定本机端口、创建场景或修改合成账号，并写入 docs 报告。不要把它们作为日常一键检查；确需复现时先核对连接目标、输出和清理方式，在隔离环境执行。旧初始化脚本会保留独立空库供复核；浏览器脚本使用 Microsoft Edge。
 
@@ -80,8 +79,9 @@ python scripts/harness.py check --profile frontend
 
 升级前先对照上游来源记录和修改清单，重点复核鉴权入口、账号策略、凭证失效和 SQL 方言。通过现有 HTTP、数据库、浏览器测试后再替换依赖；不要整体覆盖当前工程。
 
-资源入库已实现带 resource.json 描述的成品版本、逐文件上传、发布指针和整版删除；匿名客户端可读取当前发布版本（目录、描述、带 Range 的文件流），播放验收尚未实现。当前使用内网本地文件存储，Demo 不实现场景地址、坐标或昼夜变体。
-# 侧栏分组
+资源入库已实现带 `resource.json` 描述的不可变版本、逐文件上传、发布指针和整版删除；匿名客户端可读取当前发布版本并按档位完整下载。桌面 Chrome 参考播放器已验收，手机/Unity 原生加载和音频未验证。Demo 不实现场景地址、坐标或昼夜变体。
+
+## 侧栏分组
 
 侧栏按业务分为两个板块：场景管理（场景列表、场景操作记录）和账号管理（账号列表、登录日志、操作日志）。首页继续保留。菜单变更通过 V005 迁移执行，固定角色权限不变；已有页面需刷新以重新加载菜单。
 

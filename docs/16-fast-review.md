@@ -9,9 +9,9 @@
 3. 按改动选择 HTTP/数据库回归。账号变更不默认跑文件入库全套；迁移、存储、发布等相关变更才追加 ingestion。超时先定位原因，不盲目重复长构建。
 4. 独立审查通过后启动同一提交的隔离实例，交付网址、凭据文件位置、版本、验证范围和停止命令。
 
-## 固定宿主机命令
+## Windows 原生审查命令
 
-统一用同一个 Windows 用户执行，必要时授权沙箱外运行；不在沙箱账号与宿主账号间反复建立 Git 快照。命令不依赖当前目录：
+`review.py` 的 HTTP/人工实例运行时目前只支持 Windows，以下命令统一用同一个 Windows 用户执行，必要时授权沙箱外运行，不在沙箱与宿主账号间反复建立 Git 快照。Linux 的入库/真实样包验证另用 [Harness 固定隔离 Compose 流程](13-harness.md)（`127.0.0.1:18082`），不把它当成 `review.py` 的跨平台实现，也不冒充同 SHA PR 人工审查通过。下列 Windows 路径按实际检出目录替换：
 
 ```powershell
 python E:/code/java/innovation-ar-resource-platform/scripts/review.py prepare --pr 8

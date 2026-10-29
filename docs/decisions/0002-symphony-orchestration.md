@@ -18,6 +18,8 @@
 
 本记录保留初期并发为 1 的决策背景。仓库现行 `WORKFLOW.md` 已配置并发上限 4；操作与变更记录见 [Symphony 手册](../15-symphony.md) 和 [验证记录](../06-validation.md)，不据历史 ADR 推断运行容器的实时状态。
 
+Windows `review.py`/ingestion profile 的运行时限制仍保留；Linux 宿主已有固定隔离 Compose 入库/真实样包流程（`127.0.0.1:18082`），见 [Harness](../13-harness.md)。这不表示 Symphony 容器能运行 Windows profile，也不替代独立 PR 审查与人工验收。
+
 ## 重新考虑条件
 
 实测 Windows 验收接入、真实 Issue 到 PR 流程和独立审查稳定后再考虑提高并发。扩大 Token 权限、增加自动合并或部署需要新的明确要求。
