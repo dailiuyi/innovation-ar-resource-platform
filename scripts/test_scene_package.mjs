@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   PackageError, checkDigests, checkLimits, checkSelection, createRequest,
-  normalizePaths, readPackage, uploadPlan
+  normalizePaths, readPackage, runUploads, UPLOAD_CONCURRENCY, uploadPlan
 } from '../frontend/src/utils/scenePackage.js'
 
 const SHA_A = 'a'.repeat(64)
@@ -120,4 +120,81 @@ test('上传规划：已入库跳过，处理中不重发，失败与待上传�
   assert.deepEqual(plan.upload.map(file => file.relativePath), ['a', 'b'])
   assert.deepEqual(plan.processing.map(file => file.relativePath), ['d'])
   assert.equal(plan.done, 1)
+})
+
+const tick = () => new Promise(resolve => setImmediate(resolve))
+function gate() {
+  let release, fail
+  const promise = new Promise((resolve, reject) => { release = resolve; fail = reject })
+  return { promise, release, fail }
+}
+
+test('并发上传：任意时刻至多三路在途，峰值为三，每条恰好执行一次', async () => {
+  assert.equal(UPLOAD_CONCURRENCY, 3)
+  const records = Array.from({ length: 7 }, (_, i) => ({ relativePath: `f${i}` }))
+  const gates = new Map(), calls = []
+  let active = 0, peak = 0
+  const upload = async record => {
+    calls.push(record.relativePath)
+    gates.set(record.relativePath, gate())
+    active++; peak = Math.max(peak, active)
+    try { await gates.get(record.relativePath).promise } finally { active-- }
+  }
+  const run = runUploads(records, UPLOAD_CONCURRENCY, upload, () => false)
+  await tick()
+  assert.equal(active, 3)
+  for (let released = 0; released < records.length; released++) {
+    const path = calls.find(p => !gates.get(p).done)
+    gates.get(path).done = true
+    gates.get(path).release()
+    await tick()
+    assert.ok(active <= 3)
+  }
+  assert.deepEqual(await run, [])
+  assert.equal(peak, 3)
+  assert.deepEqual([...calls].sort(), records.map(r => r.relativePath))
+})
+
+test('并发上传：单个失败不阻断其余，失败按输入顺序返回并保留 Error', async () => {
+  const records = Array.from({ length: 5 }, (_, i) => ({ relativePath: `f${i}` }))
+  const gates = records.map(() => gate())
+  const calls = []
+  const upload = record => { calls.push(record.relativePath); return gates[Number(record.relativePath[1])].promise }
+  const run = runUploads(records, 3, upload, () => false)
+  await tick()
+  const errors = [new Error('e3'), new Error('e1')]
+  gates[0].release(); await tick() // 释放一路，f3 被派发
+  gates[3].fail(errors[0]); await tick() // 完成顺序 f3、f1，与输入顺序相反；f4 被派发
+  gates[1].fail(errors[1]); await tick()
+  gates[2].release(); gates[4].release()
+  const failures = await run
+  assert.deepEqual([...calls].sort(), ['f0', 'f1', 'f2', 'f3', 'f4'])
+  assert.deepEqual(failures.map(f => f.record.relativePath), ['f1', 'f3'])
+  assert.equal(failures[0].error, errors[1])
+  assert.equal(failures[1].error, errors[0])
+})
+
+test('并发上传：stopped 后不再派发，在途的全部完成', async () => {
+  const records = Array.from({ length: 6 }, (_, i) => ({ relativePath: `f${i}` }))
+  const gates = new Map(), finished = []
+  let stopped = false
+  const upload = async record => {
+    gates.set(record.relativePath, gate())
+    await gates.get(record.relativePath).promise
+    finished.push(record.relativePath)
+  }
+  const run = runUploads(records, 2, upload, () => stopped)
+  await tick()
+  assert.equal(gates.size, 2)
+  stopped = true
+  for (const g of gates.values()) g.release()
+  assert.deepEqual(await run, [])
+  assert.equal(gates.size, 2)
+  assert.deepEqual(finished.sort(), ['f0', 'f1'])
+})
+
+test('并发上传：空记录列表不调用 upload', async () => {
+  let called = 0
+  assert.deepEqual(await runUploads([], 3, async () => { called++ }, () => false), [])
+  assert.equal(called, 0)
 })

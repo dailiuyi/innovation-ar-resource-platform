@@ -39,6 +39,11 @@
     </section>
     <p v-if="progressText" role="status">{{progressText}}</p>
     <el-progress v-if="busy" :percentage="progress" />
+    <el-table v-if="uploadIssues.length" :data="uploadIssues" row-key="relativePath" max-height="280">
+      <el-table-column prop="relativePath" label="文件" min-width="260" show-overflow-tooltip />
+      <el-table-column prop="kind" label="结果" width="110" />
+      <el-table-column prop="reason" label="原因" min-width="300" />
+    </el-table>
     <el-table :data="versions" highlight-current-row :current-row-key="selected?.id" row-key="id">
       <el-table-column label="版本" width="70"><template #default="{row}">v{{row.versionNo}}</template></el-table-column>
       <el-table-column prop="description" label="版本说明" min-width="100" show-overflow-tooltip />
@@ -85,7 +90,7 @@ import { computed, defineComponent, h, onBeforeUnmount, ref, shallowRef, watch }
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createVersion, deleteVersion, getScene, getVersion, getVersionConfig, getVersionFile, listVersions, publishVersion, updateVersion, uploadVersionFile } from '@/api/scene'
-import { PackageError, checkDigests, checkLimits, checkSelection, createRequest, readPackage, uploadPlan } from '@/utils/scenePackage'
+import { PackageError, UPLOAD_CONCURRENCY, checkDigests, checkLimits, checkSelection, createRequest, readPackage, runUploads, uploadPlan } from '@/utils/scenePackage'
 const props=defineProps({sceneId:String})
 const emit=defineEmits(['close','sceneUpdated'])
 const route=useRoute(),router=useRouter()
@@ -96,9 +101,11 @@ const selected=ref(null),editDescription=ref('')
 const picker=ref(null),importPlan=shallowRef(null),session=shallowRef(null)
 const busy=ref(false),saving=ref(false),publishing=ref(false),removing=ref(false)
 const error=ref(''),progress=ref(0),progressText=ref('')
+const uploadIssues=ref([])
 const uploadStates={PENDING:'待上传',UPLOADING:'上传中',FAILED:'有失败',READY:'已就绪',DELETING:'正在删除',DELETE_FAILED:'删除失败'}
 const fileStates={PENDING:'待上传',UPLOADING:'处理中',AVAILABLE:'已入库',FAILED:'失败'}
-let worker,controller,rejectHash,cancelled=false,runToken=0,resumeId=null
+let worker,rejectHash,cancelled=false,runToken=0,resumeId=null
+const controllers=new Set()
 let sceneRequest=0,listRequest=0,detailRequest=0
 const FileDetail=defineComponent({props:{file:Object},setup:props=>()=>
   h('div',{class:'file-detail'},[h('div',['SHA-256：',h('code',{class:'digest'},props.file.sha256)]),h('div',`文件编号 ${props.file.fileId}，上传尝试 ${props.file.attempts} 次，${props.file.bytes} 字节`)])})
@@ -264,27 +271,27 @@ async function hashAll(pkg){
   }
   return digests
 }
-function cancel(){cancelled=true;worker?.terminate();rejectHash?.(new Error('已取消'));controller?.abort()}
+function cancel(){cancelled=true;worker?.terminate();rejectHash?.(new Error('已取消'));for(const c of controllers)c.abort()}
+// 查询失败或服务端仍在处理时，上传结果无法确认；与“请求失败”分开列出。
+class UploadUnconfirmedError extends Error {}
 // 网关超时、断线或主动取消都不代表服务端失败：先读该文件状态，再决定下一步。
 async function reconcile(versionId,record){
   let state
   try{state=await getVersionFile(versionId,record.fileId)}
-  catch{throw new Error('上传结果未确认，请刷新状态')}
+  catch{throw new UploadUnconfirmedError('上传结果未确认，请刷新状态')}
   if(state.status==='AVAILABLE')return
-  if(state.status==='UPLOADING')throw new Error(`${record.relativePath} 服务端仍在处理，请稍后点击“刷新状态”`)
-  throw new Error(`${record.relativePath} 上传未完成${state.failureReason?'：'+state.failureReason:''}，可继续上传`)
+  if(state.status==='UPLOADING')throw new UploadUnconfirmedError('服务端仍在处理，请稍后点击“刷新状态”')
+  throw new Error(`上传未完成${state.failureReason?'：'+state.failureReason:''}，可继续上传`)
 }
-async function uploadOne(versionId,record,file){
-  controller=new AbortController();progress.value=0
+async function uploadOne(versionId,record,file,onProgress){
+  const controller=new AbortController()
+  controllers.add(controller)
   try{
-    const result=await uploadVersionFile(versionId,record.fileId,file,{signal:controller.signal,onUploadProgress:e=>{
-      progress.value=Math.min(100,Math.round(e.loaded/file.size*100)||0)
-      if(e.loaded>=file.size)progressText.value=`${record.relativePath} 传输完成，等待服务端校验和入库确认`
-    }})
+    const result=await uploadVersionFile(versionId,record.fileId,file,{signal:controller.signal,onUploadProgress:e=>onProgress(Math.min(e.loaded,file.size))})
     if(result.status==='AVAILABLE')return
   }catch(e){
     if(e.response&&![502,504].includes(e.response.status))throw e
-  }finally{controller=null}
+  }finally{controllers.delete(controller)}
   await reconcile(versionId,record)
 }
 async function runSession(){
@@ -292,7 +299,7 @@ async function runSession(){
   if(!s)return
   const token=++runToken
   const live=()=>token===runToken
-  busy.value=true;cancelled=false;error.value=''
+  busy.value=true;cancelled=false;error.value='';uploadIssues.value=[]
   try{
     if(!s.digests){
       s.digests=await hashAll(s.pkg)
@@ -314,15 +321,42 @@ async function runSession(){
     if(selected.value?.id===detail.id)selected.value=detail
     const plan=uploadPlan(detail.files)
     const local=new Map(s.pkg.files.map(item=>[item.relativePath,item.file]))
+    const totalBytes=detail.files.reduce((n,f)=>n+f.bytes,0)
     let done=plan.done
-    for(const record of plan.upload){
-      if(cancelled)throw new Error('已取消')
-      progressText.value=`正在上传 ${done+1}/${detail.files.length} ${record.relativePath}`
-      await uploadOne(s.versionId,record,local.get(record.relativePath))
+    let doneBytes=detail.files.filter(f=>f.status==='AVAILABLE').reduce((n,f)=>n+f.bytes,0)
+    const sending=new Map()
+    // 字节发送百分比不等于入库确认；入库数单独显示。
+    const refreshProgress=()=>{
       if(!live())return
-      done++
+      let sent=0
+      for(const item of sending.values())sent+=item.loaded
+      progress.value=totalBytes?Math.min(100,Math.floor((doneBytes+sent)/totalBytes*100)):100
+      const flying=[...sending].map(([path,item])=>item.loaded>=item.bytes?`${path}（等待服务端校验）`:path)
+      progressText.value=`已入库 ${done}/${detail.files.length}${flying.length?'；在途：'+flying.join('、'):''}`
     }
-    if(plan.processing.length)throw new Error(`${plan.processing.length} 个文件服务端仍在处理，请稍后点击“刷新状态”`)
+    const upload=async record=>{
+      const item={loaded:0,bytes:record.bytes}
+      sending.set(record.relativePath,item)
+      refreshProgress()
+      try{
+        await uploadOne(s.versionId,record,local.get(record.relativePath),loaded=>{
+          item.loaded=loaded
+          if(sending.get(record.relativePath)===item)refreshProgress()
+        })
+        done++;doneBytes+=record.bytes
+      }finally{sending.delete(record.relativePath);refreshProgress()}
+    }
+    const failures=await runUploads(plan.upload,UPLOAD_CONCURRENCY,upload,()=>cancelled||!live())
+    if(!live())return
+    if(cancelled)throw new Error('已取消')
+    const issues=failures.map(({record,error:cause})=>({relativePath:record.relativePath,
+      kind:cause instanceof UploadUnconfirmedError?'结果未确认':'请求失败',reason:message(cause)}))
+    for(const record of plan.processing)issues.push({relativePath:record.relativePath,kind:'结果未确认',reason:'本轮开始时服务端仍在处理，未重复上传；请刷新确认'})
+    uploadIssues.value=issues
+    if(issues.length){
+      const failed=issues.filter(i=>i.kind==='请求失败').length
+      throw new Error(`本轮请求失败 ${failed} 个，结果未确认 ${issues.length-failed} 个。完整列表见下方；刷新状态后继续上传，已入库和处理中不会重复发送。`)
+    }
     session.value=null
     progressText.value='全部文件已校验入库，可以发布'
   }catch(e){
@@ -332,7 +366,7 @@ async function runSession(){
     progressText.value='本次操作未确认全部完成'
   }finally{
     if(live()){
-      worker?.terminate();rejectHash=null;controller=null;busy.value=false
+      worker?.terminate();rejectHash=null;controllers.clear();busy.value=false
       await reload()
     }
   }
@@ -351,7 +385,7 @@ watch(()=>props.sceneId,async id=>{
   cancel();++runToken
   session.value=null;importPlan.value=null;busy.value=false
   selected.value=null;versions.value=[];total.value=0;published.value=null;sceneLockVersion.value=0;page.value=1
-  error.value='';progressText.value='';sceneName.value=''
+  error.value='';progressText.value='';sceneName.value='';uploadIssues.value=[]
   if(!id)return
   loadSceneName(id,sequence)
   const restored=route.query.versionId?String(route.query.versionId):null

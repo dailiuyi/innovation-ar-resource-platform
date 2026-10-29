@@ -11,6 +11,7 @@ Synthetic model bytes are not renderable 4DGS content; this verifies the managem
 import argparse
 import copy
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -83,6 +85,78 @@ class Session:
         status, body = self.api('/login', 'POST', {'username': username, 'password': password}, auth=False)
         self.token = body.get('token') if status == 200 else None
         return self.token
+
+
+def former_lock_bucket(file_id):
+    """Segment of the removed 256-way striped lock; only used to pick files that collided under it."""
+    value = uuid.UUID(file_id).int
+    hilo = (value >> 64) ^ (value & (2 ** 64 - 1))
+    return (hilo ^ (hilo >> 32)) & 0xff
+
+
+def held_upload(s, path, data, sent):
+    """Open a PUT whose body is withheld after `sent` bytes so the server keeps the upload in flight."""
+    parsed = urllib.parse.urlsplit(s.base + path)
+    assert parsed.scheme == 'http', 'the in-flight upload check needs an http base URL'
+    sock = socket.create_connection((parsed.hostname, parsed.port or 80), timeout=30)
+    try:
+        head = (f'PUT {parsed.path} HTTP/1.1\r\nHost: {parsed.netloc}\r\nAuthorization: Bearer {s.token}\r\n'
+                f'Content-Length: {len(data)}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n')
+        sock.sendall(head.encode() + data[:sent])
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+def finish_held(sock, rest):
+    sock.sendall(rest)
+    response = http.client.HTTPResponse(sock)
+    response.begin()
+    response.read()
+    return response.status
+
+
+def upload_lock_checks(s, check):
+    """Different files must upload concurrently even when they shared a bucket of the former striped lock."""
+    count = 257
+    files = {f'models/standard/{i:03d}.c.ply': f'lock isolation {i}\n'.encode() * 16 for i in range(count)}
+    config = s.api('/api/v1/scene-versions/config')[1]
+    check('upload limits fit the lock isolation fixture', config.get('versionMaxFiles', 0) >= count
+          and config.get('versionMaxBytes', 0) >= sum(map(len, files.values())) and config.get('maxBytes', 0) >= max(map(len, files.values())))
+    scene = s.api('/api/v1/scenes', 'POST', {'name': 'upload-lock-isolation'})[1]
+    status, version = s.api(f'/api/v1/scenes/{scene["id"]}/versions', 'POST', version_request(files))
+    check('lock isolation version created', status == 201)
+    ids = {f['relativePath']: f['fileId'] for f in version['files']}
+    groups = {}
+    for path, file_id in sorted(ids.items()):
+        groups.setdefault(former_lock_bucket(file_id), []).append(path)
+    held, other = next(group for group in groups.values() if len(group) >= 2)[:2]
+    base = '/api/v1/scene-versions/' + version['id']
+    def file_path(path): return f'{base}/files/{ids[path]}'
+    def put(path): return s.api(file_path(path) + '/content', 'PUT', files[path])
+    data = files[held]
+    sock = held_upload(s, file_path(held) + '/content', data, len(data) - 1)
+    try:
+        deadline = time.time() + 10
+        state = None
+        while time.time() < deadline:
+            state = s.api(file_path(held))[1].get('status')
+            if state == 'UPLOADING':
+                break
+            time.sleep(0.05)
+        check('held upload is marked UPLOADING', state == 'UPLOADING')
+        status, body = put(other)
+        check('a different file uploads while another file is in flight', status == 200 and body.get('status') == 'AVAILABLE')
+        check('the same file while in flight returns 409', put(held)[0] == 409)
+        check('held upload completes as AVAILABLE', finish_held(sock, data[-1:]) == 200
+              and s.api(file_path(held))[1].get('status') == 'AVAILABLE')
+    finally:
+        sock.close()
+    attempts = s.api(file_path(held))[1]['attempts']
+    status, body = put(held)
+    check('finished upload leaves no in-flight marker', status == 200 and body.get('status') == 'AVAILABLE' and body['attempts'] == attempts)
+    return {'versionId': version['id']}
 
 
 def scenario(s, check):
@@ -362,6 +436,7 @@ def run_http_checks(base_url, admin_base_url, credentials_file, report_dir, brow
     try:
         check('administrator login', bool(s.login(credentials['username'], credentials['password'])))
         report['scenario'] = scenario(s, check)
+        report['uploadLockIsolation'] = upload_lock_checks(s, check)
         if runtime is not None:
             report.update(runtime.fault_checks(s, check))
         if browser_executable is not None or (runtime is not None and runtime.browser_channel):

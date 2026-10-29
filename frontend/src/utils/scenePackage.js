@@ -150,3 +150,23 @@ export function uploadPlan(versionFiles) {
   plan.processing.sort(byPath)
   return plan
 }
+
+/** 网页上传固定三路，不依赖 HTTP/2 的复用能力。 */
+export const UPLOAD_CONCURRENCY = 3
+
+/**
+ * 以至多 limit 个并发执行 upload(record)。单个失败不影响其余记录；stopped() 为真后不再派发新记录，在途的照常完成。
+ * 返回按 records 原顺序排列的失败 [{ record, error }]。
+ */
+export async function runUploads(records, limit, upload, stopped) {
+  const failures = []
+  let next = 0
+  async function lane() {
+    while (next < records.length && !stopped()) {
+      const index = next++
+      try { await upload(records[index]) } catch (error) { failures.push({ index, record: records[index], error }) }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, records.length) }, lane))
+  return failures.sort((a, b) => a.index - b.index).map(({ record, error }) => ({ record, error }))
+}

@@ -3,7 +3,8 @@
 只启动本仓库的 Vite 开发服务器和真实浏览器，由 Playwright 拦截并返回合成接口响应；
 不连接后端、数据库、日常 Demo 或真实存储，因此它证明页面行为和布局，不证明发布、上传、
 删除等业务闭环。覆盖：入口按钮可点且不被遮挡、选中版本随地址栏保留、场景切换后迟到响应不写回、
-取消确认不产生请求，以及导入目录登记并上传目录下全部文件（无 resource.json 描述）、失败后只重传未完成文件。
+取消确认不产生请求，以及导入目录登记并上传目录下全部文件（无 resource.json 描述）：固定三路并发、单个文件失败不阻断其余、
+完整列出请求失败与结果未确认的文件、停止时中止全部在途请求且不再派发、续传只发送 FAILED/PENDING 并跳过 AVAILABLE/UPLOADING。
 真实后端点击验收在隔离 Compose 实例上执行。
 """
 import argparse
@@ -79,6 +80,10 @@ class Api:
         self.created_bodies = []
         self.uploads = []
         self.fail_once = set()
+        self.hold_uploads = False
+        self.held_uploads = []
+        self.unconfirmed_uploads = set()
+        self.state_failures = set()
 
     def add_version(self, version_id, scene_id, number, description, paths, status, request_key=None):
         self.versions[version_id] = {
@@ -180,18 +185,32 @@ def route_handler(api, unmocked):
         if matched and method == 'PUT':
             version = api.versions[matched.group(1)]
             item = next(f for f in version['files'] if f['fileId'] == matched.group(2))
-            api.uploads.append(item['relativePath'])
+            path_ = item['relativePath']
+            api.uploads.append(path_)
             item['attempts'] += 1
-            if item['relativePath'] in api.fail_once:
-                api.fail_once.discard(item['relativePath'])
-                item['status'], item['failureReason'] = 'FAILED', '存储暂时不可用'
-                return reply({'code': 'AR_503', 'message': '存储暂时不可用'}, 503)
-            item['status'], item['failureReason'] = 'AVAILABLE', None
-            return reply({'code': 200, **item})
+            if path_ in api.unconfirmed_uploads:
+                return route.abort('failed')  # 连接中断：不宣告 FAILED，结果交由状态查询确认
+
+            def deliver():
+                if path_ in api.fail_once:
+                    api.fail_once.discard(path_)
+                    item['status'], item['failureReason'] = 'FAILED', '存储暂时不可用'
+                    return reply({'code': 'AR_503', 'message': '存储暂时不可用'}, 503)
+                item['status'], item['failureReason'] = 'AVAILABLE', None
+                return reply({'code': 200, **item})
+
+            if api.hold_uploads:
+                item['status'] = 'UPLOADING'
+                api.held_uploads.append((item['fileId'], deliver))
+                return
+            return deliver()
         matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/files/([^/]+)', path)
         if matched and method == 'GET':
             version = api.versions[matched.group(1)]
-            return reply({'code': 200, **next(f for f in version['files'] if f['fileId'] == matched.group(2))})
+            file_state = next(f for f in version['files'] if f['fileId'] == matched.group(2))
+            if file_state['relativePath'] in api.state_failures:
+                return reply({'code': 'AR_503', 'message': '状态查询暂时不可用'}, 503)
+            return reply({'code': 200, **file_state})
         matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/publish', path)
         if matched and method == 'POST':
             body = json.loads(request.post_data or '{}')
@@ -331,6 +350,61 @@ def wait_until(page, predicate, timeout=10):
     return predicate()
 
 
+XHR_PROBE = '''(()=>{
+  const stats=window.__xhr={active:0,peak:0,aborts:0,sent:0}
+  const content=/\\/files\\/[^/]+\\/content$/
+  const {open,send,abort}=XMLHttpRequest.prototype
+  XMLHttpRequest.prototype.open=function(method,url,...rest){
+    this.__put=String(method).toUpperCase()==='PUT'&&content.test(String(url).split('?')[0])
+    // 在 Axios 设置 onloadend 之前注册，保证先减计数，再让 Axios 派发下一个请求。
+    if(this.__put)this.addEventListener('loadend',()=>{if(this.__counted){this.__counted=false;stats.active--}})
+    return open.call(this,method,url,...rest)
+  }
+  XMLHttpRequest.prototype.send=function(...args){
+    if(this.__put){this.__counted=true;stats.sent++;stats.active++;stats.peak=Math.max(stats.peak,stats.active)}
+    return send.apply(this,args)
+  }
+  XMLHttpRequest.prototype.abort=function(){
+    if(this.__put&&this.__counted)stats.aborts++
+    return abort.call(this)
+  }
+})()'''
+
+
+def xhr_stats(page):
+    return page.evaluate('()=>({...window.__xhr})')
+
+
+def reset_xhr(page):
+    page.evaluate('()=>Object.assign(window.__xhr,{active:0,peak:0,aborts:0,sent:0})')
+
+
+def import_directory(drawer, package):
+    drawer.locator('input[type=file]').set_input_files(str(package))
+    drawer.get_by_role('button', name='开始导入', exact=True).wait_for()
+    drawer.get_by_role('button', name='开始导入', exact=True).click()
+
+
+def release_held(api):
+    held = list(api.held_uploads)
+    api.held_uploads.clear()
+    api.hold_uploads = False
+    for _, deliver in held:
+        deliver()
+
+
+def latest_version(api, scene_id):
+    return max((v for v in api.versions.values() if v['sceneId'] == scene_id), key=lambda v: v['versionNo'])
+
+
+def issue_rows(drawer, path, kind):
+    return drawer.get_by_role('row').filter(has_text=path).filter(has_text=kind)
+
+
+def summary_alert(drawer, text):
+    return drawer.locator('.el-alert--error').filter(has_text=text)
+
+
 def make_package(run):
     root = run / 'import-package' / 'wedding'
     if root.parent.exists():
@@ -394,6 +468,7 @@ def main():
             context = browser.new_context(viewport={'width': VIEWPORTS[0], 'height': 1000})
             context.add_cookies([{'name': 'Admin-Token', 'value': 'layout-check-token', 'url': web}])
             page = context.new_page()
+            page.add_init_script(XHR_PROBE)
             # 首次访问需要 Vite 现场编译依赖，慢于 Playwright 默认超时；显式放宽避免把环境慢当成失败。
             page.set_default_timeout(60000)
             page.set_default_navigation_timeout(180000)
@@ -551,18 +626,29 @@ def main():
             check('迟到响应没有改写地址栏场景', f'sceneId={LONG_ID}' in page.url)
             check('关闭迟到响应检查的面板', close_panel(page))
 
-            # 导入目录：目录下全部文件都登记上传，失败只重传未完成文件，已入库文件不重复发送。
+            # 导入目录：固定三路并发；单个失败不阻断其余；失败后只重传未完成文件，已入库文件不重复发送。
             drawer = open_panel(page, SHORT_NAME)
             drawer.get_by_text(SHORT_VERSION).wait_for()
             api.uploads.clear()
             api.created_bodies.clear()
+            api.hold_uploads = True
             api.fail_once = {'models/high-0.c.ply'}
-            drawer.locator('input[type=file]').set_input_files(str(package))
-            drawer.get_by_role('button', name='开始导入', exact=True).wait_for()
-            drawer.get_by_role('button', name='开始导入', exact=True).click()
-            resumable = wait_until(page, lambda: drawer.locator('.el-alert--error').count() > 0
-                                   and drawer.get_by_role('button', name='继续上传', exact=True).count() >= 1, timeout=30)
-            check('服务端拒绝单个文件后显示错误并保留继续上传入口', resumable)
+            reset_xhr(page)
+            import_directory(drawer, package)
+            check('首批三个请求被服务端持有', wait_until(page, lambda: len(api.held_uploads) == 3, timeout=30))
+            page.wait_for_timeout(500)
+            stats = xhr_stats(page)
+            check('首批三个均未完成时恰有三个在途，没有第四个',
+                  stats['active'] == 3 and stats['peak'] == 3 and stats['sent'] == 3
+                  and len(api.held_uploads) == 3 and api.uploads == IMPORT_FILES[:3])
+            release_held(api)
+            check('单个文件失败后其余文件继续传完并显示汇总',
+                  wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 1 个，结果未确认 0 个').count() == 1, timeout=30))
+            check('每个文件恰好请求一次且并发峰值为三',
+                  sorted(api.uploads) == IMPORT_FILES and xhr_stats(page)['peak'] == 3)
+            check('异常列表完整列出失败文件、分类与原因',
+                  issue_rows(drawer, 'models/high-0.c.ply', '请求失败').filter(has_text='存储暂时不可用').count() == 1
+                  and drawer.get_by_role('row').filter(has_text='结果未确认').count() == 0)
             check('创建版本只提交一次、登记目录下全部文件且不带 descriptor',
                   len(api.created_bodies) == 1
                   and sorted(f['relativePath'] for f in api.created_bodies[0]['files']) == IMPORT_FILES
@@ -570,17 +656,78 @@ def main():
             check('登记的每个文件都带大小与 SHA-256',
                   all(f['bytes'] > 0 and re.fullmatch(r'[0-9a-f]{64}', f['sha256']) for f in api.created_bodies[0]['files']))
             uploaded_before = list(api.uploads)
-            check('失败前的文件各上传一次',
-                  uploaded_before == ['media/poster.jpg', 'models/high-0.c.ply'])
             drawer.get_by_role('button', name='继续上传', exact=True).first.click()
             check('继续上传后全部文件入库',
                   wait_until(page, lambda: all(f['status'] == 'AVAILABLE' for v in api.versions.values()
-                                               if v['requestKey'] for f in v['files'])))
-            check('继续上传只发送失败和尚未上传的文件',
-                  api.uploads[len(uploaded_before):] == ['models/high-0.c.ply', 'models/std-0.c.ply', 'models/std-1.c.ply', NOTES_FILE, 'settings.json'])
+                                               if v['requestKey'] for f in v['files'])
+                             and drawer.get_by_text('全部文件已校验入库，可以发布').count() == 1, timeout=30))
+            check('继续上传只发送失败的文件', api.uploads[len(uploaded_before):] == ['models/high-0.c.ply'])
             check('已入库文件没有被重复上传', api.uploads.count('media/poster.jpg') == 1)
             check('创建版本没有因继续上传重复提交', len(api.created_bodies) == 1)
             page.screenshot(path=str(run / 'panel-import-1440.png'), full_page=True)
+
+            # 停止：三个在途请求全部中止，不再派发新请求，也不出现成功提示。
+            api.hold_uploads = True
+            api.uploads.clear()
+            api.held_uploads.clear()
+            reset_xhr(page)
+            import_directory(drawer, package)
+            check('停止前首批三个请求被持有', wait_until(page, lambda: len(api.held_uploads) == 3, timeout=30))
+            page.wait_for_timeout(500)
+            drawer.get_by_role('button', name='停止本次传输', exact=True).click()
+            check('停止后传输结束并提示结果未确认',
+                  wait_until(page, lambda: drawer.get_by_role('button', name='停止本次传输', exact=True).count() == 0
+                             and summary_alert(drawer, '已停止本次传输').count() == 1, timeout=30))
+            page.wait_for_timeout(500)
+            stats = xhr_stats(page)
+            check('停止后三个在途请求全部中止且没有第四个请求',
+                  stats['aborts'] == 3 and stats['sent'] == 3 and stats['active'] == 0 and len(api.uploads) == 3)
+            check('停止后不出现成功提示', '全部文件已校验入库' not in drawer.inner_text())
+            api.held_uploads.clear()  # 已中止的请求不再 fulfill
+
+            # 状态驱动续传：首批三个文件分别为 AVAILABLE、FAILED、仍 UPLOADING，其余 PENDING。
+            api.hold_uploads = False
+            stopped_files = {f['relativePath']: f for f in latest_version(api, SHORT_ID)['files']}
+            check('停止后首批三个文件均处于处理中',
+                  all(stopped_files[p]['status'] == 'UPLOADING' for p in IMPORT_FILES[:3]))
+            stopped_files[IMPORT_FILES[0]].update(status='AVAILABLE', failureReason=None)
+            stopped_files[IMPORT_FILES[1]].update(status='FAILED', failureReason='存储暂时不可用')
+            api.uploads.clear()
+            drawer.get_by_role('button', name='继续上传', exact=True).first.click()
+            check('续传完成并列出仍在处理的文件',
+                  wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 0 个，结果未确认 1 个').count() == 1, timeout=30))
+            check('续传只发送 FAILED 与 PENDING，AVAILABLE 和 UPLOADING 零新增请求',
+                  sorted(api.uploads) == sorted([IMPORT_FILES[1]] + IMPORT_FILES[3:]))
+            check('仍在处理的文件显示为结果未确认且未被断言未入库',
+                  issue_rows(drawer, IMPORT_FILES[2], '结果未确认').filter(has_text='本轮开始时服务端仍在处理').count() == 1)
+            stopped_files[IMPORT_FILES[2]].update(status='AVAILABLE', failureReason=None)
+            api.uploads.clear()
+            drawer.get_by_role('button', name='继续上传', exact=True).first.click()
+            check('处理中文件入库后再次继续：无新增请求且成功',
+                  wait_until(page, lambda: drawer.get_by_text('全部文件已校验入库，可以发布').count() == 1, timeout=30)
+                  and api.uploads == [] and drawer.locator('.el-alert--error').count() == 0)
+
+            # 结果未确认：四个文件的 PUT 连接中断且状态查询失败，另外两个正常；六个都必须被尝试并完整列出。
+            api.hold_uploads = False
+            api.fail_once = set()
+            api.uploads.clear()
+            api.unconfirmed_uploads = set(IMPORT_FILES[:4])
+            api.state_failures = set(IMPORT_FILES[:4])
+            import_directory(drawer, package)
+            check('四个结果未确认时仍完成全部六个文件的请求并显示汇总',
+                  wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 0 个，结果未确认 4 个').count() == 1, timeout=30)
+                  and sorted(api.uploads) == IMPORT_FILES)
+            check('四个异常路径与查询失败原因完整可见且归类为结果未确认',
+                  all(issue_rows(drawer, p, '结果未确认').filter(has_text='上传结果未确认，请刷新状态').count() == 1
+                      for p in IMPORT_FILES[:4])
+                  and drawer.get_by_role('row').filter(has_text='结果未确认').count() == 4
+                  and drawer.get_by_role('row').filter(has_text='请求失败').count() == 0)
+            unconfirmed_version = latest_version(api, SHORT_ID)
+            check('其余两个文件已入库，页面不宣称异常文件确定未入库',
+                  all(f['status'] == 'AVAILABLE' for f in unconfirmed_version['files'] if f['relativePath'] in IMPORT_FILES[4:])
+                  and '确定未入库' not in drawer.inner_text())
+            api.unconfirmed_uploads = set()
+            api.state_failures = set()
             check('导入完成后关闭面板回到列表', close_panel(page))
 
             short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)

@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -26,8 +25,8 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * One application instance and one private local volume. No background upload worker.
  * A version's file list is fixed at creation. Uploads and file transfers share the version
- * read lock; publish and whole-version deletion take its write lock. The 256 file locks serialize attempts
- * on the same file.
+ * read lock; publish and whole-version deletion take its write lock. A file id registered in activeUploads
+ * marks an upload in flight; a second attempt on the same file is rejected with 409.
  */
 @Service
 @DependsOnDatabaseInitialization
@@ -55,7 +54,7 @@ public class SceneVersionService implements InitializingBean {
     private final long maxBytes;
     private final int versionMaxFiles;
     private final long versionMaxBytes;
-    private final ReentrantLock[] locks = new ReentrantLock[256];
+    private final Set<UUID> activeUploads = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<UUID, ReentrantReadWriteLock> versionLocks = new ConcurrentHashMap<>();
 
     public SceneVersionService(JdbcTemplate db,PlatformTransactionManager transactions,ArtifactStorage storage,ObjectMapper json,
@@ -64,7 +63,6 @@ public class SceneVersionService implements InitializingBean {
             @Value("${ar.storage.version-max-bytes}") long versionMaxBytes) {
         this.db=db; this.tx=new TransactionTemplate(transactions); this.storage=storage; this.json=json;
         this.maxBytes=maxBytes; this.versionMaxFiles=versionMaxFiles; this.versionMaxBytes=versionMaxBytes;
-        Arrays.setAll(locks,i -> new ReentrantLock());
     }
 
     public Map<String,Object> config() {
@@ -99,7 +97,6 @@ public class SceneVersionService implements InitializingBean {
     private void lockRead(UUID versionId) {
         if(!versionLock(versionId).readLock().tryLock()) throw error(HttpStatus.CONFLICT,"版本正在发布或删除，请稍后重试");
     }
-    private ReentrantLock lock(UUID id) { return locks[(id.hashCode() & Integer.MAX_VALUE)%locks.length]; }
 
     private void audit(UUID sceneId,UUID versionId,UUID fileId,String action,long actor,String actorName,Map<String,Object> values) {
         var detail=new LinkedHashMap<String,Object>(values);
@@ -230,10 +227,9 @@ public class SceneVersionService implements InitializingBean {
         sceneOf(versionId);
         lockRead(versionId);
         try {
-            ReentrantLock guard=lock(id);
-            if(!guard.tryLock()) throw error(HttpStatus.CONFLICT,"文件正在处理，请稍后刷新或重试");
+            if(!activeUploads.add(id)) throw error(HttpStatus.CONFLICT,"文件正在处理，请稍后刷新或重试");
             try { return uploadLocked(versionId,id,input); }
-            finally { guard.unlock(); }
+            finally { activeUploads.remove(id); }
         } finally { versionLock(versionId).readLock().unlock(); }
     }
     private Map<String,Object> uploadLocked(UUID versionId,UUID id,InputStream input) {
@@ -471,15 +467,12 @@ public class SceneVersionService implements InitializingBean {
                 UUID id=UUID.fromString((String)row.get("fileId")); cursor=id;
                 UUID versionId=UUID.fromString((String)row.get("versionId"));
                 String status=(String)row.get("status");
-                ReentrantLock guard=lock(id); guard.lock();
                 try {
-                    try {
-                        if(leftovers.contains(id) && storage.recover(descriptor(row))) finish(versionId,id,true,null,true);
-                        else if("UPLOADING".equals(status)) finish(versionId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
-                    } catch(IOException e) {
-                        if(!"FAILED".equals(status)) finish(versionId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
-                    }
-                } finally { guard.unlock(); }
+                    if(leftovers.contains(id) && storage.recover(descriptor(row))) finish(versionId,id,true,null,true);
+                    else if("UPLOADING".equals(status)) finish(versionId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
+                } catch(IOException e) {
+                    if(!"FAILED".equals(status)) finish(versionId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
+                }
             }
         }
     }
