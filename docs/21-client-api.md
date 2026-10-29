@@ -6,10 +6,10 @@
 
 | 项 | 值 |
 |---|---|
-| Base URL | 当前日常实例 `http://127.0.0.1:18081`（仅本机）。手机或同事访问需要管理员把 `AR_BIND_ADDRESS` 改成主机 LAN 地址后重建 gateway，地址以管理员告知为准 |
+| Base URL | `https://4dgs.elma-gohan.xyz`。链路是 elma-gohan 的 nginx（HTTPS）经反向 SSH 隧道到开发机 gateway；开发机离线或隧道断开时该地址不可用 |
 | 前缀 | `/api/v1/client/`，与管理后台同源 |
 | 认证 | 无。不要发送 `Authorization`、Cookie。三个路由只开放 GET，文件路由另开放 HEAD |
-| 传输 | HTTP/1.1，JSON 为 UTF-8；文件为二进制流。当前为明文 HTTP，Android 9+ / iOS ATS 需要按各自平台放行明文或另行上 HTTPS |
+| 传输 | HTTPS（Let's Encrypt 证书）；JSON 为 UTF-8，文件为二进制流。不需要为 Android/iOS 放行明文流量 |
 | 错误体 | 所有错误统一为 `{"code":"AR_<状态码>","message":"…","traceId":"…"}`，按 HTTP 状态码判断，`message` 仅用于日志 |
 | 缓存 | 文件响应为 `Cache-Control: no-store, no-transform`；客户端自行缓存，用版本号和 SHA256 判断 |
 
@@ -160,7 +160,7 @@
 ## 8. 快速自测
 
 ```bash
-BASE=http://127.0.0.1:18081
+BASE=https://4dgs.elma-gohan.xyz
 curl -s "$BASE/api/v1/client/scenes"
 SID=<列表里的 id>
 curl -s "$BASE/api/v1/client/scenes/$SID"
