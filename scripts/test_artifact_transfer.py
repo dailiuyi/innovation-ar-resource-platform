@@ -5,10 +5,12 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from artifact_transfer import download, reference_server, digest, validate_relative_path, restore_tree
+from artifact_transfer import (DownloadBusy, download, reference_server, digest, os_lock, validate_relative_path,
+                               restore_tree)
 
 
 class TransferTest(unittest.TestCase):
@@ -151,9 +153,71 @@ class TransferTest(unittest.TestCase):
         self.assertEqual(self.destination.read_bytes(), b'keep')
 
     def test_concurrent_writer_rejected(self):
-        self.destination.with_name("download.bin.download.lock").touch()
-        with self.assertRaises(FileExistsError):
+        lock = self.destination.with_name("download.bin.download.lock")
+        with os_lock(lock):
+            with self.assertRaises(DownloadBusy):
+                self.get()
+        self.assertEqual(len(self.requests), 0)
+
+    def test_leftover_lock_file_does_not_block(self):
+        # A killed process leaves the empty file behind; only a live operating-system lock counts.
+        lock = self.destination.with_name("download.bin.download.lock")
+        lock.touch()
+        self.get()
+        self.assertTrue(lock.exists())
+        self.assertEqual(digest(self.destination), self.descriptor["sha256"])
+
+    def test_lock_is_released_after_failure(self):
+        with self.assertRaises(ValueError):
+            download(self.url, self.destination, self.descriptor["bytes"], "0" * 64)
+        self.get()
+
+    def test_control_directory_keeps_transfer_files_out_of_the_payload(self):
+        payload = self.root / "payload"
+        control = self.root / "control"
+        target = payload / "dir" / "file.bin"
+        self.partial_in(control, "fid", 80000)
+        download(self.url, target, self.descriptor["bytes"], self.descriptor["sha256"],
+                 control_dir=control, control_key="fid")
+        self.assertEqual(self.requests[0]["Range"], "bytes=80000-")
+        self.assertEqual(sorted(path.name for path in payload.rglob("*")), ["dir", "file.bin"])
+        self.assertEqual(sorted(path.name for path in control.iterdir()), ["fid.lock"])
+
+    def partial_in(self, control, key, size):
+        control.mkdir(parents=True, exist_ok=True)
+        (control / (key + ".part")).write_bytes(self.package.read_bytes()[:size])
+        (control / (key + ".json")).write_text(json.dumps({"etag": '"' + self.descriptor["sha256"] + '"'}))
+
+    def test_fresh_download_is_hashed_once_while_writing(self):
+        with mock.patch("artifact_transfer.digest", wraps=digest) as counted:
             self.get()
+        self.assertEqual(counted.call_count, 0)
+        self.assertEqual(digest(self.destination), self.descriptor["sha256"])
+
+    def test_resumed_download_is_verified_once_after_completion(self):
+        self.partial()
+        with mock.patch("artifact_transfer.digest", wraps=digest) as counted:
+            self.get()
+        self.assertEqual(counted.call_count, 1)
+
+    def test_server_ignoring_range_is_truncated_not_appended(self):
+        partial = self.partial()
+        data = self.package.read_bytes()
+        seen = []
+
+        def ignore_range(handler):
+            seen.append(handler.headers.get("Range"))
+            handler.send_response(200)
+            handler.send_header("Content-Length", str(len(data)))
+            handler.send_header("ETag", '"' + self.descriptor["sha256"] + '"')
+            handler.end_headers()
+            handler.wfile.write(data)
+
+        self.server.RequestHandlerClass.do_GET = ignore_range
+        self.get()
+        self.assertEqual(seen, ["bytes=80000-"])
+        self.assertEqual(self.destination.read_bytes(), data)
+        self.assertFalse(partial.exists())
 
     def test_invalid_checkpoint_restarts(self):
         partial = self.partial()

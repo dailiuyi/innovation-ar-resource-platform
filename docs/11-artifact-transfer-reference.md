@@ -4,7 +4,7 @@
 
 只搭可替换框架，资源格式尚未确定。不指定 ZIP、Unity AssetBundle、目录层级、内部清单、平台枚举或 AR 加载入口，也不冻结业务表及生产 HTTP API。
 
-本轮交付是 Python 3.11+ 标准库参考工具，便于对照管理员下载接口联调，不是手机 SDK。旧管理员清单/ZIP 下载接口已随成品版本切换删除，本工具仍保留单文件 Range 续传逻辑，待按场景版本/档位下载编排重构后才可用于联调。后台上传继续按整包重试，暂不增加分片上传。游客或客户端下载认证尚未实现。
+本轮交付是 Python 3.11+ 标准库参考工具，便于对照管理员下载接口和匿名客户端读取接口联调，不是手机 SDK。旧管理员清单/ZIP 下载接口已随成品版本切换删除；场景级下载由 `scripts/download_scene.py` 编排（见 [资源入库闭环](12-resource-ingestion.md)“匿名客户端读取与完整下载”）：按版本和档位固定清单，`payload/` 与控制区分离，复用本文单文件 `download` 的 Range 续传逻辑。后台上传继续按整包重试，暂不增加分片上传。客户端读取匿名，不含认证。
 
 ## 三个独立边界
 
@@ -23,13 +23,13 @@
 调用方提供访问 URL、准确字节数和小写十六进制 SHA-256。它们是函数输入，不代表最终业务清单的字段命名。摘要用于完整性验证，不替代身份认证或 HTTPS。
 
 - 下载固定内容；更新资源应生成新文件，不能在下载过程中原地替换。
-- 使用固定缓冲区写入 `.part`，不将整包载入内存；文件按目标 SHA-256 隔离。
+- 使用固定缓冲区写入 `.part`，不将整包载入内存；默认与目标文件相邻并按目标 SHA-256 隔离。`download` 的 `control_dir`/`control_key` 参数把 `.part`、验证器和锁移到独立控制目录（按 fileId 定位），使目标目录只出现完成的文件。
 - 保存强 ETag。断线后以 `Range: bytes=N-` 和 `If-Range` 请求剩余字节。
 - `206`：验证 ETag、Content-Range 起止/总量和 Content-Length，符合后才追加。
 - `200`：忽略旧偏移，截断临时文件重新写入，不能把完整响应追加到旧字节后面。
 - 没有强 ETag、检查点损坏或弱 ETag 时从头下载。ETag 视为不透明值，不假设所有服务器都使用 SHA-256。
 - 已下载长度等于期望长度时先本地校验；超长重新开始。`416` 和其他 HTTP 错误上抛，保留原有部分数据，不无限重试。
-- 完成后核对大小和整包 SHA-256，通过才交付最终文件。摘要错误删除部分文件，下次重下。
+- 完成后核对大小和整包 SHA-256，通过才交付最终文件：从 0 开始的下载（含 200 截断重写）在写入时同步计算摘要，不再整文件重读；续传完成后整文件校验一次。摘要错误删除部分文件，下次重下。
 - 参考下载器每次执行只尝试一次，超时默认 30 秒；中断后重跑相同命令即可续传。自动退避、进度 UI、凭证续期由正式客户端后续实现。
 
 服务返回原始字节，禁止传输压缩/内容转换。参考客户端要求单段响应覆盖偏移至文件结尾。HTTP 规则依据 [RFC 9110 If-Range](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.5) 和 [Range Requests](https://www.rfc-editor.org/rfc/rfc9110.html#section-14)。
@@ -46,13 +46,14 @@ python scripts/artifact_transfer.py download http://127.0.0.1:18083/artifact .lo
 $env:AR_TOKEN='<session-token>'
 python scripts/artifact_transfer.py restore-manifest .local/manifest.json .local/restored --base-url http://127.0.0.1:18080
 python scripts/test_artifact_transfer.py
+python scripts/test_download_scene.py
 ```
 
 `serve` 只绑定 127.0.0.1，仅开放单文件 `/artifact`，支持 GET、HEAD、单段 Range 和越界 416。其他 Range 形式忽略并返回完整 200。没有鉴权、上传或目录列表，不能用作现场数百人的正式服务。运行期间不得修改源文件。
 
 下载输出位于操作者独占的本地普通目录，当前以同卷硬链接实现完整文件不可覆盖交付；文件系统不支持则明确失败。参考工具不防御其他本机进程篡改目录的竞态。
 
-同一目标用 `.download.lock` 排除并行写入。正常异常释放锁；强杀进程后需确认旧任务停止，再手工删除该锁。暂不引入任务调度、自动恢复或清理服务。
+同一目标用操作系统文件锁（Linux/macOS `fcntl.flock`，Windows `msvcrt.locking`）排除并行写入，锁文件 `<名称>.download.lock`（或控制目录中的 `<key>.lock`）保留为空文件，不靠文件是否存在判断占用：进程退出或被强杀后系统释放锁，残留的空文件不会卡住下一次运行；另一个活动进程持有时抛出 `DownloadBusy`。暂不引入任务调度、自动恢复或清理服务。
 
 ## 后续接入顺序
 

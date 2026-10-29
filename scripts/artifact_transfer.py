@@ -1,5 +1,6 @@
 """Reference transport tools, not the production API or an AR runtime."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -12,13 +13,54 @@ from urllib.request import Request, urlopen
 CHUNK = 64 * 1024
 
 
+class DownloadBusy(OSError):
+    """Another process holds the operating-system lock of this download."""
+
+
+@contextmanager
+def os_lock(path):
+    """Exclusive non-blocking lock on a file that may stay behind: the OS releases it when the holder exits or is killed."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as stream:
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            try:
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise DownloadBusy(f"Another process is using {path.name}") from exc
+        else:
+            import fcntl
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise DownloadBusy(f"Another process is using {path.name}") from exc
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
 def digest(path):
     with Path(path).open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def download(url, destination, size, sha256, timeout=30, headers=None):
-    """One attempt; rerun after a network failure to resume. One writer per destination."""
+def download(url, destination, size, sha256, timeout=30, headers=None, control_dir=None, control_key=None):
+    """One attempt; rerun after a network failure to resume. One writer per destination.
+
+    Part file, validator and lock live next to the destination, or in control_dir under control_key
+    (default: the destination name) so that nothing but the finished file appears among the payload.
+    A download that starts from byte 0 is hashed while it is written; a resumed one is hashed once at the end."""
     extra = {} if headers is None else dict(headers)
     if type(size) is not int or size < 0 or not re.fullmatch("[0-9a-f]{64}", sha256):
         raise ValueError("Expected nonnegative size and lowercase SHA256")
@@ -26,16 +68,22 @@ def download(url, destination, size, sha256, timeout=30, headers=None):
         raise ValueError("Only HTTP(S) is supported")
     destination = Path(destination).absolute()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        if destination.stat().st_size == size and digest(destination) == sha256:
-            return destination
-        raise ValueError("Destination already exists with different content")
-    partial = destination.with_name(destination.name + "." + sha256 + ".part")
-    metadata = partial.with_suffix(".json")
-    lock = destination.with_name(destination.name + ".download.lock")
-    with lock.open("x"):
-        pass
-    try:
+    if control_dir is None:
+        partial = destination.with_name(destination.name + "." + sha256 + ".part")
+        metadata = partial.with_suffix(".json")
+        lock = destination.with_name(destination.name + ".download.lock")
+    else:
+        control_dir = Path(control_dir).absolute()
+        control_dir.mkdir(parents=True, exist_ok=True)
+        key = control_key or destination.name
+        partial = control_dir / (key + ".part")
+        metadata = control_dir / (key + ".json")
+        lock = control_dir / (key + ".lock")
+    with os_lock(lock):
+        if destination.exists():
+            if destination.stat().st_size == size and digest(destination) == sha256:
+                return destination
+            raise ValueError("Destination already exists with different content")
         offset = partial.stat().st_size if partial.exists() else 0
         etag = None
         if metadata.exists():
@@ -76,6 +124,7 @@ def download(url, destination, size, sha256, timeout=30, headers=None):
                     raise ValueError("Unexpected HTTP status")
                 if response.headers.get("Content-Length") != str(size - offset):
                     raise ValueError("Unexpected Content-Length")
+                hasher = None if offset else hashlib.sha256()
                 # Truncate before updating validator so a crash cannot pair old bytes with new ETag.
                 with partial.open("ab" if offset else "wb") as output:
                     metadata.write_text(json.dumps({"etag": actual_etag if strong else None}), "utf-8")
@@ -83,11 +132,13 @@ def download(url, destination, size, sha256, timeout=30, headers=None):
                         if output.tell() + len(block) > size:
                             raise ValueError("Response exceeds expected size")
                         output.write(block)
+                        if hasher:
+                            hasher.update(block)
                     output.flush()
                     os.fsync(output.fileno())
             if partial.stat().st_size != size:
                 raise IOError("Download incomplete; rerun to resume")
-            if digest(partial) != sha256:
+            if (digest(partial) if hasher is None else hasher.hexdigest()) != sha256:
                 partial.unlink()
                 raise ValueError("Checksum mismatch; rerun to restart")
         # Same-volume hard link makes complete bytes visible without overwriting another file.
@@ -95,8 +146,6 @@ def download(url, destination, size, sha256, timeout=30, headers=None):
         partial.unlink()
         metadata.unlink(missing_ok=True)
         return destination
-    finally:
-        lock.unlink(missing_ok=True)
 
 
 RESERVED_SEGMENT = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$", re.I)
@@ -124,13 +173,9 @@ def validate_relative_path(path):
     return path
 
 
-def restore_tree(manifest, destination, base_url="", headers=None, timeout=30):
-    """Download every manifest file into destination, keeping the top-level folder."""
-    destination = Path(destination).absolute()
-    if destination.exists():
-        raise ValueError("destination already exists")
-    files = manifest["files"]
-    paths = [validate_relative_path(item["relativePath"]) for item in files]
+def validate_relative_paths(paths):
+    """Every path is safe, unique ignoring case, and no file is also a directory prefix of another."""
+    paths = [validate_relative_path(path) for path in paths]
     if len(set(paths)) != len(paths) or len({p.lower() for p in paths}) != len(paths):
         raise ValueError("relative path conflict")
     ordered = sorted(path.lower() for path in paths)
@@ -140,6 +185,16 @@ def restore_tree(manifest, destination, base_url="", headers=None, timeout=30):
                 raise ValueError("file and directory path conflict")
             if not other.startswith(prefix):
                 break
+    return paths
+
+
+def restore_tree(manifest, destination, base_url="", headers=None, timeout=30):
+    """Download every manifest file into destination, keeping the top-level folder."""
+    destination = Path(destination).absolute()
+    if destination.exists():
+        raise ValueError("destination already exists")
+    files = manifest["files"]
+    validate_relative_paths([item["relativePath"] for item in files])
     destination.mkdir(parents=True)
     for item in files:
         relative = validate_relative_path(item["relativePath"])
