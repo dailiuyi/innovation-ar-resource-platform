@@ -4,10 +4,12 @@
 不连接后端、数据库、日常 Demo 或真实存储，因此它证明页面行为和布局，不证明发布、上传、
 删除等业务闭环。覆盖：入口按钮可点且不被遮挡、选中版本随地址栏保留、场景切换后迟到响应不写回、
 取消确认不产生请求，以及导入目录登记并上传目录下全部文件（无 resource.json 描述）：固定三路并发、单个文件失败不阻断其余、
-完整列出请求失败与结果未确认的文件、停止时中止全部在途请求且不再派发、续传只发送 FAILED/PENDING 并跳过 AVAILABLE/UPLOADING。
+完整列出请求失败与结果未确认的文件、停止时中止全部在途请求且不再派发、续传只发送 FAILED/PENDING 并跳过 AVAILABLE/UPLOADING；
+版本说明可输入并提交、目录哈希按实际累计字节显示进度、上传未结束时已确认文件同步到版本行和详情。
 真实后端点击验收在隔离 Compose 实例上执行。
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -371,6 +373,48 @@ XHR_PROBE = '''(()=>{
 })()'''
 
 
+HASH_PROBE = '''(()=>{
+  const NativeWorker=window.Worker
+  const stats=window.__hashProbe={hold:false,messages:[],files:[]}
+  // 只挂起真实 Worker 的消息投递，不伪造摘要或已读取字节。
+  window.Worker=class extends NativeWorker{
+    constructor(...args){
+      super(...args)
+      this.addEventListener('message',event=>{
+        if(stats.hold){
+          event.stopImmediatePropagation()
+          stats.messages.push({worker:this,event})
+        }
+      })
+    }
+    postMessage(file,...rest){
+      if(file instanceof File)stats.files.push({name:file.name,bytes:file.size})
+      return super.postMessage(file,...rest)
+    }
+  }
+})()'''
+
+
+def release_hash_message(page):
+    return page.evaluate('''()=>{
+      const {worker,event}=window.__hashProbe.messages.shift()
+      worker.onmessage(event)
+      return event.data.loaded??null
+    }''')
+
+
+def release_hashing(page):
+    page.evaluate('''()=>{
+      const stats=window.__hashProbe
+      stats.hold=false
+      for(const {worker,event} of stats.messages.splice(0))worker.onmessage(event)
+    }''')
+
+
+def progress_percent(drawer):
+    return int(drawer.get_by_role('progressbar').get_attribute('aria-valuenow'))
+
+
 def xhr_stats(page):
     return page.evaluate('()=>({...window.__xhr})')
 
@@ -379,9 +423,14 @@ def reset_xhr(page):
     page.evaluate('()=>Object.assign(window.__xhr,{active:0,peak:0,aborts:0,sent:0})')
 
 
-def import_directory(drawer, package):
+def import_directory(drawer, package, description=''):
     drawer.locator('input[type=file]').set_input_files(str(package))
     drawer.get_by_role('button', name='开始导入', exact=True).wait_for()
+    if description:
+        field = drawer.locator('.import-card input')
+        field.press_sequentially(description)
+        field.blur()
+        check('版本说明支持连续输入且失焦后保留', field.input_value() == description)
     drawer.get_by_role('button', name='开始导入', exact=True).click()
 
 
@@ -414,7 +463,8 @@ def make_package(run):
     (root / 'models').mkdir()
     (root / 'notes').mkdir()
     for index, path in enumerate(PACKAGE_FILES):
-        (root / path).write_bytes(bytes([index + 1]) * (64 + index))
+        count = 3 * 2 * 1024 * 1024 + 133 if path == 'models/high-0.c.ply' else 64 + index
+        (root / path).write_bytes(bytes([index + 1]) * count)
     (root / NOTES_FILE).write_text('说明文档同样属于版本文件', encoding='utf-8')
     return root
 
@@ -469,6 +519,7 @@ def main():
             context.add_cookies([{'name': 'Admin-Token', 'value': 'layout-check-token', 'url': web}])
             page = context.new_page()
             page.add_init_script(XHR_PROBE)
+            page.add_init_script(HASH_PROBE)
             # 首次访问需要 Vite 现场编译依赖，慢于 Playwright 默认超时；显式放宽避免把环境慢当成失败。
             page.set_default_timeout(60000)
             page.set_default_navigation_timeout(180000)
@@ -634,13 +685,59 @@ def main():
             api.hold_uploads = True
             api.fail_once = {'models/high-0.c.ply'}
             reset_xhr(page)
-            import_directory(drawer, package)
+            description = '并发导入 · 版本说明输入验证'
+            page.evaluate('()=>{window.__hashProbe.hold=true}')
+            import_directory(drawer, package, description)
+            check('目录哈希使用真实 Worker 且第一份摘要消息已挂起',
+                  wait_until(page, lambda: page.evaluate('()=>window.__hashProbe.messages.length>=2'), timeout=30))
+            total_bytes = sum((package / path).stat().st_size for path in IMPORT_FILES)
+            first_bytes = (package / IMPORT_FILES[0]).stat().st_size
+            release_hash_message(page)
+            check('首个文件读取完成时进度按目录总字节计算，未错误显示整目录完成',
+                  wait_until(page, lambda: progress_percent(drawer) == first_bytes * 100 // total_bytes)
+                  and progress_percent(drawer) < 100)
+            release_hash_message(page)  # 投递首个文件的真实摘要，开始第二个文件
+            check('第二个文件已开始且真实消息可逐条投递',
+                  wait_until(page, lambda: page.evaluate('()=>window.__hashProbe.files.length===2&&window.__hashProbe.messages.length>0'), timeout=30))
+            large_bytes = (package / IMPORT_FILES[1]).stat().st_size
+            observed = []
+            for chunk_end in (2 * 1024 * 1024, 4 * 1024 * 1024, 6 * 1024 * 1024, large_bytes):
+                assert wait_until(page, lambda: page.evaluate('()=>window.__hashProbe.messages.length>0'))
+                loaded = release_hash_message(page)
+                expected = (first_bytes + chunk_end) * 100 // total_bytes
+                assert loaded == chunk_end
+                assert wait_until(page, lambda: progress_percent(drawer) == expected)
+                observed.append(progress_percent(drawer))
+            check('大文件每块哈希进度与实际累计字节相符且单调前进',
+                  observed == sorted(observed) and observed[0] < observed[-1] < 100)
+            page.screenshot(path=str(run / 'panel-hash-progress-1440.png'), full_page=True)
+            assert wait_until(page, lambda: page.evaluate('()=>window.__hashProbe.messages.length>0'))
+            release_hash_message(page)  # 大文件的真实摘要；下一个文件尚未投递读取进度
+            check('进入下一文件后目录哈希进度不重置',
+                  wait_until(page, lambda: page.evaluate('()=>window.__hashProbe.files.length===3'), timeout=30)
+                  and progress_percent(drawer) == observed[-1])
+            release_hashing(page)
             check('首批三个请求被服务端持有', wait_until(page, lambda: len(api.held_uploads) == 3, timeout=30))
             page.wait_for_timeout(500)
             stats = xhr_stats(page)
             check('首批三个均未完成时恰有三个在途，没有第四个',
                   stats['active'] == 3 and stats['peak'] == 3 and stats['sent'] == 3
                   and len(api.held_uploads) == 3 and api.uploads == IMPORT_FILES[:3])
+            # 仅完成一个文件，继续持有其余请求，检查列表不是等整轮结束才刷新。
+            _, deliver = api.held_uploads.pop(0)
+            deliver()
+            check('首个文件完成后其余请求仍在途',
+                  wait_until(page, lambda: len(api.held_uploads) == 3 and len(api.uploads) == 4, timeout=30))
+            detail_status = drawer.locator('.version-detail > p')
+            first_file = drawer.locator('.version-detail .el-table').get_by_role('row').filter(has_text=IMPORT_FILES[0])
+            version_row = drawer.locator('.el-table').first.get_by_role('row').filter(has_text=description)
+            check('整轮上传未结束时详情已入库数和文件状态立即更新',
+                  wait_until(page, lambda: '已入库 1 / 6' in detail_status.inner_text()
+                             and '已入库' in first_file.inner_text()))
+            check('整轮上传未结束时版本行同步已入库数与在途状态',
+                  '1 / 6' in version_row.inner_text() and '上传中' in version_row.inner_text()
+                  and drawer.get_by_role('button', name='停止本次传输', exact=True).count() == 1)
+            page.screenshot(path=str(run / 'panel-upload-progress-1440.png'), full_page=True)
             release_held(api)
             check('单个文件失败后其余文件继续传完并显示汇总',
                   wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 1 个，结果未确认 0 个').count() == 1, timeout=30))
@@ -653,8 +750,11 @@ def main():
                   len(api.created_bodies) == 1
                   and sorted(f['relativePath'] for f in api.created_bodies[0]['files']) == IMPORT_FILES
                   and 'descriptor' not in api.created_bodies[0])
-            check('登记的每个文件都带大小与 SHA-256',
-                  all(f['bytes'] > 0 and re.fullmatch(r'[0-9a-f]{64}', f['sha256']) for f in api.created_bodies[0]['files']))
+            check('版本说明被实际提交到创建请求', api.created_bodies[0]['description'] == description)
+            check('每个真实 Worker 摘要和字节数与所选文件完全一致',
+                  all(f['bytes'] == (package / f['relativePath']).stat().st_size
+                      and f['sha256'] == hashlib.sha256((package / f['relativePath']).read_bytes()).hexdigest()
+                      for f in api.created_bodies[0]['files']))
             uploaded_before = list(api.uploads)
             drawer.get_by_role('button', name='继续上传', exact=True).first.click()
             check('继续上传后全部文件入库',

@@ -30,7 +30,7 @@
     <section v-if="importPlan" class="import-card">
       <h3>待导入：{{importPlan.pkg.files.length}} 个文件，共 {{size(importPlan.pkg.totalBytes)}}</h3>
       <el-form inline @submit.prevent="startImport">
-        <el-form-item label="版本说明"><el-input v-model="importPlan.description" maxlength="2000" placeholder="可留空" style="width:320px" /></el-form-item>
+        <el-form-item label="版本说明"><el-input v-model="importDescription" maxlength="2000" placeholder="可留空" style="width:320px" /></el-form-item>
         <el-form-item>
           <el-button type="primary" @click="startImport">开始导入</el-button>
           <el-button @click="importPlan=null">放弃</el-button>
@@ -86,7 +86,7 @@
   </el-drawer>
 </template>
 <script setup>
-import { computed, defineComponent, h, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createVersion, deleteVersion, getScene, getVersion, getVersionConfig, getVersionFile, listVersions, publishVersion, updateVersion, uploadVersionFile } from '@/api/scene'
@@ -99,6 +99,7 @@ const config=ref({maxBytes:0,versionMaxFiles:0,versionMaxBytes:0})
 const versions=ref([]),total=ref(0),page=ref(1),sceneLockVersion=ref(0),published=ref(null),sceneName=ref('')
 const selected=ref(null),editDescription=ref('')
 const picker=ref(null),importPlan=shallowRef(null),session=shallowRef(null)
+const importDescription=ref('')
 const busy=ref(false),saving=ref(false),publishing=ref(false),removing=ref(false)
 const error=ref(''),progress=ref(0),progressText=ref('')
 const uploadIssues=ref([])
@@ -234,7 +235,7 @@ async function picked(event){
   try{
     const pkg=await readPackage(files)
     checkLimits(pkg,config.value)
-    if(!target){importPlan.value={pkg,description:''};return}
+    if(!target){importDescription.value='';importPlan.value={pkg};return}
     if(selected.value?.id!==target)return
     checkSelection(pkg,selected.value)
     session.value={sceneId:props.sceneId,versionId:target,pkg,digests:null,expect:selected.value,requestKey:null,description:selected.value.description}
@@ -245,29 +246,39 @@ async function startImport(){
   const plan=importPlan.value
   if(!plan)return
   importPlan.value=null
-  session.value={sceneId:props.sceneId,versionId:null,pkg:plan.pkg,digests:null,expect:null,requestKey:randomKey(),description:plan.description}
+  session.value={sceneId:props.sceneId,versionId:null,pkg:plan.pkg,digests:null,expect:null,requestKey:randomKey(),description:importDescription.value}
   await runSession()
 }
-function digest(file){
+function digest(file,onProgress){
   return new Promise((resolve,reject)=>{
     rejectHash=reject
     worker=new Worker(new URL('./hash.worker.js',import.meta.url),{type:'module'})
     worker.onmessage=({data})=>{
       if(data.error){worker.terminate();reject(new Error(data.error))}
       else if(data.digest){worker.terminate();resolve(data.digest)}
-      else progress.value=data.progress
+      else onProgress(data.loaded)
     }
     worker.onerror=()=>reject(new Error('摘要计算失败'))
     worker.postMessage(file)
   })
 }
-async function hashAll(pkg){
+async function hashAll(pkg,live){
   const digests=new Map()
+  let hashedBytes=0
   for(let i=0;i<pkg.files.length;i++){
-    if(cancelled)throw new Error('已取消')
+    if(cancelled||!live())throw new Error('已取消')
     const item=pkg.files[i]
-    progress.value=0;progressText.value=`正在计算 ${i+1}/${pkg.files.length} ${item.relativePath} 的 SHA-256`
-    digests.set(item.relativePath,await digest(item.file))
+    const showProgress=loaded=>{
+      if(!live())return
+      const bytes=hashedBytes+loaded
+      progress.value=Math.floor(bytes/pkg.totalBytes*100)
+      progressText.value=`准备校验：已读取 ${size(bytes)} / ${size(pkg.totalBytes)}；正在计算 ${i+1}/${pkg.files.length} ${item.relativePath} 的 SHA-256`
+    }
+    showProgress(0)
+    digests.set(item.relativePath,await digest(item.file,showProgress))
+    if(!live())throw new Error('已取消')
+    showProgress(item.file.size)
+    hashedBytes+=item.file.size
   }
   return digests
 }
@@ -275,24 +286,26 @@ function cancel(){cancelled=true;worker?.terminate();rejectHash?.(new Error('已
 // 查询失败或服务端仍在处理时，上传结果无法确认；与“请求失败”分开列出。
 class UploadUnconfirmedError extends Error {}
 // 网关超时、断线或主动取消都不代表服务端失败：先读该文件状态，再决定下一步。
-async function reconcile(versionId,record){
+async function reconcile(versionId,record,onState){
   let state
   try{state=await getVersionFile(versionId,record.fileId)}
   catch{throw new UploadUnconfirmedError('上传结果未确认，请刷新状态')}
+  onState(state)
   if(state.status==='AVAILABLE')return
   if(state.status==='UPLOADING')throw new UploadUnconfirmedError('服务端仍在处理，请稍后点击“刷新状态”')
   throw new Error(`上传未完成${state.failureReason?'：'+state.failureReason:''}，可继续上传`)
 }
-async function uploadOne(versionId,record,file,onProgress){
+async function uploadOne(versionId,record,file,onProgress,onState){
   const controller=new AbortController()
   controllers.add(controller)
   try{
     const result=await uploadVersionFile(versionId,record.fileId,file,{signal:controller.signal,onUploadProgress:e=>onProgress(Math.min(e.loaded,file.size))})
+    onState(result)
     if(result.status==='AVAILABLE')return
   }catch(e){
     if(e.response&&![502,504].includes(e.response.status))throw e
   }finally{controllers.delete(controller)}
-  await reconcile(versionId,record)
+  await reconcile(versionId,record,onState)
 }
 async function runSession(){
   const s=session.value
@@ -302,7 +315,8 @@ async function runSession(){
   busy.value=true;cancelled=false;error.value='';uploadIssues.value=[]
   try{
     if(!s.digests){
-      s.digests=await hashAll(s.pkg)
+      s.digests=await hashAll(s.pkg,live)
+      if(!live())return
       if(s.expect){checkDigests(s.pkg,s.digests,s.expect);s.expect=null}
     }
     if(cancelled)throw new Error('已取消')
@@ -316,7 +330,7 @@ async function runSession(){
       await selectVersion(created.id)
       if(!live())return
     }
-    const detail=await getVersion(s.versionId)
+    const detail=reactive(await getVersion(s.versionId))
     if(!live())return
     if(selected.value?.id===detail.id)selected.value=detail
     const plan=uploadPlan(detail.files)
@@ -325,6 +339,18 @@ async function runSession(){
     let done=plan.done
     let doneBytes=detail.files.filter(f=>f.status==='AVAILABLE').reduce((n,f)=>n+f.bytes,0)
     const sending=new Map()
+    // 仅把 PUT 或单文件状态查询实际确认的记录写回表格；不把网络异常臆断为服务端 FAILED。
+    const syncSummary=()=>{
+      if(!live())return
+      const availableCount=detail.files.filter(f=>f.status==='AVAILABLE').length
+      const failedCount=detail.files.filter(f=>f.status==='FAILED').length
+      const uploadStatus=sending.size||detail.files.some(f=>f.status==='UPLOADING')?'UPLOADING'
+        :failedCount?'FAILED':availableCount===detail.files.length?'READY':'PENDING'
+      const summary={availableCount,failedCount,uploadStatus}
+      Object.assign(detail,summary)
+      const row=versions.value.find(v=>v.id===detail.id)
+      if(row)Object.assign(row,summary)
+    }
     // 字节发送百分比不等于入库确认；入库数单独显示。
     const refreshProgress=()=>{
       if(!live())return
@@ -332,19 +358,24 @@ async function runSession(){
       for(const item of sending.values())sent+=item.loaded
       progress.value=totalBytes?Math.min(100,Math.floor((doneBytes+sent)/totalBytes*100)):100
       const flying=[...sending].map(([path,item])=>item.loaded>=item.bytes?`${path}（等待服务端校验）`:path)
-      progressText.value=`已入库 ${done}/${detail.files.length}${flying.length?'；在途：'+flying.join('、'):''}`
+      progressText.value=`传输进度：${size(doneBytes+sent)} / ${size(totalBytes)}；已入库 ${done}/${detail.files.length}${flying.length?'；在途：'+flying.join('、'):''}`
     }
     const upload=async record=>{
       const item={loaded:0,bytes:record.bytes}
       sending.set(record.relativePath,item)
+      syncSummary()
       refreshProgress()
       try{
         await uploadOne(s.versionId,record,local.get(record.relativePath),loaded=>{
           item.loaded=loaded
           if(sending.get(record.relativePath)===item)refreshProgress()
+        },state=>{
+          if(!live())return
+          Object.assign(record,state)
+          syncSummary()
         })
         done++;doneBytes+=record.bytes
-      }finally{sending.delete(record.relativePath);refreshProgress()}
+      }finally{sending.delete(record.relativePath);syncSummary();refreshProgress()}
     }
     const failures=await runUploads(plan.upload,UPLOAD_CONCURRENCY,upload,()=>cancelled||!live())
     if(!live())return
@@ -385,7 +416,7 @@ watch(()=>props.sceneId,async id=>{
   cancel();++runToken
   session.value=null;importPlan.value=null;busy.value=false
   selected.value=null;versions.value=[];total.value=0;published.value=null;sceneLockVersion.value=0;page.value=1
-  error.value='';progressText.value='';sceneName.value='';uploadIssues.value=[]
+  error.value='';progressText.value='';sceneName.value='';uploadIssues.value=[];importDescription.value=''
   if(!id)return
   loadSceneName(id,sequence)
   const restored=route.query.versionId?String(route.query.versionId):null
