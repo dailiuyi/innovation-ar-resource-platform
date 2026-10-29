@@ -91,8 +91,8 @@ class Instance:
 
 
 def project_resources():
-    containers = docker('ps', '-a', '--filter', 'label=com.docker.compose.project=' + PROJECT, '--format', '{{.ID}}').stdout.split()
-    volumes = docker('volume', 'ls', '--filter', 'label=com.docker.compose.project=' + PROJECT, '--format', '{{.Name}}').stdout.split()
+    containers = docker('ps', '-a', '--filter', 'label=com.docker.compose.project=' + PROJECT, '--format', '{{.ID}}').stdout.decode().split()
+    volumes = docker('volume', 'ls', '--filter', 'label=com.docker.compose.project=' + PROJECT, '--format', '{{.Name}}').stdout.decode().split()
     return containers, volumes
 
 
