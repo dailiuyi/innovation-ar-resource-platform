@@ -5,7 +5,7 @@
 | 要回答的问题 | 入口 | 使用边界 |
 |---|---|---|
 | 收到口头需求、准备 Issue、审查 PR 或接手任务时先做什么 | [Agent 工作流入口](17-agent-workflow.md) | 先判断职责和用户授权，再进入对应手册；不依赖旧聊天 |
-| 当前平台实现了什么 | [资源入库闭环](12-resource-ingestion.md)、[项目介绍](../README.md) | 场景、账号、resource.json 不可变版本、逐文件入库、单一发布指针、整版物理删除与匿名读取/下载；后台内嵌预览未提供，桌面参考播放器验收见 [真实样包记录](20-4dgs-sample-validation.md) |
+| 当前平台实现了什么 | [资源入库闭环](12-resource-ingestion.md)、[项目介绍](../README.md) | 场景、账号、目录文件清单不可变版本、逐文件入库、单一发布指针、整版物理删除与匿名读取/下载；后台内嵌预览未提供；桌面参考播放器自 2026-10-29 去掉描述后不可用，旧验收见 [真实样包记录](20-4dgs-sample-validation.md) |
 | 客户端如何对接接口 | [客户端接口对接文件](21-client-api.md)、[Unity 对接技术文档](22-unity-integration.md) | 匿名读取、Range 下载、断点续传与错误处理；手机和 Unity 原生加载未验证 |
 | 当前平台如何组成 | [当前架构](11-current-platform-architecture.md) | 结合现行实现核对；后续设计不等于已有能力 |
 | 深圳试点大资源如何传输和存储 | [公网分发架构建议](19-public-resource-delivery-proposal.md) | 云主机挂盘与 CDN，预留对象存储；方案未实施 |
@@ -21,6 +21,6 @@
 | 如何核对或恢复 Agent 环境 | [环境版本与自检](18-symphony-environment.md) | 镜像/控制器配套、轻量自检与构建并发；不替代宿主业务验收 |
 | 如何运行开发任务调度 | [Symphony 本地安装](15-symphony.md) | GitHub Issue 标签入队，草稿 PR 等待人工审查；Windows review/ingestion 与 Linux 隔离 Compose 验收分别按手册执行 |
 
-`docs/01` 至 `docs/05`、`docs/07`、[历史汇报页](presentation.html)、`docs/images/` 的旧图、根目录 `database/migrations/` 和 `contracts/` 中的 runtime-manifest（不再生成）保留历史候选设计。旧任务、决策与验证记录中的“当前”仅对应所记日期/基线；后续状态见各入口，不能据旧草稿、昼夜、ZIP 设计推断现行功能。[2026-10-23 格式核查](tasks/active/2026-10-23-4dgs-format-discovery.md)保留旧实现观察，现行 resource.json 与读取链路已由本页当前功能入口接替。
+`docs/01` 至 `docs/05`、`docs/07`、[历史汇报页](presentation.html)、`docs/images/` 的旧图、根目录 `database/migrations/` 和 `contracts/` 中的 runtime-manifest（不再生成）保留历史候选设计。旧任务、决策与验证记录中的“当前”仅对应所记日期/基线；后续状态见各入口，不能据旧草稿、昼夜、ZIP 设计推断现行功能。[2026-10-23 格式核查](tasks/active/2026-10-23-4dgs-format-discovery.md)保留旧实现观察，现行目录文件清单版本与读取链路已由本页当前功能入口接替（`resource.json` 描述已于 2026-10-29 删除）。
 
 新增长期规则时指定对应文档和验证方式。优先补一个能发现实际错误的检查，避免反复追加大段提示词。尚不能自动检查的约束，明确由任务负责人审查。

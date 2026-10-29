@@ -17,11 +17,6 @@ import org.springframework.web.server.ResponseStatusException;
 class SceneVersionCreateBoundaryTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String SHA = "a".repeat(64);
-    private static final String DESCRIPTOR = """
-        {"formatVersion":1,"defaultVariant":"standard","transform":{"position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]},
-         "settings":"common/settings.json",
-         "variants":[{"id":"standard","name":"标准","format":"4dv-compressed-ply",
-           "segments":[{"path":"standard/00.c.ply","startSeconds":0,"durationSeconds":5}]}]}""";
 
     private static SceneVersionService service(long maxBytes, int maxFiles, long versionBytes) {
         return new SceneVersionService(null, null, null, JSON, maxBytes, maxFiles, versionBytes);
@@ -31,9 +26,8 @@ class SceneVersionCreateBoundaryTest {
         return new SceneVersionController.FileInput(path, bytes, SHA);
     }
 
-    private static SceneVersionController.CreateInput input(String descriptor, SceneVersionController.FileInput... files)
-            throws Exception {
-        return new SceneVersionController.CreateInput(UUID.randomUUID(), "", JSON.readTree(descriptor), List.of(files));
+    private static SceneVersionController.CreateInput input(SceneVersionController.FileInput... files) {
+        return new SceneVersionController.CreateInput(UUID.randomUUID(), "", List.of(files));
     }
 
     private static ResponseStatusException rejected(SceneVersionService service, SceneVersionController.CreateInput input) {
@@ -44,53 +38,37 @@ class SceneVersionCreateBoundaryTest {
         assertEquals(Map.of("maxBytes", 10L, "versionMaxFiles", 3, "versionMaxBytes", 30L), service(10, 3, 30).config());
     }
 
-    @Test void tooManyFilesAreRejectedWith413() throws Exception {
-        var e = rejected(service(100, 1, 1000), input(DESCRIPTOR, file("common/settings.json", 1), file("standard/00.c.ply", 1)));
+    @Test void tooManyFilesAreRejectedWith413() {
+        var e = rejected(service(100, 1, 1000), input(file("common/settings.json", 1), file("standard/00.c.ply", 1)));
         assertEquals(HttpStatus.PAYLOAD_TOO_LARGE, e.getStatusCode());
     }
 
-    @Test void singleFileAboveConfiguredLimitIsRejectedWith413() throws Exception {
-        var e = rejected(service(10, 10, 1000), input(DESCRIPTOR, file("common/settings.json", 1), file("standard/00.c.ply", 11)));
+    @Test void singleFileAboveConfiguredLimitIsRejectedWith413() {
+        var e = rejected(service(10, 10, 1000), input(file("common/settings.json", 1), file("standard/00.c.ply", 11)));
         assertEquals(HttpStatus.PAYLOAD_TOO_LARGE, e.getStatusCode());
     }
 
-    @Test void versionTotalAboveConfiguredLimitIsRejectedWith413() throws Exception {
-        var e = rejected(service(10, 10, 15), input(DESCRIPTOR, file("common/settings.json", 8), file("standard/00.c.ply", 8)));
+    @Test void versionTotalAboveConfiguredLimitIsRejectedWith413() {
+        var e = rejected(service(10, 10, 15), input(file("common/settings.json", 8), file("standard/00.c.ply", 8)));
         assertEquals(HttpStatus.PAYLOAD_TOO_LARGE, e.getStatusCode());
     }
 
-    @Test void unsafeOrConflictingPathsAreRejectedWith400() throws Exception {
+    @Test void unsafeOrConflictingPathsAreRejectedWith400() {
         var service = service(100, 10, 1000);
         for (var paths : List.of(List.of("../settings.json", "standard/00.c.ply"),
                 List.of("common/settings.json", "COMMON/settings.json"),
                 List.of("common/settings.json", "common/settings.json"))) {
-            var e = rejected(service, input(DESCRIPTOR, file(paths.get(0), 1), file(paths.get(1), 1)));
+            var e = rejected(service, input(file(paths.get(0), 1), file(paths.get(1), 1)));
             assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(), paths.toString());
         }
     }
 
-    @Test void fileNamesTheClientUrlCannotCarryAreRejectedWith400() throws Exception {
+    @Test void fileNamesTheClientUrlCannotCarryAreRejectedWith400() {
         var service = service(100, 10, 1000);
         for (String name : List.of("100%.json", "a;b.json")) {
-            var e = rejected(service, input(DESCRIPTOR, file("common/" + name, 1), file("standard/00.c.ply", 1)));
+            var e = rejected(service, input(file("common/" + name, 1), file("standard/00.c.ply", 1)));
             assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(), name);
             assertTrue(e.getReason().contains(name), e.getReason());
         }
-    }
-
-    @Test void descriptorMustReferenceExactlyTheRegisteredFiles() throws Exception {
-        var service = service(100, 10, 1000);
-        var missing = rejected(service, input(DESCRIPTOR, file("common/settings.json", 1)));
-        assertEquals(HttpStatus.BAD_REQUEST, missing.getStatusCode());
-        assertTrue(missing.getReason().contains("standard/00.c.ply"), missing.getReason());
-        var extra = rejected(service, input(DESCRIPTOR, file("common/settings.json", 1), file("standard/00.c.ply", 1),
-            file("notes/report.md", 1)));
-        assertEquals(HttpStatus.BAD_REQUEST, extra.getStatusCode());
-        assertTrue(extra.getReason().contains("notes/report.md"), extra.getReason());
-    }
-
-    @Test void nonObjectDescriptorIsRejectedWith400() throws Exception {
-        var e = rejected(service(100, 10, 1000), input("null", file("common/settings.json", 1)));
-        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
     }
 }

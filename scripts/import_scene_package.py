@@ -1,10 +1,10 @@
 """Import a resource package into a scene through the administrator API: create one immutable version, upload files.
 
-Uses the same descriptor/file manifest, create-version and per-file upload endpoints as the admin UI; there is no
-hidden import path. The package root is read in place (streamed from disk, never copied) and the descriptor is a
-separate file so the source directory stays untouched.
+Uses the same file manifest, create-version and per-file upload endpoints as the admin UI; there is no hidden import
+path. The package root is the version root: every regular file under it (recursively) is registered at its relative
+POSIX path. It is read in place (streamed from disk, never copied) and never written to.
 
-Resume: the request key and version id are saved next to the descriptor in .import-state.json as soon as they exist.
+Resume: the request key and version id are saved in --state-file (outside the package root) as soon as they exist.
 Rerunning the same command, or passing --version-id, re-hashes the input files, checks that the manifest equals the
 stored one, skips AVAILABLE files, leaves UPLOADING files alone (still being processed) and re-sends FAILED/PENDING ones.
 The administrator password and token are read from the private credentials file / memory and are never printed.
@@ -22,18 +22,22 @@ import urllib.parse
 import uuid
 
 CHUNK = 1024 * 1024
-STATE_NAME = '.import-state.json'
 
 
 class ImportError_(Exception):
     pass
 
 
-def referenced_paths(descriptor):
-    """Every file the descriptor references, once, in a stable order."""
-    paths = {descriptor[key] for key in ('settings', 'poster', 'audio', 'preview') if key in descriptor}
-    for variant in descriptor['variants']:
-        paths.update(segment['path'] for segment in variant['segments'])
+def package_paths(package_root):
+    """Every regular file under the package root as a sorted relative POSIX path; symbolic links are refused."""
+    paths = []
+    for path in Path(package_root).rglob('*'):
+        if path.is_symlink():
+            raise ImportError_(f'{path} is a symbolic link; only regular files can be imported')
+        if path.is_file():
+            paths.append(path.relative_to(package_root).as_posix())
+    if not paths:
+        raise ImportError_(f'{package_root} contains no files')
     return sorted(paths)
 
 
@@ -100,25 +104,25 @@ def save_state(path, state):
     os.replace(temporary, path)
 
 
-def import_package(api, scene_id, package_root, descriptor_path, version_id=None, log=print):
+def import_package(api, scene_id, package_root, state_path, version_id=None, log=print):
     """Returns a result dict with timings. Raises ImportError_ on a hard failure; incomplete files are reported."""
-    package_root = Path(package_root)
-    descriptor = json.loads(Path(descriptor_path).read_text(encoding='utf-8'))
-    paths = referenced_paths(descriptor)
+    package_root, state_path = Path(package_root), Path(state_path)
+    if not package_root.is_dir():
+        raise ImportError_(f'{package_root} is not a directory')
+    if package_root.resolve() in state_path.absolute().resolve().parents:
+        raise ImportError_('--state-file must not be inside --package-root')
+    paths = package_paths(package_root)
     started = time.monotonic()
     manifest = []
     prehash = {}
     for relative in paths:
         source = package_root / relative
-        if not source.is_file():
-            raise ImportError_(f'descriptor references {relative} but {source} is not a file')
         begin = time.monotonic()
         manifest.append({'relativePath': relative, 'bytes': source.stat().st_size, 'sha256': file_digest(source)})
         prehash[relative] = time.monotonic() - begin
     prehash_seconds = time.monotonic() - started
     log(f'hashed {len(manifest)} files, {sum(m["bytes"] for m in manifest)} bytes in {prehash_seconds:.2f}s')
 
-    state_path = Path(descriptor_path).with_name(STATE_NAME)
     states = load_state(state_path)
     saved = states.get(scene_id, {})
     request_key = saved.get('requestKey') or str(uuid.uuid4())
@@ -130,7 +134,7 @@ def import_package(api, scene_id, package_root, descriptor_path, version_id=None
         save_state(state_path, states)
         begin = time.monotonic()
         status, version = api.request('POST', f'/api/v1/scenes/{scene_id}/versions',
-                                      {'requestKey': request_key, 'description': description, 'descriptor': descriptor, 'files': manifest})
+                                      {'requestKey': request_key, 'description': description, 'files': manifest})
         create_seconds = time.monotonic() - begin
         if status not in (200, 201):
             raise ImportError_(f'create version failed: HTTP {status} {version.get("message", "")}')
@@ -144,8 +148,6 @@ def import_package(api, scene_id, package_root, descriptor_path, version_id=None
         raise ImportError_(f'version {version_id} not readable: HTTP {status}')
     if str(version.get('sceneId')) != str(scene_id):
         raise ImportError_(f'version {version_id} belongs to scene {version.get("sceneId")}, not {scene_id}')
-    if version['descriptor'] != descriptor:
-        raise ImportError_('stored descriptor differs from --descriptor; import a new version instead')
     stored = {f['relativePath']: f for f in version['files']}
     if sorted(stored) != paths or any(stored[m['relativePath']]['bytes'] != m['bytes'] or stored[m['relativePath']]['sha256'] != m['sha256'] for m in manifest):
         raise ImportError_('input files no longer match the stored manifest (re-hashed from disk); not uploading')
@@ -191,8 +193,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--base-url', required=True, help='Gateway URL, e.g. http://127.0.0.1:18082 (the /prod-api prefix is added)')
     parser.add_argument('--scene-id', required=True)
-    parser.add_argument('--package-root', type=Path, required=True, help='Directory the descriptor paths are relative to')
-    parser.add_argument('--descriptor', type=Path, required=True, help='resource.json v1 file (kept outside the package root)')
+    parser.add_argument('--package-root', type=Path, required=True, help='Version root: every file under it is imported')
+    parser.add_argument('--state-file', type=Path, required=True, help='Resume state JSON (must be outside the package root)')
     parser.add_argument('--credentials-file', type=Path, required=True, help='Private JSON with username and password')
     parser.add_argument('--version-id', help='Continue this existing version instead of creating one')
     parser.add_argument('--report', type=Path, help='Write the result (timings, no secrets) to this JSON file')
@@ -203,7 +205,7 @@ def main(argv=None):
             uuid.UUID(args.version_id)
         api = Api(args.base_url)
         api.login(args.credentials_file)
-        result = import_package(api, args.scene_id, args.package_root, args.descriptor, args.version_id)
+        result = import_package(api, args.scene_id, args.package_root, args.state_file, args.version_id)
     except (ImportError_, ValueError, OSError, KeyError, http.client.HTTPException) as error:
         print('ERROR: ' + type(error).__name__ + ': ' + str(error), file=sys.stderr)
         return 2 if isinstance(error, (ValueError, KeyError)) else 1

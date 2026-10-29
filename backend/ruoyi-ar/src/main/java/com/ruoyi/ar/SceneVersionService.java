@@ -25,7 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 /**
  * One application instance and one private local volume. No background upload worker.
- * A version's descriptor and file list are fixed at creation. Uploads and file transfers share the version
+ * A version's file list is fixed at creation. Uploads and file transfers share the version
  * read lock; publish and whole-version deletion take its write lock. The 256 file locks serialize attempts
  * on the same file.
  */
@@ -122,8 +122,6 @@ public class SceneVersionService implements InitializingBean {
     }
     public Map<String,Object> detail(UUID versionId) {
         var row=new LinkedHashMap<>(summary(versionId));
-        try { row.put("descriptor",json.readTree(db.queryForObject("select descriptor::text from ar_scene_version where id=?",String.class,versionId))); }
-        catch(JsonProcessingException e) { throw new IllegalStateException(e); }
         row.put("files",fileViews(versionId));
         return row;
     }
@@ -172,8 +170,6 @@ public class SceneVersionService implements InitializingBean {
             if(name.indexOf('%')>=0 || name.indexOf(';')>=0)
                 throw error(HttpStatus.BAD_REQUEST,"files 文件名不能包含 % 或 ;，客户端下载地址无法承载："+path);
         }
-        String descriptorText=writeJson(input.descriptor());
-        ResourceDescriptorValidator.validate(SceneResourceDescriptor.parse(descriptorText),paths);
         var specs=new ArrayList<FileSpec>(files.size());
         for(int i=0;i<files.size();i++) specs.add(new FileSpec(paths.get(i),files.get(i).bytes(),files.get(i).sha256()));
         final long totalBytes=total;
@@ -184,15 +180,15 @@ public class SceneVersionService implements InitializingBean {
             var existing=db.queryForList("select id from ar_scene_version where scene_id=? and request_key=?",sceneId,input.requestKey());
             if(!existing.isEmpty()) {
                 UUID id=(UUID)existing.get(0).get("id");
-                if(!sameRequest(id,input.description(),descriptorText,specs))
+                if(!sameRequest(id,input.description(),specs))
                     throw error(HttpStatus.CONFLICT,"同一请求标识已用于不同内容，请刷新核对");
                 return new Created(detail(id),false);
             }
             UUID id=UUID.randomUUID();
             long actor=SecurityUtils.getUserId(); String name=SecurityUtils.getUsername();
             int versionNo=db.queryForObject("select coalesce(max(version_no),0)+1 from ar_scene_version where scene_id=?",Integer.class,sceneId);
-            db.update("insert into ar_scene_version(id,scene_id,version_no,request_key,description,descriptor,creator_id,creator_name) values(?,?,?,?,?,?::jsonb,?,?)",
-                id,sceneId,versionNo,input.requestKey(),input.description(),descriptorText,actor,name);
+            db.update("insert into ar_scene_version(id,scene_id,version_no,request_key,description,creator_id,creator_name) values(?,?,?,?,?,?,?)",
+                id,sceneId,versionNo,input.requestKey(),input.description(),actor,name);
             var rows=new ArrayList<Object[]>(specs.size());
             for(var spec:specs) {
                 UUID fileId=UUID.randomUUID();
@@ -203,13 +199,9 @@ public class SceneVersionService implements InitializingBean {
             return new Created(detail(id),true);
         });
     }
-    private String writeJson(Object value) {
-        try { return json.writeValueAsString(value); }
-        catch(JsonProcessingException e) { throw new IllegalStateException(e); }
-    }
-    /** Same description, same descriptor (jsonb equality) and same path/size/digest set. */
-    private boolean sameRequest(UUID id,String description,String descriptorText,List<FileSpec> specs) {
-        if(!Boolean.TRUE.equals(db.queryForObject("select description=? and descriptor=?::jsonb from ar_scene_version where id=?",Boolean.class,description,descriptorText,id)))
+    /** Same description and same path/size/digest set. */
+    private boolean sameRequest(UUID id,String description,List<FileSpec> specs) {
+        if(!Boolean.TRUE.equals(db.queryForObject("select description=? from ar_scene_version where id=?",Boolean.class,description,id)))
             return false;
         Set<String> stored=new HashSet<>();
         for(var row:db.queryForList("select relative_path,expected_bytes,expected_sha256 from ar_version_file where version_id=?",id))
@@ -313,9 +305,6 @@ public class SceneVersionService implements InitializingBean {
                 if(((Number)sceneRow.get("lockVersion")).longValue()!=expectedSceneVersion)
                     throw error(HttpStatus.CONFLICT,"场景已修改，请刷新后重试");
                 requireComplete(versionId);
-                var paths=new ArrayList<String>();
-                for(var row:db.queryForList("select relative_path from ar_version_file where version_id=?",versionId)) paths.add((String)row.get("relative_path"));
-                ResourceDescriptorValidator.validate(SceneResourceDescriptor.parse(db.queryForObject("select descriptor::text from ar_scene_version where id=?",String.class,versionId)),paths);
                 UUID from=(UUID)sceneRow.get("publishedVersionId");
                 if(db.update("update ar_scene set published_version_id=?,published_at=now(),published_by_id=?,published_by_name=?,lock_version=lock_version+1,updated_at=now() where id=? and deleted_at is null and lock_version=?",
                         versionId,SecurityUtils.getUserId(),SecurityUtils.getUsername(),sceneId,expectedSceneVersion)!=1)
@@ -427,23 +416,22 @@ public class SceneVersionService implements InitializingBean {
         clientVersion(sceneId,versionId);
         lockRead(versionId);
         try {
-            String descriptorText=clientVersion(sceneId,versionId);
+            clientVersion(sceneId,versionId);
             var file=file(versionId,fileId);
             String path=(String)file.get("relativePath");
             if(!RelativePath.fileName(path).equals(fileName)) throw error(HttpStatus.NOT_FOUND,"场景、版本或文件不存在");
             requireNotDeleting(versionId);
             if(!"AVAILABLE".equals(file.get("status"))) throw error(HttpStatus.CONFLICT,"文件尚未就绪");
-            String contentType=new ClientSceneService.ContentTypes(SceneResourceDescriptor.parse(descriptorText)).of(path);
+            String contentType=ClientSceneService.contentType(path);
             stream(file,contentType,null,request,response);
         } finally { versionLock(versionId).readLock().unlock(); }
     }
-    /** The version's descriptor text if the scene is visible and still points at it; 404 if unknown, 409 if superseded. */
-    private String clientVersion(UUID sceneId,UUID versionId) {
-        var rows=db.queryForList("select s.published_version_id, v.descriptor::text as descriptor from ar_scene s join ar_scene_version v on v.scene_id=s.id"
+    /** 404 if the scene is not visible or does not know the version, 409 if the version is no longer published. */
+    private void clientVersion(UUID sceneId,UUID versionId) {
+        var rows=db.queryForList("select s.published_version_id from ar_scene s join ar_scene_version v on v.scene_id=s.id"
             +" where s.id=? and v.id=? and s.enabled and s.deleted_at is null and s.published_version_id is not null",sceneId,versionId);
         if(rows.isEmpty()) throw error(HttpStatus.NOT_FOUND,"场景、版本或文件不存在");
-        if(!versionId.equals(rows.get(0).get("published_version_id"))) throw error(HttpStatus.CONFLICT,"该版本已不是当前发布版本，请重新获取场景描述");
-        return (String)rows.get(0).get("descriptor");
+        if(!versionId.equals(rows.get(0).get("published_version_id"))) throw error(HttpStatus.CONFLICT,"该版本已不是当前发布版本，请重新获取场景详情");
     }
     /** Length check only, then the stored digest as strong ETag; caller holds the version read lock. */
     private void stream(Map<String,Object> file,String contentType,String attachmentName,HttpServletRequest request,HttpServletResponse response) throws IOException {

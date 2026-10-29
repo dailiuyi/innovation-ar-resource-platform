@@ -91,7 +91,7 @@ const steps = [
   },
   {
     title: '导入资源目录',
-    description: '选根目录带 resource.json 的文件夹，确认档位和文件数后开始。',
+    description: '选择资源文件夹，目录下全部文件都会上传，确认文件数和大小后开始。',
     path: '该行的“版本与文件” → 导入资源目录',
     icon: `<g ${stroke}><path d="M6 14a3 3 0 0 1 3-3h10l4 5h16a3 3 0 0 1 3 3v17a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/><path d="M24 33V22m0 0-5 5m5-5 5 5"/></g>`
   },

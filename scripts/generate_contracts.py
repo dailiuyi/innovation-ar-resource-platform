@@ -1,7 +1,6 @@
-"""Authoring source for the 4DGS Scene Resource API (administrator and anonymous client sides) and resource.json v1."""
+"""Authoring source for the 4DGS Scene Resource API (administrator and anonymous client sides)."""
 from pathlib import Path
 import copy
-import json
 import re
 import yaml
 
@@ -21,56 +20,6 @@ uuid = string(format='uuid')
 sha = string(pattern='^[0-9a-f]{64}$')
 timestamp = string(format='date-time')
 int64 = integer(format='int64', minimum=0)
-
-
-def resource_descriptor_schema():
-    relative_path = string(minLength=1, maxLength=1024)
-    vector3 = array({'type': 'number'}, minItems=3, maxItems=3)
-    segment = obj({'path': relative_path, 'startSeconds': {'type': 'number', 'minimum': 0},
-                   'durationSeconds': {'type': 'number', 'exclusiveMinimum': 0}})
-    variant = obj({'id': string(pattern='^[a-z][a-z0-9_-]{0,63}$'), 'name': string(minLength=1),
-                   'format': enum('4dv-compressed-ply'), 'segments': array(segment, minItems=1)})
-    return {'$schema': 'https://json-schema.org/draft/2020-12/schema',
-            '$id': 'https://schemas.example.invalid/innovation-ar-resource-platform/resource-descriptor-v1.json',
-            'title': 'resource.json v1', **obj({
-                'formatVersion': integer(enum=[1]), 'defaultVariant': string(pattern='^[a-z][a-z0-9_-]{0,63}$'),
-                'transform': obj({'position': vector3, 'rotation': vector3, 'scale': vector3}),
-                'settings': relative_path, 'poster': relative_path, 'audio': relative_path,
-                'audioPosition': vector3, 'preview': relative_path, 'variants': array(variant, minItems=1)},
-                ['formatVersion', 'defaultVariant', 'transform', 'settings', 'variants'])}
-
-
-def resource_descriptor_example():
-    media = 'media_and_settings/'
-    def variant(id, name):
-        return {'id': id, 'name': name, 'format': '4dv-compressed-ply', 'segments': [
-            {'path': id + '/00.c.ply', 'startSeconds': 0, 'durationSeconds': 5},
-            {'path': id + '/01.c.ply', 'startSeconds': 5, 'durationSeconds': 3}]}
-    return {'formatVersion': 1, 'defaultVariant': 'standard_quality',
-            'transform': {'position': [0, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]},
-            'settings': media + 'wedding_settings.json', 'poster': media + 'wedding_1205.jpg',
-            'audio': media + 'wedding.wav', 'preview': media + 'wedding.webm',
-            'variants': [variant('standard_quality', '标准画质'), variant('high_quality', '高清画质'),
-                         variant('vr_foreground', 'VR 前景')]}
-
-
-def openapi_schema(value):
-    """OpenAPI 3.0.3 subset of a Draft 2020-12 schema: no $schema/$id, boolean-free exclusive minimum."""
-    if isinstance(value, list):
-        return [openapi_schema(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    result = {}
-    for key, item in value.items():
-        if key in ('$schema', '$id'):
-            continue
-        if key == 'exclusiveMinimum':
-            assert item == 0, 'only a zero exclusive minimum has an OpenAPI 3.0 form here'
-            result['minimum'] = 0
-            result['not'] = {'enum': [0]}
-        else:
-            result[key] = openapi_schema(item)
-    return result
 
 
 version_status = enum('PENDING', 'UPLOADING', 'AVAILABLE', 'FAILED')
@@ -99,15 +48,11 @@ schemas['SceneView'] = obj(dict(schemas['SceneCreate']['properties'], id=uuid, e
                            ['id', 'name', 'enabled', 'lockVersion', 'createdAt', 'updatedAt'])
 schemas['SceneList'] = obj({'items': array(ref('SceneView')), 'total': integer(minimum=0)})
 
-schemas['ResourceDescriptor'] = openapi_schema({k: v for k, v in resource_descriptor_schema().items()})
-schemas['ResourceDescriptor']['description'] = ('resource.json v1，与 contracts/schemas/resource-descriptor.schema.json 同源；'
-                                                '路径相对上传目录根，引用路径并集必须与 files 完全相等。')
 schemas['VersionConfig'] = obj({'maxBytes': integer(format='int64', minimum=1),
                                 'versionMaxFiles': integer(minimum=1), 'versionMaxBytes': integer(format='int64', minimum=1)})
 schemas['VersionFileRegistration'] = obj({'relativePath': string(minLength=1, maxLength=1024),
                                           'bytes': integer(format='int64', minimum=1), 'sha256': sha})
 schemas['VersionCreate'] = obj({'requestKey': uuid, 'description': string(maxLength=2000),
-                                'descriptor': ref('ResourceDescriptor'),
                                 'files': array(ref('VersionFileRegistration'), minItems=1, maxItems=1000)})
 schemas['VersionEdit'] = obj({'description': string(maxLength=2000), 'expectedVersion': integer(minimum=0)})
 schemas['VersionPublish'] = obj({'expectedSceneVersion': integer(minimum=0)})
@@ -126,23 +71,16 @@ schemas['VersionList'] = obj({'items': array(ref('VersionSummary')), 'total': in
 schemas['VersionFile'] = obj({
     'fileId': uuid, 'relativePath': string(minLength=1, maxLength=1024), 'bytes': integer(format='int64', minimum=1),
     'sha256': sha, 'status': version_status, 'failureReason': string(nullable=True), 'attempts': integer(minimum=0)})
-schemas['VersionDetail'] = obj(dict(version_summary, descriptor=ref('ResourceDescriptor'),
-                                    files=array(ref('VersionFile'))))
+schemas['VersionDetail'] = obj(dict(version_summary, files=array(ref('VersionFile'))))
 
-schemas['ClientVariant'] = obj({'id': string(pattern='^[a-z][a-z0-9_-]{0,63}$'), 'name': string(minLength=1),
-                                'segmentCount': integer(minimum=1), 'durationSeconds': {'type': 'number', 'minimum': 0}})
-schemas['ClientSceneItem'] = obj({'id': uuid, 'name': string(minLength=1), 'versionId': uuid, 'versionNo': integer(minimum=1),
-                                  'defaultVariant': string(), 'variants': array(ref('ClientVariant'), minItems=1),
-                                  'posterUrl': string()},
-                                 ['id', 'name', 'versionId', 'versionNo', 'defaultVariant', 'variants'])
+schemas['ClientSceneItem'] = obj({'id': uuid, 'name': string(minLength=1), 'versionId': uuid, 'versionNo': integer(minimum=1)})
 schemas['ClientSceneList'] = obj({'items': array(ref('ClientSceneItem')), 'total': integer(minimum=0)})
 schemas['ClientFile'] = obj({'fileId': uuid, 'relativePath': string(minLength=1, maxLength=1024),
                              'bytes': integer(format='int64', minimum=1), 'sha256': sha, 'contentType': string(),
                              'downloadPath': string()})
 schemas['ClientSceneDetail'] = obj({'sceneId': uuid, 'name': string(minLength=1), 'versionId': uuid,
-                                    'versionNo': integer(minimum=1), 'descriptor': ref('ResourceDescriptor'),
-                                    'files': array(ref('ClientFile'), minItems=1), 'fileCount': integer(minimum=1),
-                                    'totalBytes': int64})
+                                    'versionNo': integer(minimum=1), 'files': array(ref('ClientFile'), minItems=1),
+                                    'fileCount': integer(minimum=1), 'totalBytes': int64})
 
 paths = {}
 
@@ -191,17 +129,18 @@ add('/api/v1/scenes/{sceneId}/versions', 'get', 'listSceneVersions', '分页列�
                 '每项 uploadStatus 由文件状态读时推导：DELETING/DELETE_FAILED/UPLOADING/FAILED/READY/PENDING。')
 create_version = add('/api/v1/scenes/{sceneId}/versions', 'post', 'createSceneVersion', '导入资源目录，创建成品版本',
     'VersionCreate', 'VersionDetail', '201',
-    description=admin_only + '一次登记 resource.json 与全部文件清单；描述引用路径集合必须与 files 完全相等，创建后描述与清单不可变。'
-                '同 requestKey 且 description、descriptor、文件清单完全相同返回 200 与原版本，不同返回 409，'
-                '已整版删除的版本迟到重试返回 410。大小或数量超配置返回 413，描述错误返回 400 并指出字段或路径。')
+    description=admin_only + '一次登记所选目录下的全部文件（相对路径、大小、SHA256），创建后清单不可变，只有说明可编辑。'
+                '平台不解析档位、分段或时间，这些由客户端按相对路径约定处理。'
+                '同 requestKey 且 description、文件清单完全相同返回 200 与原版本，不同返回 409，'
+                '已整版删除的版本迟到重试返回 410。大小或数量超配置返回 413，路径不合法返回 400 并指出路径。')
 create_version['responses']['200'] = {'description': '完全相同的重试，返回原版本',
                                       'content': {'application/json': {'schema': ref('VersionDetail')}}}
 create_version['responses']['410'] = {'description': '同请求键的版本已整版删除，不复活',
                                       'content': {'application/json': {'schema': ref('Error')}}}
-add('/api/v1/scene-versions/{versionId}', 'get', 'getSceneVersion', '查看版本、描述和完整文件清单', response='VersionDetail',
+add('/api/v1/scene-versions/{versionId}', 'get', 'getSceneVersion', '查看版本和完整文件清单', response='VersionDetail',
     description=admin_only + '文件不分页，1000 个文件以内一次返回；不读取文件内容、不计算摘要。')
 add('/api/v1/scene-versions/{versionId}', 'put', 'editSceneVersion', '编辑版本说明', 'VersionEdit', 'VersionDetail',
-    description=admin_only + '只编辑说明；描述与文件清单创建后固定。expectedVersion 为版本 lockVersion，冲突 409。')
+    description=admin_only + '只编辑说明；文件清单创建后固定。expectedVersion 为版本 lockVersion，冲突 409。')
 add('/api/v1/scene-versions/{versionId}', 'delete', 'deleteSceneVersion', '整版物理删除', status='204',
     description=admin_only + '当前发布版本 409，文件处理中 409。先持久化删除意图，再逐文件删除存储内容；'
                 '存储失败 503 并保留版本，可再次 DELETE 重试；成功后重复 DELETE 为 204。不存在且无回执 404。')
@@ -235,10 +174,10 @@ paths['/api/v1/scene-versions/{versionId}/files/{fileId}/content']['head'] = hea
 client_note = '匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则 404。'
 add('/api/v1/client/scenes', 'get', 'listClientScenes', '匿名列出已发布场景', response='ClientSceneList', public=True,
     query=paging + [query('name', string(maxLength=200), False)], tag='客户端',
-    description=client_note + '每项含默认档位、各档位段数与总时长和封面地址；只读数据库与描述，不打开任何模型文件。空目录返回 200 与空数组。')
-add('/api/v1/client/scenes/{sceneId}', 'get', 'getClientScene', '匿名读取已发布场景的描述与完整文件清单', response='ClientSceneDetail',
+    description=client_note + '每项只含场景与当前发布版本标识；只读数据库，不打开任何文件。空目录返回 200 与空数组。')
+add('/api/v1/client/scenes/{sceneId}', 'get', 'getClientScene', '匿名读取已发布场景的完整文件清单', response='ClientSceneDetail',
     public=True, tag='客户端',
-    description=client_note + 'descriptor 是已验证的单场景描述；files 是该版本去重后的完整文件集合，客户端按选定档位与公共 settings/poster/audio/preview 自行过滤。'
+    description=client_note + 'files 是该版本的完整文件集合，按 relativePath 排序；档位、分段与公共文件的选择由客户端按相对路径自行决定。'
                 '不返回 storageKey 或磁盘路径。不读取文件内容。')
 client_content = '/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}'
 client_download = add(client_content, 'get', 'downloadClientFile', '匿名读取已发布版本的单个文件', public=True, tag='客户端',
@@ -247,7 +186,7 @@ client_download = add(client_content, 'get', 'downloadClientFile', '匿名读取
     description=client_note + 'fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符 404。'
                 '版本须仍是当前发布版本，否则 409（已开始的字节流可完成，下一请求 409）；文件记录存在但存储缺失或长度不符 409。'
                 '下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带 attachment 文件名，Cache-Control 为 no-store, no-transform。'
-                'Content-Type 按声明角色和扩展名：模型 application/octet-stream，settings application/json，jpg/png/webp、wav、webm 对应 MIME，未知为 application/octet-stream。')
+                'Content-Type 只按扩展名：json 为 application/json，jpg/png/webp、wav、webm 对应 MIME，模型与未知类型为 application/octet-stream。')
 client_head = copy.deepcopy(client_download)
 client_head.update(operationId='headClientFile', summary='匿名查询单个文件下载头')
 client_binary = {mime: {'schema': {'type': 'string', 'format': 'binary'}}
@@ -284,15 +223,12 @@ for path, method, operation, summary, request in [
     if method == 'get' and path.endswith('/list'):
         op['parameters'] += [query('pageNum', integer(minimum=1, default=1), False), query('pageSize', integer(minimum=1, default=20), False)]
 
-spec = {'openapi': '3.0.3', 'info': {'title': '4DGS Scene Resource API', 'version': '0.4.0',
-         'description': '4DGS 场景成品：管理员侧的场景、带 resource.json 描述的内容版本、按文件上传与恢复、单一发布指针、整版删除，'
-                        '以及保留的若依登录与账号接口；匿名客户端只读目录、场景描述与带 Range 的文件流（/api/v1/client/，经同源网关直接访问，无需 /prod-api）。'},
+spec = {'openapi': '3.0.3', 'info': {'title': '4DGS Scene Resource API', 'version': '0.5.0',
+         'description': '4DGS 场景成品：管理员侧的场景、由目录文件清单构成的内容版本、按文件上传与恢复、单一发布指针、整版删除，'
+                        '以及保留的若依登录与账号接口；匿名客户端只读目录、文件清单与带 Range 的文件流（/api/v1/client/，经同源网关直接访问，无需 /prod-api）。'},
         'servers': [{'url': '/', 'description': '同源网关；管理接口经 /prod-api 前缀代理到后端'}], 'paths': paths,
         'components': {'securitySchemes': {'bearerAuth': {'type': 'http', 'scheme': 'bearer', 'bearerFormat': 'JWT'}}, 'schemas': schemas}}
 
 if __name__ == '__main__':
     (ROOT/'contracts/openapi.yaml').write_text(yaml.safe_dump(spec, allow_unicode=True, sort_keys=False), encoding='utf-8')
-    for path, value in [('schemas/resource-descriptor.schema.json', resource_descriptor_schema()),
-                        ('examples/resource-descriptor.json', resource_descriptor_example())]:
-        (ROOT/'contracts'/path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
     print('Generated', sum(len(v) for v in paths.values()), 'operations')

@@ -16,7 +16,7 @@
 
 innovation-ar-resource-platform 是面向 4DGS 场景成品的资源管理与分发平台。
 
-团队在线下制作 4DGS 内容，管理员通过后台导入带 `resource.json` 描述的成品目录、逐文件上传校验并发布；客户端匿名读取当前发布版本，在本地下载、校验并渲染。真实样包与桌面 Chrome 参考播放器已在隔离实例验收，手机、Unity 原生加载及音频同步未验证，见 [真实样包验收记录](docs/20-4dgs-sample-validation.md)。
+团队在线下制作 4DGS 内容，管理员通过后台导入成品目录（目录下全部文件）、逐文件上传校验并发布；客户端匿名读取当前发布版本的文件清单，自行决定下载哪些文件，在本地校验并渲染。档位、分段、时间与变换等逻辑由 Unity 客户端定义，平台自 2026-10-29 起不再保存 `resource.json` 描述。桌面 Chrome 参考播放器适配与 `verify_4dgs.py` 仍依赖已删除的描述，当前不可用；此前的验收仅为历史记录，见 [真实样包验收记录](docs/20-4dgs-sample-validation.md)。手机、Unity 原生加载及音频同步未验证。
 
 ---
 
@@ -32,7 +32,7 @@ innovation-ar-resource-platform 是面向 4DGS 场景成品的资源管理与分
 | **版本发布** | 同场景只有一个当前发布版本；创建后描述与文件清单不可变，说明可编辑；替换发布后旧版本的客户端请求返回 409 |
 | **后台权限** | 团队每人分配独立运维账号，具备平权管理员权限，全生命周期操作精准审计记录到人 |
 
-> **边界说明**：当前阶段支持版本关联多个由 resource.json 声明的文件，逐文件上传与校验，服务端不解码模型。原云存储、昼夜光影切换、AR 世界坐标系和场景地址方案已留存为候选历史材料，不作为当前交付基线。
+> **边界说明**：当前阶段一个版本即所选目录的固定文件清单（相对路径、大小、SHA-256）加可编辑说明，逐文件上传与校验，服务端不解码模型、不解释文件用途。原云存储、昼夜光影切换、AR 世界坐标系和场景地址方案已留存为候选历史材料，不作为当前交付基线。
 
 ---
 
@@ -40,7 +40,7 @@ innovation-ar-resource-platform 是面向 4DGS 场景成品的资源管理与分
 
 资源入库链路遵循严格的工程一致性规范（详见 [资源入库闭环 (docs/12-resource-ingestion.md)](docs/12-resource-ingestion.md)）：
 
-1. **导入资源目录**：在指定场景下读取根 `resource.json`，一次登记描述与全部文件清单，创建不可变内容版本；
+1. **导入资源目录**：在指定场景下选择目录，一次登记目录下全部文件清单，创建不可变内容版本；
 2. **逐文件上传与校验**：每个文件接收时一次完成大小与 SHA-256 校验，无覆盖提交后才标记可用，不引入分片协议；
 3. **按文件恢复**：上传中断后只重传失败或未完成的文件，已入库文件跳过；
 4. **启动对账机制**：服务启动时先完成未完成的整版删除，再只恢复有遗留数据的未完成文件，不全量重算已入库文件；
@@ -81,6 +81,6 @@ innovation-ar-resource-platform 是面向 4DGS 场景成品的资源管理与分
 - [仓库全局知识导航 (docs/index.md)](docs/index.md)
 - [基础 Harness 与自动化验证 (docs/13-harness.md)](docs/13-harness.md)
 - [数据库初始化指南 (database/README.md)](database/README.md)
-- [OpenAPI 接口契约规范 (contracts/openapi.yaml)](contracts/openapi.yaml)（4DGS Scene Resource API，契约版本 `0.4.0`）
-- [resource.json v1 Schema](contracts/schemas/resource-descriptor.schema.json) 与 [示例文件](contracts/examples/resource-descriptor.json)；[历史运行时清单 Schema](contracts/schemas/runtime-manifest.schema.json)（候选资料，不再生成）
+- [OpenAPI 接口契约规范 (contracts/openapi.yaml)](contracts/openapi.yaml)（4DGS Scene Resource API，契约版本 `0.5.0`）
+- [历史运行时清单 Schema](contracts/schemas/runtime-manifest.schema.json)（候选资料，不再生成）
 - [仓库开发规范与约束 (AGENTS.md)](AGENTS.md)

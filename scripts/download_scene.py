@@ -1,16 +1,16 @@
-"""Reference client: download ONE variant of the current published version of a scene, resumably.
+"""Reference client: download every file of the current published version of a scene, resumably.
 
 Reference tooling for integration, not an Android/iOS SDK. Anonymous (no Authorization header).
 
-Layout, all under <output>/<sceneId>/<versionId>/<variantId>/ :
+Layout, all under <output>/<sceneId>/<versionId>/ :
   .download-state.json  identity, fixed file list and the set of files verified complete
   .transfer/            part files, validators and locks (never inside payload/)
-  payload/              declared files at their relative paths (the root the descriptor's paths refer to)
-  ready.json            written last, atomically, only when every needed file is verified
+  payload/              every file of the version at its relative path
+  ready.json            written last, atomically, only when every file is verified
 
 Rerun the same command after any interruption. A 409 means the published version changed: the tool stops,
-keeps the old directory untouched, and a new run fetches the new description into its own version directory.
-Exit codes: 0 done, 1 error/interrupted, 2 variant not found, 3 version changed (409).
+keeps the old directory untouched, and a new run fetches the new file list into its own version directory.
+Exit codes: 0 done, 1 error/interrupted, 2 invalid arguments, 3 version changed (409).
 """
 import argparse
 from datetime import datetime, timezone
@@ -18,7 +18,6 @@ from http.client import HTTPException
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import sys
 from urllib.error import HTTPError
@@ -29,7 +28,6 @@ from artifact_transfer import DownloadBusy, download, os_lock, validate_relative
 
 STATE = ".download-state.json"
 READY = "ready.json"
-VARIANT_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class SceneError(Exception):
@@ -55,26 +53,11 @@ def fetch_json(url, timeout):
         raise SceneError(f"{url}: {http_error_text(error)}") from error
 
 
-def plan_files(detail, variant_id):
-    """The selected variant's segments plus the declared common files, each exactly once, in a stable order."""
-    descriptor = detail["descriptor"]
-    variant = next((v for v in descriptor["variants"] if v["id"] == variant_id), None)
-    if variant is None:
-        available = ", ".join(v["id"] for v in descriptor["variants"])
-        raise SceneError(f"variant {variant_id!r} does not exist in this scene; available: {available}", 2)
-    wanted = [segment["path"] for segment in variant["segments"]]
-    wanted += [descriptor[key] for key in ("settings", "poster", "audio", "preview") if descriptor.get(key)]
-    known = {item["relativePath"]: item for item in detail["files"]}
-    manifest, seen = [], set()
-    for path in wanted:
-        if path in seen:
-            continue
-        seen.add(path)
-        item = known.get(path)
-        if item is None:
-            raise SceneError(f"the description references {path!r} but the file list does not contain it")
-        manifest.append({"fileId": item["fileId"], "relativePath": path, "bytes": item["bytes"],
-                         "sha256": item["sha256"], "downloadPath": item["downloadPath"]})
+def plan_files(detail):
+    """Every file of the published version, each exactly once, in a stable order."""
+    manifest = sorted(({"fileId": item["fileId"], "relativePath": item["relativePath"], "bytes": item["bytes"],
+                        "sha256": item["sha256"], "downloadPath": item["downloadPath"]} for item in detail["files"]),
+                      key=lambda item: item["relativePath"])
     validate_relative_paths([item["relativePath"] for item in manifest])
     for item in manifest:
         if not item["downloadPath"].startswith("/"):
@@ -107,9 +90,9 @@ def load_state(directory, identity, manifest):
     return completed
 
 
-def open_task(version_dir, variant_id, identity, manifest):
+def open_task(scene_dir, version_id, identity, manifest):
     """Create the task directory with its state in place before any payload or part file exists."""
-    directory = version_dir / variant_id
+    directory = scene_dir / version_id
     if directory.exists():
         completed = load_state(directory, identity, manifest)
         if completed is not None:
@@ -117,7 +100,7 @@ def open_task(version_dir, variant_id, identity, manifest):
         if any(directory.iterdir()):
             raise SceneError(f"{directory} is not empty and has no download state of this task")
         directory.rmdir()
-    staging = version_dir / (variant_id + ".tmp")
+    staging = scene_dir / (version_id + ".tmp")
     if staging.exists():
         completed = load_state(staging, identity, manifest)
         if completed is not None:
@@ -139,17 +122,17 @@ def complete_on_disk(payload, item):
     return target.is_file() and target.stat().st_size == item["bytes"]
 
 
-def run(base_url, scene_id, variant_id, output, timeout=30, log=print):
+def run(base_url, scene_id, output, timeout=30, log=print):
     base = base_url.rstrip("/")
     detail = fetch_json(f"{base}/api/v1/client/scenes/{scene_id}", timeout)
     version_id = str(uuid.UUID(detail["versionId"]))
-    manifest = plan_files(detail, variant_id)
-    identity = {"sceneId": scene_id, "versionId": version_id, "variantId": variant_id}
-    version_dir = Path(output).absolute() / scene_id / version_id
-    version_dir.mkdir(parents=True, exist_ok=True)
+    manifest = plan_files(detail)
+    identity = {"sceneId": scene_id, "versionId": version_id}
+    scene_dir = Path(output).absolute() / scene_id
+    scene_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with os_lock(version_dir / (variant_id + ".lock")):
-            directory, completed = open_task(version_dir, variant_id, identity, manifest)
+        with os_lock(scene_dir / (version_id + ".lock")):
+            directory, completed = open_task(scene_dir, version_id, identity, manifest)
             payload, control = directory / "payload", directory / ".transfer"
             if (directory / READY).exists():
                 if all(item["fileId"] in completed and complete_on_disk(payload, item) for item in manifest):
@@ -180,11 +163,11 @@ def run(base_url, scene_id, variant_id, output, timeout=30, log=print):
             log(f"ready: {payload}")
             return payload
     except DownloadBusy as error:
-        raise SceneError(f"another download of this variant is running ({error})") from error
+        raise SceneError(f"another download of this version is running ({error})") from error
     except HTTPError as error:
         if error.code == 409:
             raise SceneError(f"the published version changed ({http_error_text(error)}); nothing was mixed. "
-                             "Rerun to fetch the new description into its own directory", 3) from error
+                             "Rerun to fetch the new file list into its own directory", 3) from error
         raise SceneError(http_error_text(error)) from error
 
 
@@ -192,15 +175,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--scene-id", required=True)
-    parser.add_argument("--variant", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=30)
     args = parser.parse_args(argv)
     try:
         scene_id = str(uuid.UUID(args.scene_id))
-        if not VARIANT_ID.fullmatch(args.variant):
-            raise SceneError("--variant is not a valid variant id", 2)
-        run(args.base_url, scene_id, args.variant, args.output, args.timeout)
+        run(args.base_url, scene_id, args.output, args.timeout)
     except SceneError as error:
         print(f"error: {error}", file=sys.stderr)
         return error.code

@@ -1,6 +1,5 @@
 package com.ruoyi.ar;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -27,7 +26,7 @@ public class SceneVersionController {
     public record FileInput(@NotBlank @Size(max=1024) String relativePath, @NotNull @Min(1) Long bytes,
         @NotNull @Pattern(regexp="[0-9a-f]{64}") String sha256) { }
     public record CreateInput(@NotNull UUID requestKey, @NotNull @Size(max=2000) String description,
-        @NotNull JsonNode descriptor, @NotEmpty List<@Valid FileInput> files) { }
+        @NotEmpty List<@Valid FileInput> files) { }
     public record EditInput(@NotNull @Size(max=2000) String description, @NotNull @Min(0) Long expectedVersion) { }
     public record PublishInput(@NotNull @Min(0) Long expectedSceneVersion) { }
 

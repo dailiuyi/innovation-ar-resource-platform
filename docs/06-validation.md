@@ -420,3 +420,29 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 本轮仅提交公网分发建议、4DGS 样本任务记录与知识索引，保留原有 `README.md.bak`，没有业务源码变更。
 - `git diff --check` 及两份新增文档的 `git diff --no-index --check /dev/null <文件>` 均无空白错误。
 - `python3 scripts/harness.py doctor --profile quick` 与 `python3 scripts/harness.py check --profile quick` 均返回 blocked（退出码 2）：缺少 contract validators；报告分别为 `.local/harness/20261027T080034Z-9t5d_ybf/report.json`、`.local/harness/20261027T080044Z-8qz0vq69/report.json`。本机无 `python` 命令，使用 `python3`。未执行业务、浏览器或数据库验收。
+
+## 2026-10-29 去掉 resource.json 描述（分支 remove-resource-descriptor）
+
+- 决定与改动见 [任务记录](tasks/active/2026-10-29-4dgs-resource-refactor.md) 同名一节。契约 `4DGS Scene Resource API 0.5.0`，迁移到 V017。
+- Java（宿主只有 JDK 17，在 `innovation-ar-resource-platform-java-check:4dgs` 容器里运行 `scripts/check_java.py`）：`--module ruoyi-ar` 44 项通过（`.local/java-check/78634121301f`）；`--module ruoyi-admin --package` 50 项通过，0 失败、0 错误、0 跳过，Jar sha256 `18acb159fdfead4806020af7e1c354d15b5ea687ae26b89b12c5112b462cdf4a`（`.local/java-check/12f83b4ffa6f`）。宿主 `--offline` 因本地缓存缺 surefire 插件而 blocked，不算通过证据。
+- 空库：临时 `postgres:17.6-bookworm` 容器按顺序执行 V001–V017 全部成功，`ar_scene_version` 已无 `descriptor` 列，容器随后删除。
+- 升级：先把隔离实例 `innovation-ar-resource-platform-infra-check` 的数据库备份到 `.local/backups/infra-check-before-v017-20261029.dump`（0600）。再用上面的 Jar 和 `frontend_control.py build` 产出的 dist 执行 `prepare_4dgs_check.py prepare`。Flyway 从 15 依次执行 016、017，全部成功；52 个版本、314 个文件、42 个发布指针都还在。
+- 隔离实例 `127.0.0.1:18082` 上的实测：
+  - 匿名目录 38 项，每项只有 `id,name,versionId,versionNo`。
+  - 详情只有平铺的 `files`；`.ply` 返回 octet-stream，`.json` 返回 application/json；单段 Range 返回 206。
+  - `download_scene.py` 把一个旧发布版本完整下载完，4 个文件的 SHA-256 全部一致，并写出 `ready.json`。
+  - `verify_ingestion.py` 外部模式（系统 Chrome）74 项通过，覆盖新的路径拒绝规则、整个目录导入、发布、整版删除和 21 MiB 上传。报告 `.local/4dgs-task/v017-ingestion/validation-ingestion.json`。
+  - Playwright 和 psycopg 装在 `.local/ingestion-venv`。
+- 合成接口的页面检查 `verify_scene_list_ui.py` 74 项通过（`.local/4dgs-task/v017-scene-ui`）。
+  - 第一次运行时，“错误提示已出现”后立刻统计“继续上传”按钮，结果失败；单独复跑并截图时按钮是存在的。
+  - 已把检查改为等两者都出现后再判定，之后连续两次通过。这是时序竞争，断言本身没有放宽。
+- 其余检查：
+  - `node --test scripts/test_scene_package.mjs` 10 项通过。
+  - `scripts/test_download_scene`、`test_import_scene_package`、`test_prepare_reference_viewer` 共 26 项通过。
+  - `harness.py check --profile quick` 通过（`.local/harness/20261029T093558Z-72cvojcc`）。
+  - `agent_check.py --profile frontend` 通过（`.local/harness/20261029T093610Z-tf7ti1_b`，sourceUnchanged=true）。
+- 限制：
+  - 隔离实例上的 dist 构建于发布卡片两处措辞修改（去掉“描述”二字）之前。
+  - 日常实例 18081 没有升级，V017 也没有在日常库执行。
+  - 参考播放器和 `verify_4dgs.py` 按用户决定保留，未适配，对 0.5.0 不可用。
+  - Unity 和手机端没有验证。

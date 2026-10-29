@@ -1,4 +1,4 @@
-"""Behaviour tests for scripts/prepare_reference_viewer.py and scripts/prepare_4dgs_samples.py.
+"""Behaviour tests for scripts/prepare_reference_viewer.py.
 
 The viewer source here is a minimal FIXTURE with the file layout the tool checks; it is not the 4DV player and proves
 nothing about playback. The real reference source is verified only by running the tool on it.
@@ -11,7 +11,6 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prepare_4dgs_check
-import prepare_4dgs_samples
 import prepare_reference_viewer as tool
 
 BUILD = 'viewer/20261016/230726'
@@ -108,67 +107,6 @@ class ReferenceViewerTest(unittest.TestCase):
     def test_origin_must_be_bare(self):
         with self.assertRaises(tool.Blocked):
             tool.validate_origin('http://127.0.0.1:18082/path')
-
-
-class SamplesTest(unittest.TestCase):
-    def make_samples(self, root):
-        def touch(path, size=3):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'x' * size)
-        wedding = root / 'wedding'
-        for variant in ('standard_quality', 'high_quality', 'vr_foreground'):
-            for name in ('00.c.ply', '01.c.ply'):
-                touch(wedding / variant / name)
-        for name in ('wedding_1205.jpg', 'wedding_settings.json', 'wedding.webm', 'wedding.wav'):
-            touch(wedding / 'media_and_settings' / name)
-        dance = root / 'dance_color'
-        for index in range(15):
-            start = 300 * index
-            touch(dance / 'standard_quality' / f'new_dance_color_seg{start}-{start + 306}_mvc_sh0.4dv')
-            touch(dance / 'high_quality' / f'new_dance_color_seg{start}-{start + 306}_mvc.4dv')
-            touch(dance / 'vr_foreground' / f'{index:02d}.c.ply')
-        for name in ('0512_dance_color.webm', 'dance_color_2_settings.json', '0512_dance_color.png', 'dance_color_audio_new.wav'):
-            touch(dance / 'media_and_settings' / name)
-        shiku = root / 'shiku_dtwd'
-        touch(shiku / 'standard_quality/dtwd_seg_0_l.4dv')
-        touch(shiku / 'high_quality/dtwd_seg_0_h.4dv')
-        for name in ('shiku_dtwd.png', 'shiku_dtwd.webm', 'dtwd_settings_1.json'):
-            touch(shiku / 'media_and_settings' / name)
-        touch(root / 'wedding/unreferenced-report.md')
-
-    def test_descriptors(self):
-        with tempfile.TemporaryDirectory() as temp:
-            source, output = Path(temp) / 'samples', Path(temp) / 'out'
-            self.make_samples(source)
-            self.assertEqual(prepare_4dgs_samples.main(['--source', str(source), '--output', str(output)]), 0)
-            wedding = json.loads((output / 'wedding/resource.json').read_text())
-            self.assertEqual([v['id'] for v in wedding['variants']], ['standard_quality', 'high_quality', 'vr_foreground'])
-            self.assertEqual([(s['startSeconds'], s['durationSeconds']) for s in wedding['variants'][0]['segments']], [(0, 5), (5, 3)])
-            self.assertEqual(wedding['audio'], 'media_and_settings/wedding.wav')
-            dance = json.loads((output / 'dance_color/resource.json').read_text())
-            segments = dance['variants'][0]['segments']
-            self.assertEqual(len(segments), 15)
-            self.assertEqual([s['startSeconds'] for s in segments], [5 * i for i in range(15)])
-            self.assertEqual([s['durationSeconds'] for s in segments], [5] * 14 + [3])
-            self.assertTrue(segments[1]['path'].endswith('seg300-606_mvc_sh0.4dv'))
-            self.assertEqual(dance['audioPosition'], [0, 0, 0])
-            shiku = json.loads((output / 'shiku_dtwd/resource.json').read_text())
-            self.assertNotIn('audio', shiku)
-            self.assertNotIn('audioPosition', shiku)
-            self.assertEqual(shiku['transform']['scale'], [1.4, 1.4, 1.4])
-            self.assertEqual(len(shiku['variants']), 2)
-            summary = json.loads((output / 'samples-summary.json').read_text())
-            self.assertEqual(summary['wedding']['files'], 10)
-            self.assertFalse((source / 'resource.json').exists())
-
-    def test_missing_model_directory_blocks(self):
-        with tempfile.TemporaryDirectory() as temp:
-            source = Path(temp) / 'samples'
-            self.make_samples(source)
-            for path in (source / 'wedding/high_quality').iterdir():
-                path.unlink()
-            (source / 'wedding/high_quality').rmdir()
-            self.assertEqual(prepare_4dgs_samples.main(['--source', str(source), '--output', str(Path(temp) / 'out')]), 2)
 
 
 class OverlayConfigTest(unittest.TestCase):

@@ -36,29 +36,18 @@ def sha256(data):
 
 
 def synthetic_package(label, standard_segments=2):
-    """A small valid resource package: settings plus a two-variant model set sharing the settings file.
+    """A small valid version: a settings file plus model files in nested directories.
 
-    Returns ({relativePath: bytes}, descriptor). The model files are synthetic text and are not renderable."""
+    Returns {relativePath: bytes}. The model files are synthetic text and are not renderable."""
     files = {'settings.json': json.dumps({'synthetic': label}).encode() + b'\n'}
-    segments = []
     for index in range(standard_segments):
-        path = f'models/standard/{index:02d}.c.ply'
-        files[path] = f'synthetic standard segment {index} {label}\n'.encode() * (index + 3)
-        segments.append({'path': path, 'startSeconds': 5 * index, 'durationSeconds': 5})
+        files[f'models/standard/{index:02d}.c.ply'] = f'synthetic standard segment {index} {label}\n'.encode() * (index + 3)
     files['models/high/00.c.ply'] = f'synthetic high segment {label}\n'.encode() * 7
-    descriptor = {
-        'formatVersion': 1, 'defaultVariant': 'standard_quality',
-        'transform': {'position': [0, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]},
-        'settings': 'settings.json',
-        'variants': [
-            {'id': 'standard_quality', 'name': '标准画质', 'format': '4dv-compressed-ply', 'segments': segments},
-            {'id': 'high_quality', 'name': '高清画质', 'format': '4dv-compressed-ply',
-             'segments': [{'path': 'models/high/00.c.ply', 'startSeconds': 0, 'durationSeconds': 5}]}]}
-    return files, descriptor
+    return files
 
 
-def version_request(files, descriptor, description='', request_key=None):
-    return {'requestKey': request_key or str(uuid.uuid4()), 'description': description, 'descriptor': descriptor,
+def version_request(files, description='', request_key=None):
+    return {'requestKey': request_key or str(uuid.uuid4()), 'description': description,
             'files': [{'relativePath': path, 'bytes': len(data), 'sha256': sha256(data)} for path, data in sorted(files.items())]}
 
 
@@ -112,54 +101,47 @@ def scenario(s, check):
     scene_id = scene['id']
     versions_path = f'/api/v1/scenes/{scene_id}/versions'
     scene_lock = lambda: s.api('/api/v1/scenes/' + scene_id)[1]['lockVersion']
-    files1, descriptor1 = synthetic_package('v1')
-    status, missing = s.api(f'/api/v1/scenes/{uuid.uuid4()}/versions', 'POST', version_request(files1, descriptor1))
+    files1 = synthetic_package('v1')
+    status, missing = s.api(f'/api/v1/scenes/{uuid.uuid4()}/versions', 'POST', version_request(files1))
     check('version on missing scene rejected with the shared error format',
           status == 404 and missing.get('code') == 'AR_404' and bool(missing.get('traceId')))
     gone = s.api('/api/v1/scenes', 'POST', {'name': 'deleted-scene'})[1]
     check('deleted scene delete', s.api('/api/v1/scenes/%s?expectedVersion=0' % gone['id'], 'DELETE')[0] == 204)
     check('version on deleted scene rejected', s.api('/api/v1/scenes/%s/versions' % gone['id'], 'POST',
-                                                     version_request(files1, descriptor1))[0] == 404)
+                                                     version_request(files1))[0] == 404)
 
     def rejected(label, expected_status, mutate):
-        files, descriptor = copy.deepcopy(files1), copy.deepcopy(descriptor1)
-        body_override = mutate(files, descriptor)
-        body = version_request(files, descriptor)
+        files = copy.deepcopy(files1)
+        body_override = mutate(files)
+        body = version_request(files)
         body.update(body_override or {})
         status, error = s.api(versions_path, 'POST', body)
         check(f'{label} returns {expected_status}', status == expected_status and bool(error.get('message')))
 
-    def drop(files, descriptor): files.pop('models/high/00.c.ply')
-    def extra(files, descriptor): files['extra/unused.bin'] = b'not referenced'
-    def traversal(files, descriptor):
+    def traversal(files):
         files['../escape.bin'] = files.pop('models/high/00.c.ply')
-        descriptor['variants'][1]['segments'][0]['path'] = '../escape.bin'
-    def duplicate_variant(files, descriptor): descriptor['variants'][1]['id'] = 'standard_quality'
-    def unknown_default(files, descriptor): descriptor['defaultVariant'] = 'missing_variant'
-    def overlap(files, descriptor): descriptor['variants'][0]['segments'][1]['startSeconds'] = 2
-    def zero_duration(files, descriptor): descriptor['variants'][0]['segments'][0]['durationSeconds'] = 0
-    def unknown_field(files, descriptor): descriptor['address'] = 'forbidden'
-    def duplicate_file(files, descriptor):
-        entry = version_request(files, descriptor)['files'][0]
-        return {'files': version_request(files, descriptor)['files'] + [entry]}
-    for label, mutate in [('descriptor referencing a file absent from the list', drop), ('registered file the descriptor does not reference', extra),
-                          ('path traversal', traversal), ('duplicate variant id', duplicate_variant),
-                          ('unknown default variant', unknown_default), ('overlapping segment times', overlap),
-                          ('zero segment duration', zero_duration), ('unknown descriptor field', unknown_field),
-                          ('same path registered twice', duplicate_file)]:
+    def absolute(files):
+        files['/etc/escape.bin'] = files.pop('models/high/00.c.ply')
+    def duplicate_file(files):
+        entry = version_request(files)['files'][0]
+        return {'files': version_request(files)['files'] + [entry]}
+    def case_duplicate(files):
+        files['Settings.json'] = files['settings.json']
+    def no_files(files):
+        return {'files': []}
+    for label, mutate in [('path traversal', traversal), ('absolute path', absolute),
+                          ('same path registered twice', duplicate_file), ('case-insensitive duplicate path', case_duplicate),
+                          ('empty file list', no_files)]:
         rejected(label, 400, mutate)
 
-    def oversize(files, descriptor):
-        body = version_request(files, descriptor)
+    def oversize(files):
+        body = version_request(files)
         body['files'][0]['bytes'] = config['maxBytes'] + 1
         return {'files': body['files']}
     rejected('file larger than the single-file limit', 413, oversize)
 
-    def too_many(files, descriptor):
+    def too_many(files):
         count = config['versionMaxFiles']
-        descriptor['variants'] = [{'id': 'standard_quality', 'name': 'many', 'format': '4dv-compressed-ply',
-                                   'segments': [{'path': f'm/{i}.c.ply', 'startSeconds': i, 'durationSeconds': 1} for i in range(count)]}]
-        descriptor['defaultVariant'] = 'standard_quality'
         listed = [{'relativePath': f'm/{i}.c.ply', 'bytes': 1, 'sha256': sha256(b'x')} for i in range(count)]
         listed.append({'relativePath': 'settings.json', 'bytes': 1, 'sha256': sha256(b'x')})
         return {'files': listed}
@@ -167,12 +149,13 @@ def scenario(s, check):
         rejected('more files than the per-version limit', 413, too_many)
     check('rejected requests created no version', s.api(versions_path)[1]['total'] == 0)
 
-    request1 = version_request(files1, descriptor1, 'first version')
+    request1 = version_request(files1, 'first version')
     status, v1 = s.api(versions_path, 'POST', request1)
     check('create version returns 201 with detail', status == 201 and v1['sceneId'] == scene_id and v1['versionNo'] == 1)
     check('new version is PENDING with every file registered', v1['uploadStatus'] == 'PENDING' and v1['fileCount'] == len(files1)
           and v1['availableCount'] == 0 and all(f['status'] == 'PENDING' and f['attempts'] == 0 for f in v1['files']))
-    check('stored descriptor equals the request', v1['descriptor'] == descriptor1 and not v1['published'])
+    check('stored file set equals the request and the detail has no descriptor',
+          sorted(f['relativePath'] for f in v1['files']) == sorted(files1) and 'descriptor' not in v1 and not v1['published'])
     v1_id, v1_path = v1['id'], '/api/v1/scene-versions/' + v1['id']
     status, retry = s.api(versions_path, 'POST', request1)
     check('identical request-key retry returns the original version', status == 200 and retry['id'] == v1_id
@@ -188,7 +171,7 @@ def scenario(s, check):
     check('incomplete version cannot publish', s.api(v1_path + '/publish', 'POST', {'expectedSceneVersion': scene_lock()})[0] == 400)
     edited = s.api(v1_path, 'PUT', {'description': 'edited description', 'expectedVersion': v1['lockVersion']})
     check('description can be edited', edited[0] == 200 and edited[1]['description'] == 'edited description'
-          and edited[1]['descriptor'] == descriptor1)
+          and sorted(f['relativePath'] for f in edited[1]['files']) == sorted(files1))
     check('stale description edit conflicts', s.api(v1_path, 'PUT', {'description': 'stale', 'expectedVersion': v1['lockVersion']})[0] == 409)
 
     ids = {f['relativePath']: f['fileId'] for f in v1['files']}
@@ -251,8 +234,8 @@ def scenario(s, check):
     check('published description stays editable', s.api(v1_path, 'PUT', {'description': 'published note',
           'expectedVersion': s.api(v1_path)[1]['lockVersion']})[0] == 200)
 
-    files2, descriptor2 = synthetic_package('v2')
-    request2 = version_request(files2, descriptor2, 'second version')
+    files2 = synthetic_package('v2')
+    request2 = version_request(files2, 'second version')
     v2 = s.api(versions_path, 'POST', request2)[1]
     v2_path = '/api/v1/scene-versions/' + v2['id']
     check('second version gets the next number', v2['versionNo'] == 2)
@@ -284,11 +267,7 @@ def scenario(s, check):
         scene_big = s.api('/api/v1/scenes', 'POST', {'name': 'large-upload'})[1]
         payload = os.urandom(21 * MIB)
         files_big = {'settings.json': b'{"large":true}\n', 'models/standard/00.c.ply': payload}
-        descriptor_big = {'formatVersion': 1, 'defaultVariant': 'standard_quality',
-                          'transform': {'position': [0, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]}, 'settings': 'settings.json',
-                          'variants': [{'id': 'standard_quality', 'name': 'large', 'format': '4dv-compressed-ply',
-                                        'segments': [{'path': 'models/standard/00.c.ply', 'startSeconds': 0, 'durationSeconds': 5}]}]}
-        big = s.api(f'/api/v1/scenes/{scene_big["id"]}/versions', 'POST', version_request(files_big, descriptor_big, 'large file'))[1]
+        big = s.api(f'/api/v1/scenes/{scene_big["id"]}/versions', 'POST', version_request(files_big, 'large file'))[1]
         big_path = '/api/v1/scene-versions/' + big['id']
         results = {e['relativePath']: s.api(content(big_path, e['fileId']), 'PUT', files_big[e['relativePath']], timeout=300)
                    for e in big['files']}
@@ -305,13 +284,12 @@ def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
     from playwright.sync_api import sync_playwright
     name = 'ui-' + uuid.uuid4().hex[:8]
     scene = s.api('/api/v1/scenes', 'POST', {'name': name})[1]
-    files, descriptor = synthetic_package('browser')
+    files = synthetic_package('browser')
     with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
         package = Path(temporary) / 'scene-package'
         for path, data in files.items():
             (package / path).parent.mkdir(parents=True, exist_ok=True)
             (package / path).write_bytes(data)
-        (package / 'resource.json').write_text(json.dumps(descriptor), encoding='utf-8')
         launch = {'executable_path': str(executable)} if executable else {'channel': channel}
         browser = playwright.chromium.launch(headless=True, **launch)
         try:
@@ -332,9 +310,10 @@ def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
             drawer = page.locator('.el-drawer')
             drawer.get_by_role('row').filter(has_text='v1').get_by_text('已就绪', exact=True).first.wait_for(timeout=60000)
             listed = s.api(f'/api/v1/scenes/{scene["id"]}/versions')[1]
-            check('browser import creates one READY version with the descriptor', listed['total'] == 1
+            check('browser import creates one READY version with every file of the directory', listed['total'] == 1
                   and listed['items'][0]['uploadStatus'] == 'READY'
-                  and s.api('/api/v1/scene-versions/' + listed['items'][0]['id'])[1]['descriptor'] == descriptor)
+                  and sorted(f['relativePath'] for f in s.api('/api/v1/scene-versions/' + listed['items'][0]['id'])[1]['files'])
+                  == sorted(files))
             for width in (1440, 1024):
                 page.set_viewport_size({'width': width, 'height': 1000})
                 buttons = [b for b in drawer.get_by_role('button').all() if b.is_visible()]
@@ -413,8 +392,8 @@ class WindowsRuntime:
         scene = s.api('/api/v1/scenes', 'POST', {'name': 'fault-injection'})[1]
         versions_path = f'/api/v1/scenes/{scene["id"]}/versions'
         def make(label, segments=2):
-            files, descriptor = synthetic_package(label, segments)
-            version = s.api(versions_path, 'POST', version_request(files, descriptor, label))[1]
+            files = synthetic_package(label, segments)
+            version = s.api(versions_path, 'POST', version_request(files, label))[1]
             return files, version, {f['relativePath']: f['fileId'] for f in version['files']}
         def put(version, file_id, data): return s.api(f'/api/v1/scene-versions/{version["id"]}/files/{file_id}/content', 'PUT', data)
         def state(file_id): return sql('select status from ar_version_file where id=%s', (file_id,))[0][0]

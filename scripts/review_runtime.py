@@ -229,10 +229,10 @@ def seed_preview(runtime):
     fixtures = {'username': user, 'scenes': []}
     for index, name in enumerate(['验收场景A', '超长场景名称' + '测试内容' * 25]):
         scene = api('/api/v1/scenes', 'POST', {'name': name}, token)
-        # Synthetic text bytes under a valid descriptor: exercises management and transfer, not playback.
-        files, descriptor = synthetic_package('review-' + str(index))
+        # Synthetic text bytes: exercises management and transfer, not playback.
+        files = synthetic_package('review-' + str(index))
         version = api('/api/v1/scenes/' + scene['id'] + '/versions', 'POST',
-                      version_request(files, descriptor, '人工验收用合成版本，模型不可渲染'), token)
+                      version_request(files, '人工验收用合成版本，模型不可渲染'), token)
         for entry in version['files']:
             uploaded = api('/api/v1/scene-versions/' + version['id'] + '/files/' + entry['fileId'] + '/content', 'PUT',
                            files[entry['relativePath']], token)

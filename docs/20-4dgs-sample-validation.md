@@ -1,5 +1,7 @@
 # 真实样包验收记录（阶段 5）
 
+> **2026-10-29 说明**：本记录之后 `resource.json` 描述已删除（契约 0.5.0，版本只保存目录文件清单，档位等逻辑由 Unity 客户端决定）。参考播放器适配、`prepare_reference_viewer.py`、`verify_4dgs.py` 仍读取已删除的描述，按用户决定保留原状，当前不可运行；`prepare_4dgs_samples.py` 已删除。下文是旧描述基线的历史记录，不代表当前能力，复现步骤不再适用。
+
 日期：UTC 2026-10-29。范围：隔离实例 `127.0.0.1:18082`（项目 `innovation-ar-resource-platform-infra-check`，PostgreSQL 17.6，Java 21 后端 Jar sha256 `fa7eb0d4…ac7cc`，由 `check_java.py --module ruoyi-admin --package --offline` 产出，63 项测试 0 失败/错误/跳过；本轮未改后端/前端源码，未重建 Jar/dist）。这是单机回环结果，不是手机或公网性能，也不是 Android/iOS 真机验收。本记录不修改 `docs/06-validation.md`；原始报告留在本地 `.local/4dgs-check/evidence/stage5/`（`verify-4dgs.json`、`run.log`、`jfr/`、`playback/` 截图与逐次请求记录），不入库。
 
 ## 结论

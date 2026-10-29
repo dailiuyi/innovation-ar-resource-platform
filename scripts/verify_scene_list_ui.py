@@ -3,7 +3,7 @@
 只启动本仓库的 Vite 开发服务器和真实浏览器，由 Playwright 拦截并返回合成接口响应；
 不连接后端、数据库、日常 Demo 或真实存储，因此它证明页面行为和布局，不证明发布、上传、
 删除等业务闭环。覆盖：入口按钮可点且不被遮挡、选中版本随地址栏保留、场景切换后迟到响应不写回、
-取消确认不产生请求，以及导入目录只上传被 resource.json 引用的文件、失败后只重传未完成文件。
+取消确认不产生请求，以及导入目录登记并上传目录下全部文件（无 resource.json 描述）、失败后只重传未完成文件。
 真实后端点击验收在隔离 Compose 实例上执行。
 """
 import argparse
@@ -37,20 +37,8 @@ LONG_VERSION_2 = '66666666-6666-4666-8666-666666666666'
 SHORT_DESCRIPTION = '短场景版本说明'
 LONG_DESCRIPTIONS = {LONG_VERSION_1: '长场景版本一', LONG_VERSION_2: '长场景版本二'}
 PACKAGE_FILES = ['media/poster.jpg', 'models/high-0.c.ply', 'models/std-0.c.ply', 'models/std-1.c.ply', 'settings.json']
-UNREFERENCED = 'notes/报告.md'
-
-
-def package_descriptor():
-    segment = lambda path, start, duration: {'path': path, 'startSeconds': start, 'durationSeconds': duration}
-    return {
-        'formatVersion': 1, 'defaultVariant': 'standard',
-        'transform': {'position': [0, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]},
-        'settings': 'settings.json', 'poster': 'media/poster.jpg',
-        'variants': [
-            {'id': 'standard', 'name': '标准', 'format': '4dv-compressed-ply',
-             'segments': [segment('models/std-0.c.ply', 0, 5), segment('models/std-1.c.ply', 5, 3)]},
-            {'id': 'high', 'name': '高清', 'format': '4dv-compressed-ply',
-             'segments': [segment('models/high-0.c.ply', 0, 8)]}]}
+NOTES_FILE = 'notes/报告.md'
+IMPORT_FILES = sorted(PACKAGE_FILES + [NOTES_FILE])
 
 
 def check(name, condition):
@@ -80,7 +68,7 @@ class Api:
                 (SHORT_VERSION, SHORT_ID, 1, SHORT_DESCRIPTION),
                 (LONG_VERSION_1, LONG_ID, 1, LONG_DESCRIPTIONS[LONG_VERSION_1]),
                 (LONG_VERSION_2, LONG_ID, 2, LONG_DESCRIPTIONS[LONG_VERSION_2])):
-            self.add_version(version_id, scene_id, number, description, package_descriptor(), PACKAGE_FILES, 'AVAILABLE')
+            self.add_version(version_id, scene_id, number, description, PACKAGE_FILES, 'AVAILABLE')
         self.calls = []
         self.detail_requests = []
         self.scene_detail_requests = []
@@ -92,10 +80,10 @@ class Api:
         self.uploads = []
         self.fail_once = set()
 
-    def add_version(self, version_id, scene_id, number, description, descriptor, paths, status, request_key=None):
+    def add_version(self, version_id, scene_id, number, description, paths, status, request_key=None):
         self.versions[version_id] = {
             'id': version_id, 'sceneId': scene_id, 'versionNo': number, 'description': description,
-            'lockVersion': 0, 'descriptor': descriptor, 'requestKey': request_key,
+            'lockVersion': 0, 'requestKey': request_key,
             'createdAt': '2026-09-20T00:00:00Z', 'updatedAt': '2026-09-20T00:00:00Z',
             'files': [{'fileId': f'{version_id[:8]}-{index:04d}', 'relativePath': path, 'bytes': 8 + index,
                        'sha256': f'{index:x}' * 64, 'status': status, 'failureReason': None, 'attempts': 1 if status == 'AVAILABLE' else 0}
@@ -122,7 +110,7 @@ class Api:
                 'createdAt': version['createdAt'], 'updatedAt': version['updatedAt']}
 
     def detail(self, version):
-        return {'code': 200, **self.summary(version), 'descriptor': version['descriptor'], 'files': version['files']}
+        return {'code': 200, **self.summary(version), 'files': version['files']}
 
     def listing(self, scene_id):
         scene = self.scene(scene_id)
@@ -183,7 +171,7 @@ def route_handler(api, unmocked):
                 return reply(api.detail(existing))
             number = max([v['versionNo'] for v in api.versions.values() if v['sceneId'] == scene_id] or [0]) + 1
             version = api.add_version('77777777-7777-4777-8777-%012d' % number, scene_id, number, body['description'],
-                                      body['descriptor'], [f['relativePath'] for f in body['files']], 'PENDING', body['requestKey'])
+                                      [f['relativePath'] for f in body['files']], 'PENDING', body['requestKey'])
             for registered, stored in zip(body['files'], version['files']):
                 stored['bytes'], stored['sha256'] = registered['bytes'], registered['sha256']
             return route.fulfill(status=201, content_type='application/json',
@@ -351,10 +339,9 @@ def make_package(run):
     (root / 'media').mkdir(parents=True)
     (root / 'models').mkdir()
     (root / 'notes').mkdir()
-    (root / 'resource.json').write_text(json.dumps(package_descriptor(), ensure_ascii=False), encoding='utf-8')
     for index, path in enumerate(PACKAGE_FILES):
         (root / path).write_bytes(bytes([index + 1]) * (64 + index))
-    (root / UNREFERENCED).write_text('不属于 resource.json 引用', encoding='utf-8')
+    (root / NOTES_FILE).write_text('说明文档同样属于版本文件', encoding='utf-8')
     return root
 
 
@@ -564,7 +551,7 @@ def main():
             check('迟到响应没有改写地址栏场景', f'sceneId={LONG_ID}' in page.url)
             check('关闭迟到响应检查的面板', close_panel(page))
 
-            # 导入目录：只上传被 resource.json 引用的文件，失败只重传未完成文件，已入库文件不重复发送。
+            # 导入目录：目录下全部文件都登记上传，失败只重传未完成文件，已入库文件不重复发送。
             drawer = open_panel(page, SHORT_NAME)
             drawer.get_by_text(SHORT_VERSION).wait_for()
             api.uploads.clear()
@@ -573,24 +560,24 @@ def main():
             drawer.locator('input[type=file]').set_input_files(str(package))
             drawer.get_by_role('button', name='开始导入', exact=True).wait_for()
             drawer.get_by_role('button', name='开始导入', exact=True).click()
-            failed_shown = wait_until(page, lambda: drawer.locator('.el-alert--error').count() > 0, timeout=30)
-            check('服务端拒绝单个文件后显示错误并保留继续上传入口',
-                  failed_shown and drawer.get_by_role('button', name='继续上传', exact=True).count() >= 1)
-            check('创建版本只提交一次且只登记被引用的文件',
+            resumable = wait_until(page, lambda: drawer.locator('.el-alert--error').count() > 0
+                                   and drawer.get_by_role('button', name='继续上传', exact=True).count() >= 1, timeout=30)
+            check('服务端拒绝单个文件后显示错误并保留继续上传入口', resumable)
+            check('创建版本只提交一次、登记目录下全部文件且不带 descriptor',
                   len(api.created_bodies) == 1
-                  and sorted(f['relativePath'] for f in api.created_bodies[0]['files']) == PACKAGE_FILES
-                  and api.created_bodies[0]['descriptor'] == package_descriptor())
+                  and sorted(f['relativePath'] for f in api.created_bodies[0]['files']) == IMPORT_FILES
+                  and 'descriptor' not in api.created_bodies[0])
             check('登记的每个文件都带大小与 SHA-256',
                   all(f['bytes'] > 0 and re.fullmatch(r'[0-9a-f]{64}', f['sha256']) for f in api.created_bodies[0]['files']))
             uploaded_before = list(api.uploads)
-            check('失败前的文件各上传一次且未引用文件不上传',
-                  uploaded_before == ['media/poster.jpg', 'models/high-0.c.ply'] and UNREFERENCED not in uploaded_before)
+            check('失败前的文件各上传一次',
+                  uploaded_before == ['media/poster.jpg', 'models/high-0.c.ply'])
             drawer.get_by_role('button', name='继续上传', exact=True).first.click()
             check('继续上传后全部文件入库',
                   wait_until(page, lambda: all(f['status'] == 'AVAILABLE' for v in api.versions.values()
                                                if v['requestKey'] for f in v['files'])))
             check('继续上传只发送失败和尚未上传的文件',
-                  api.uploads[len(uploaded_before):] == ['models/high-0.c.ply', 'models/std-0.c.ply', 'models/std-1.c.ply', 'settings.json'])
+                  api.uploads[len(uploaded_before):] == ['models/high-0.c.ply', 'models/std-0.c.ply', 'models/std-1.c.ply', NOTES_FILE, 'settings.json'])
             check('已入库文件没有被重复上传', api.uploads.count('media/poster.jpg') == 1)
             check('创建版本没有因继续上传重复提交', len(api.created_bodies) == 1)
             page.screenshot(path=str(run / 'panel-import-1440.png'), full_page=True)

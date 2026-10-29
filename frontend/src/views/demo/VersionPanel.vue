@@ -1,7 +1,7 @@
 <template>
   <el-drawer :model-value="!!sceneId" :title="sceneName?'版本与文件 · '+sceneName:'版本与文件'" size="90%" :close-on-click-modal="false" :before-close="close">
     <p>所属场景：{{sceneName||sceneId||''}}<span v-if="sceneName">（编号 {{sceneId}}）</span></p>
-    <p>每个场景是一个独立的 4DGS 成品。版本创建后说明之外的描述和文件清单固定；需要改变模型、配置或路径时导入新版本，再发布切换。</p>
+    <p>每个场景是一个独立的 4DGS 成品。版本创建后说明之外的文件清单固定；需要改变模型、配置或路径时导入新版本，再发布切换。</p>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <div v-if="error" class="action-row">
       <el-button :disabled="busy" @click="refresh">刷新状态</el-button>
@@ -15,7 +15,7 @@
       <template v-if="published">
         <p><span class="meta-label">版本</span>v{{published.versionNo}}　{{published.description || '（无说明）'}}</p>
         <p><span class="meta-label">发布</span>{{formatTime(published.publishedAt)}}，{{published.publishedByName}}</p>
-        <p class="published-note">已发布版本的描述和文件固定，仅可修改说明；导入新版本不会改变它。</p>
+        <p class="published-note">已发布版本的文件清单固定，仅可修改说明；导入新版本不会改变它。</p>
         <el-button link type="primary" @click="selectVersion(published.id)">查看详情</el-button>
       </template>
       <p v-else class="published-empty">该场景尚未发布</p>
@@ -24,18 +24,11 @@
       <el-button type="primary" :disabled="busy||removing" @click="chooseDirectory">导入资源目录</el-button>
       <el-button :disabled="busy||removing" @click="refresh">刷新</el-button>
       <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
-      <span class="hint">目录根必须有 resource.json；单文件上限 {{size(config.maxBytes)}}，每个版本最多 {{config.versionMaxFiles}} 个文件 / {{size(config.versionMaxBytes)}}。</span>
+      <span class="hint">所选目录下的全部文件都会上传；单文件上限 {{size(config.maxBytes)}}，每个版本最多 {{config.versionMaxFiles}} 个文件 / {{size(config.versionMaxBytes)}}。</span>
       <input ref="picker" type="file" webkitdirectory directory multiple hidden @change="picked" />
     </div>
     <section v-if="importPlan" class="import-card">
       <h3>待导入：{{importPlan.pkg.files.length}} 个文件，共 {{size(importPlan.pkg.totalBytes)}}</h3>
-      <el-table :data="importPlan.pkg.variants" size="small">
-        <el-table-column label="档位" min-width="200"><template #default="{row}">{{row.name}}<el-tag v-if="row.id===importPlan.pkg.descriptor.defaultVariant" size="small" class="tag-gap">默认</el-tag></template></el-table-column>
-        <el-table-column prop="id" label="标识" width="180" />
-        <el-table-column prop="segmentCount" label="模型段数" width="110" />
-        <el-table-column label="总时长" width="110"><template #default="{row}">{{row.seconds}} 秒</template></el-table-column>
-      </el-table>
-      <p>另有 {{importPlan.pkg.commonCount}} 个公共配置/媒体引用。未被 resource.json 引用的文件不会上传。</p>
       <el-form inline @submit.prevent="startImport">
         <el-form-item label="版本说明"><el-input v-model="importPlan.description" maxlength="2000" placeholder="可留空" style="width:320px" /></el-form-item>
         <el-form-item>
@@ -63,7 +56,7 @@
     <pagination v-show="total>20" :total="total" v-model:page="page" :limit="20" @pagination="reloadList" />
     <section v-if="selected" class="version-detail">
       <h3>v{{selected.versionNo}} 详情 · {{selected.id}}</h3>
-      <el-alert v-if="selected.published" title="当前为发布版本，描述和文件固定，仅可修改说明" type="info" :closable="false" />
+      <el-alert v-if="selected.published" title="当前为发布版本，文件清单固定，仅可修改说明" type="info" :closable="false" />
       <el-alert v-if="selected.uploadStatus==='DELETE_FAILED'" title="整版删除失败，版本已保留；请点击“重试删除”" type="warning" :closable="false" />
       <p>状态：<el-tag :type="statusType(selected.uploadStatus)">{{uploadStates[selected.uploadStatus]}}</el-tag>　已入库 {{selected.availableCount}} / {{selected.fileCount}}，失败 {{selected.failedCount}}，共 {{size(selected.totalBytes)}}</p>
       <el-form inline @submit.prevent="saveDescription">
@@ -77,30 +70,13 @@
         <el-button v-if="!selected.published" type="primary" :disabled="busy||removing||publishing||selected.uploadStatus!=='READY'" @click="publish(selected)">{{published?'替换发布':'发布'}}</el-button>
         <el-button type="danger" plain :disabled="busy||removing||selected.published" @click="remove(selected)">{{retryDelete(selected)?'重试删除':'删除整个版本'}}</el-button>
       </div>
-      <el-collapse v-model="open">
-        <el-collapse-item v-for="variant in groups.variants" :key="variant.id" :name="variant.id">
-          <template #title>{{variant.name}}<el-tag v-if="variant.isDefault" size="small" class="tag-gap">默认</el-tag><span class="group-meta">{{variant.segments.length}} 段 · {{size(variant.bytes)}}</span></template>
-          <el-table :data="variant.segments" size="small" row-key="path">
-            <el-table-column type="expand"><template #default="{row}"><file-detail :file="row.file" /></template></el-table-column>
-            <el-table-column prop="path" label="模型文件" min-width="240" show-overflow-tooltip />
-            <el-table-column label="时间段" width="150"><template #default="{row}">{{row.startSeconds}} s + {{row.durationSeconds}} s</template></el-table-column>
-            <el-table-column label="大小" width="110"><template #default="{row}">{{size(row.file?.bytes)}}</template></el-table-column>
-            <el-table-column label="状态" width="100"><template #default="{row}"><el-tag v-if="row.file" :type="fileType(row.file.status)">{{fileStates[row.file.status]}}</el-tag></template></el-table-column>
-            <el-table-column label="错误" min-width="180" show-overflow-tooltip><template #default="{row}">{{row.file?.failureReason}}</template></el-table-column>
-          </el-table>
-        </el-collapse-item>
-        <el-collapse-item name="common">
-          <template #title>公共配置与媒体<span class="group-meta">{{groups.common.length}} 个文件</span></template>
-          <el-table :data="groups.common" size="small" row-key="path">
-            <el-table-column type="expand"><template #default="{row}"><file-detail :file="row.file" /></template></el-table-column>
-            <el-table-column label="用途" width="100"><template #default="{row}">{{roleLabels[row.role]}}</template></el-table-column>
-            <el-table-column prop="path" label="文件" min-width="240" show-overflow-tooltip />
-            <el-table-column label="大小" width="110"><template #default="{row}">{{size(row.file?.bytes)}}</template></el-table-column>
-            <el-table-column label="状态" width="100"><template #default="{row}"><el-tag v-if="row.file" :type="fileType(row.file.status)">{{fileStates[row.file.status]}}</el-tag></template></el-table-column>
-            <el-table-column label="错误" min-width="180" show-overflow-tooltip><template #default="{row}">{{row.file?.failureReason}}</template></el-table-column>
-          </el-table>
-        </el-collapse-item>
-      </el-collapse>
+      <el-table :data="selected.files" size="small" row-key="fileId">
+        <el-table-column type="expand"><template #default="{row}"><file-detail :file="row" /></template></el-table-column>
+        <el-table-column prop="relativePath" label="文件" min-width="280" show-overflow-tooltip />
+        <el-table-column label="大小" width="110"><template #default="{row}">{{size(row.bytes)}}</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{row}"><el-tag :type="fileType(row.status)">{{fileStates[row.status]}}</el-tag></template></el-table-column>
+        <el-table-column label="错误" min-width="180" show-overflow-tooltip><template #default="{row}">{{row.failureReason}}</template></el-table-column>
+      </el-table>
     </section>
   </el-drawer>
 </template>
@@ -109,26 +85,23 @@ import { computed, defineComponent, h, onBeforeUnmount, ref, shallowRef, watch }
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createVersion, deleteVersion, getScene, getVersion, getVersionConfig, getVersionFile, listVersions, publishVersion, updateVersion, uploadVersionFile } from '@/api/scene'
-import { PackageError, checkDigests, checkLimits, checkSelection, createRequest, describeVersion, readPackage, uploadPlan } from '@/utils/scenePackage'
+import { PackageError, checkDigests, checkLimits, checkSelection, createRequest, readPackage, uploadPlan } from '@/utils/scenePackage'
 const props=defineProps({sceneId:String})
 const emit=defineEmits(['close','sceneUpdated'])
 const route=useRoute(),router=useRouter()
 const PAGE=20
 const config=ref({maxBytes:0,versionMaxFiles:0,versionMaxBytes:0})
 const versions=ref([]),total=ref(0),page=ref(1),sceneLockVersion=ref(0),published=ref(null),sceneName=ref('')
-const selected=ref(null),editDescription=ref(''),open=ref([])
+const selected=ref(null),editDescription=ref('')
 const picker=ref(null),importPlan=shallowRef(null),session=shallowRef(null)
 const busy=ref(false),saving=ref(false),publishing=ref(false),removing=ref(false)
 const error=ref(''),progress=ref(0),progressText=ref('')
 const uploadStates={PENDING:'待上传',UPLOADING:'上传中',FAILED:'有失败',READY:'已就绪',DELETING:'正在删除',DELETE_FAILED:'删除失败'}
 const fileStates={PENDING:'待上传',UPLOADING:'处理中',AVAILABLE:'已入库',FAILED:'失败'}
-const roleLabels={settings:'配置',poster:'海报',audio:'音频',preview:'预览'}
 let worker,controller,rejectHash,cancelled=false,runToken=0,resumeId=null
 let sceneRequest=0,listRequest=0,detailRequest=0
-const FileDetail=defineComponent({props:{file:Object},setup:props=>()=>props.file
-  ?h('div',{class:'file-detail'},[h('div',['SHA-256：',h('code',{class:'digest'},props.file.sha256)]),h('div',`文件编号 ${props.file.fileId}，上传尝试 ${props.file.attempts} 次，${props.file.bytes} 字节`)])
-  :h('div',{class:'file-detail'},'服务端清单中没有该文件')})
-const groups=computed(()=>selected.value?describeVersion(selected.value.descriptor,selected.value.files):{common:[],variants:[]})
+const FileDetail=defineComponent({props:{file:Object},setup:props=>()=>
+  h('div',{class:'file-detail'},[h('div',['SHA-256：',h('code',{class:'digest'},props.file.sha256)]),h('div',`文件编号 ${props.file.fileId}，上传尝试 ${props.file.attempts} 次，${props.file.bytes} 字节`)])})
 const canResume=computed(()=>['PENDING','UPLOADING','FAILED'].includes(selected.value?.uploadStatus))
 const sessionForSelected=computed(()=>!!session.value&&session.value.versionId===selected.value?.id)
 function randomKey(){
@@ -173,7 +146,6 @@ async function selectVersion(id){
   try{
     const version=await loadDetail(id)
     if(!version)return null
-    open.value=[version.descriptor.defaultVariant,'common']
     await setQuery(id)
     return version
   }catch(e){error.value=message(e);return null}
@@ -214,7 +186,7 @@ async function publish(version){
     await ElMessageBox.confirm(
       current
         ? `当前发布版本是 v${current.versionNo}。确认将 v${version.versionNo} 切换为该场景的当前发布版本吗？原发布版本仍可在后台查看或整版删除，但不再供客户端读取。`
-        : `确认将 v${version.versionNo} 发布为该场景的当前发布版本吗？发布后描述和文件固定，仅可修改说明。`,
+        : `确认将 v${version.versionNo} 发布为该场景的当前发布版本吗？发布后文件清单固定，仅可修改说明。`,
       current?'替换发布版本':'发布版本',
       {confirmButtonText:current?'确认替换':'确认发布',cancelButtonText:'取消',type:'warning',closeOnClickModal:false})
     if(sequence!==sceneRequest)return
@@ -396,7 +368,7 @@ onBeforeUnmount(()=>{cancel();++runToken})
 </script>
 <style scoped>
 .version-detail{margin-top:24px}.action-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}.hint{color:var(--el-text-color-secondary)}.el-alert{margin-bottom:16px}
-.digest{word-break:break-all}.file-detail{padding:4px 16px;line-height:1.8}.tag-gap{margin-left:8px}.group-meta{margin-left:16px;color:var(--el-text-color-secondary);font-weight:normal}
+.digest{word-break:break-all}.file-detail{padding:4px 16px;line-height:1.8}.tag-gap{margin-left:8px}
 .import-card{border:1px solid var(--el-color-primary-light-5);background:color-mix(in srgb,var(--el-color-primary) 10%,var(--el-bg-color));color:var(--el-text-color-primary);border-radius:4px;padding:16px 20px;margin:8px 0 20px}
 .import-card h3{margin:0 0 12px;font-size:16px}
 .published-card{border:1px solid var(--el-color-success-light-5);background:color-mix(in srgb,var(--el-color-success) 10%,var(--el-bg-color));color:var(--el-text-color-primary);border-radius:4px;padding:16px 20px;margin:8px 0 20px}

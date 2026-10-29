@@ -2,7 +2,7 @@
 
 本文记录现行技术选型、数据边界和内容作业流；具体接口与状态以 [资源入库闭环](12-resource-ingestion.md) 和 [客户端接口](21-client-api.md) 为准，不把历史候选设计当作当前规格。
 
-平台接收线下制作的 4DGS 成品：在场景下导入带 `resource.json` 的目录，创建不可变版本，逐文件上传校验，再发布为该场景唯一当前版本。匿名客户端可读取目录、详情和文件，并用 `scripts/download_scene.py` 按档位完整下载。三份真实样包的导入、发布、读取与下载，以及桌面 Chrome 参考播放器的三项播放已在隔离实例验收；手机、Unity 原生加载及音频未验证，见 [真实样包验收记录](20-4dgs-sample-validation.md)。
+平台接收线下制作的 4DGS 成品：在场景下导入一个目录（目录下全部文件），创建不可变版本，逐文件上传校验，再发布为该场景唯一当前版本。匿名客户端可读取目录、详情和文件，并用 `scripts/download_scene.py` 完整下载整个版本。档位、分段、时间、变换与媒体用途由 Unity 客户端按相对路径决定，平台自 2026-10-29 起不保存 `resource.json` 描述。此前三份真实样包与桌面 Chrome 参考播放器的验收基于旧描述，参考播放器适配当前不可用，见 [真实样包验收记录](20-4dgs-sample-validation.md)；手机、Unity 原生加载及音频未验证。
 
 ## 已确定的架构边界
 
@@ -147,8 +147,8 @@ flowchart LR
 ```
 
 - 场景业务信息只有名称，另维护启停、修订号、时间/删除信息与发布指针；没有地点、昼夜或入口标记模型。
-- 创建版本时固定 `resource.json` v1 描述和完整文件清单，只有说明可编辑；修改模型、档位、时间或配置需要新建版本。
-- 描述声明档位、有序分段、变换及公共配置/媒体路径。路径集合必须恰好等于文件清单；后端不解码模型或推断分段时间。
+- 创建版本时固定目录的完整文件清单（相对路径、大小、SHA256），只有说明可编辑；修改任何文件需要新建版本。
+- 平台不保存描述、不解释文件用途；后端不解码模型或推断分段时间，这些由 Unity 客户端决定。V017 删除 `ar_scene_version.descriptor` 列，未经备份和授权不得在日常数据库执行。
 - V015 清洁切换删除旧业务表并清空旧成品记录，保留账号与菜单。不得未经授权升级日常数据库。当前模型、限制和状态详见 [资源入库闭环](12-resource-ingestion.md)。
 
 ## 本地成品存储
@@ -179,13 +179,13 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Produce[线下制作成品目录] --> Descriptor[准备 resource.json 与引用文件]
+    Produce[线下制作成品目录] --> Descriptor[选择目录并登记全部文件]
     Descriptor --> Version[在场景下创建不可变版本与完整清单]
     Version --> Upload[逐文件上传并流式校验]
     Upload --> Commit[无覆盖提交并标记 AVAILABLE]
     Commit --> Publish[管理员切换场景当前发布指针]
-    Publish --> Detail[匿名客户端读取目录与描述]
-    Detail --> Download[按档位下载模型与公共文件]
+    Publish --> Detail[匿名客户端读取目录与文件清单]
+    Detail --> Download[按客户端逻辑下载所需文件]
     Download --> Render[客户端校验并渲染]
 ```
 
@@ -203,7 +203,7 @@ flowchart LR
 
 ### 客户端获取
 
-匿名客户端不登录管理账号，只能读取已启用、未删除场景的当前发布版本：`GET /api/v1/client/scenes` 目录、`GET /api/v1/client/scenes/{sceneId}` 描述与完整文件清单（含大小、SHA256、content type 和下载地址）、`GET/HEAD .../versions/{versionId}/files/{fileId}/content/{fileName}` 文件流。客户端先固定版本，只下载选定档位和公共文件，校验摘要后交给本地渲染模块；发布版本变化后旧版本地址返回 409，客户端须重新取描述。细节见 [资源入库闭环](12-resource-ingestion.md)。
+匿名客户端不登录管理账号，只能读取已启用、未删除场景的当前发布版本：`GET /api/v1/client/scenes` 目录、`GET /api/v1/client/scenes/{sceneId}` 完整文件清单（含大小、SHA256、content type 和下载地址）、`GET/HEAD .../versions/{versionId}/files/{fileId}/content/{fileName}` 文件流。客户端先固定版本，按自身逻辑以相对路径选择所需文件，校验摘要后交给本地渲染模块；发布版本变化后旧版本地址返回 409，客户端须重新取详情。细节见 [资源入库闭环](12-resource-ingestion.md)。
 
 客户端文件由后端判定可见性后流式输出，Nginx 只做同源代理（`/api/v1/client/`，关闭缓冲），支持单段 HTTP Range、If-Range 与强 ETag。读取仅检查记录、文件存在和长度，不重算 SHA256；同长度损坏由下载端校验发现。参考工具已验证中断续传、200 截断重写、损坏不就绪与版本变化 409，真实样包结果见 [验收记录](20-4dgs-sample-validation.md)。服务端不能收回客户端已经下载的内容。
 
@@ -231,6 +231,6 @@ flowchart LR
 
 ## 当前状态与未验证边界
 
-当前已实现场景与账号管理、审计、`resource.json` 不可变版本、逐文件上传/恢复、单一发布指针、匿名读取/Range 下载和整版物理删除。参考工具与桌面播放器的已验收范围见 [真实样包验收记录](20-4dgs-sample-validation.md)，不以历史 quick 或 SQL 报告替代当前业务验证。
+当前已实现场景与账号管理、审计、目录文件清单不可变版本、逐文件上传/恢复、单一发布指针、匿名读取/Range 下载和整版物理删除。参考工具的已验收范围见 [真实样包验收记录](20-4dgs-sample-validation.md)（桌面播放器部分为旧描述基线的历史记录），不以历史 quick 或 SQL 报告替代当前业务验证。
 
 后台内嵌预览、单独下线、对象存储、CDN、共享依赖与 catalog 解析未实现；手机/Unity 原生解码、手机网络和音频同步未验证。云主机挂盘与 CDN 仍是 [后续分发建议](19-public-resource-delivery-proposal.md)，不是当前隧道演示的组成部分。

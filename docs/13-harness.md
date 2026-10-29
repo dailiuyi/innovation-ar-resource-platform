@@ -41,7 +41,7 @@ python scripts/harness.py check --profile ingestion
 
 Linux 上的真实验收不走 Windows profile，而是用 `scripts/prepare_4dgs_check.py` 启动固定的隔离 Compose 实例（项目 `innovation-ar-resource-platform-infra-check`，`127.0.0.1:18082`，不使用日常 18081/43174 或 `config/compose.env`），再运行 `scripts/verify_ingestion.py --base-url http://127.0.0.1:18082 --admin-base-url http://127.0.0.1:18082/prod-api --credentials-file <runtime.json 中的 credentialsFile> [--browser-executable /opt/google/chrome/chrome]`（等价于 `run_http_checks`）。`prepare` 只用已有镜像、已测试 Jar 和已交付的前端 dist，凭据 0600 且不打印，`stop` 只 `compose stop` 并保留数据。quick 和合成 UI 检查都不是该全链验收。
 
-真实样包与参考播放器闭环由 `scripts/verify_4dgs.py --runtime <runtime.json> --samples-root <样本目录> --sample-descriptors <描述目录> --viewer-root <参考播放器副本> --browser-executable /opt/google/chrome/chrome --report-dir <.local 下目录>` 执行，只接受固定的隔离实例；退出码 0 全部通过、1 有检查失败、2 输入或运行时不可用、4 已执行项全部通过但有被阻塞项（报告 `verify-4dgs.json` 的 `blocked`）。`prepare_4dgs_check.py prepare` 同时给测试后端开启仅含文件读写事件的 JFR（`JAVA_TOOL_OPTIONS`，写入后端日志卷，正常停止时转储），可选 `--reference-viewer DIR` 只读挂入参考播放器副本。无头 Chrome 默认回退到 SwiftShader 软件渲染，需 `--use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist` 才使用本机 NVIDIA GPU，`verify_4dgs.py` 同时记录两种渲染器。详见 [真实样包验收记录](20-4dgs-sample-validation.md)。
+真实样包与参考播放器闭环原由 `scripts/verify_4dgs.py --runtime <runtime.json> --samples-root <样本目录> --sample-descriptors <描述目录> --viewer-root <参考播放器副本> --browser-executable /opt/google/chrome/chrome --report-dir <.local 下目录>` 执行；该脚本与参考播放器适配仍读取已删除的 `descriptor`/`variants`，自 2026-10-29 起对 0.5.0 接口不可用，按用户决定保留原状、不维护。以下为原用法记录：只接受固定的隔离实例；退出码 0 全部通过、1 有检查失败、2 输入或运行时不可用、4 已执行项全部通过但有被阻塞项（报告 `verify-4dgs.json` 的 `blocked`）。`prepare_4dgs_check.py prepare` 同时给测试后端开启仅含文件读写事件的 JFR（`JAVA_TOOL_OPTIONS`，写入后端日志卷，正常停止时转储），可选 `--reference-viewer DIR` 只读挂入参考播放器副本。无头 Chrome 默认回退到 SwiftShader 软件渲染，需 `--use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist` 才使用本机 NVIDIA GPU，`verify_4dgs.py` 同时记录两种渲染器。详见 [真实样包验收记录](20-4dgs-sample-validation.md)。
 
 ## 报告与完成判定
 
@@ -56,7 +56,7 @@ Linux 上的真实验收不走 Windows profile，而是用 `scripts/prepare_4dgs
 
 契约和入库步骤同时要求进程成功与非空、全部通过的结构化证据。除上述带输入和产物校验的前端构建外，不读取过去的报告补齐结果。每步有时限，遇错停止后续步骤；超时/中断尝试停止本次子进程树，并停止本次证据目录下遗留的 PostgreSQL。主机崩溃或直接强杀整个 harness 无法保证执行清理，应检查该运行目录和进程，不得扩大到日常 Demo。
 
-`verify_design.py` 和 `verify_ingestion.py` 支持 `--report-dir`；未指定时保留写入 docs 的旧行为。入库脚本的 Windows 模式使用 `--backend-jar`，harness 只验收固定路径的已测试 Jar；单独运行仍需自行确认 Jar 与源码一致。`verify_design.py` 只验证当前 OpenAPI（`scripts/generate_contracts.py` 同源）和 resource.json v1 的 Schema/示例，数据库约束由真实 PostgreSQL 验收承担；`contracts/` 中的 runtime-manifest 是历史静态资料，不再生成也不是当前门禁。
+`verify_design.py` 和 `verify_ingestion.py` 支持 `--report-dir`；未指定时保留写入 docs 的旧行为。入库脚本的 Windows 模式使用 `--backend-jar`，harness 只验收固定路径的已测试 Jar；单独运行仍需自行确认 Jar 与源码一致。`verify_design.py` 只验证当前 OpenAPI（`scripts/generate_contracts.py` 同源）和文档链接，数据库约束由真实 PostgreSQL 验收承担；`contracts/` 中的 runtime-manifest 是历史静态资料，不再生成也不是当前门禁。
 
 ## 怎么选检查
 
