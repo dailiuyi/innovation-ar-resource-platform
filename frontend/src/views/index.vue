@@ -2,7 +2,7 @@
   <div class="app-container home-page">
     <el-card shadow="never" class="intro-card">
       <h1>innovation-ar-resource-platform</h1>
-      <p>管理场景信息、上传和校验资源文件、发布场景版本，以及管理团队账号和查看操作记录。</p>
+      <p>管理 4DGS 场景成品、导入并校验资源目录、发布场景版本，以及管理团队账号和查看操作记录。</p>
       <el-button v-if="canOpen(entries[0])" type="primary" @click="router.push(entries[0].path)">进入场景管理</el-button>
     </el-card>
 
@@ -33,9 +33,9 @@
     <el-card shadow="never" class="notes-card">
       <h2>发布前请留意</h2>
       <ul>
-        <li>文件上传并校验成功后，还需要执行版本发布。</li>
+        <li>目录文件全部校验入库后，还需要执行版本发布。</li>
         <li>同一场景只有一个当前发布版本。</li>
-        <li>当前发布版本的文件不能直接修改；更新资源需要准备新的草稿。</li>
+        <li>版本创建后描述和文件固定；更新资源需要导入新版本再发布。</li>
         <li>当前后台发布不代表客户端已经下载或加载资源。</li>
       </ul>
     </el-card>
@@ -60,9 +60,9 @@ function canOpen(entry) {
 const visibleEntries = computed(() => entries.filter(canOpen))
 const steps = [
   { title: '选择场景', description: '每个场景是一个独立的 4DGS 成品；进入场景管理，从列表的“场景信息”修改名称，或进入“版本与文件”。', path: '场景管理 → 场景列表' },
-  { title: '创建版本草稿', description: '从列表的“版本与文件”进入该场景资源面板，填写版本说明，再点击“创建草稿”。', path: '场景列表的“版本与文件” → 新草稿说明' },
-  { title: '上传并检查文件', description: '选择文件并上传，或选择文件夹并上传（替换全部文件）。等待校验完成；失败时可“重新选择原文件”重试。', path: '版本与文件 → 草稿的“查看文件”' },
-  { title: '发布版本', description: '确认资源准备完成后发布草稿，或替换该场景当前发布版本。', path: '版本与文件 → 草稿的“发布”或“替换发布”' }
+  { title: '导入资源目录', description: '在“版本与文件”面板点击“导入资源目录”，选择根目录含 resource.json 的成品目录，确认档位和文件总量后开始导入。', path: '场景列表的“版本与文件” → 导入资源目录' },
+  { title: '上传并检查文件', description: '文件按目录逐个上传并校验入库；中断后点击“继续上传”重新选择同一目录，已入库的文件不会重复传输。', path: '版本与文件 → 版本详情的“继续上传”' },
+  { title: '发布版本', description: '全部文件就绪后发布该版本，或替换该场景当前发布版本。', path: '版本与文件 → 版本列表的“发布”或“替换发布”' }
 ]
 </script>
 

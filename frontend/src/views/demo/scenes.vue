@@ -14,7 +14,7 @@
       <el-table-column label="操作" width="300" fixed="right"><template #default="{row}">
         <div class="scene-actions">
           <el-button link type="primary" @click="edit(row)">场景信息</el-button>
-          <el-button link type="primary" @click="openDrafts(row)">版本与文件</el-button>
+          <el-button link type="primary" @click="openVersions(row)">版本与文件</el-button>
           <el-button link type="warning" @click="toggle(row)">{{row.enabled?'停用':'启用'}}</el-button>
           <el-button link type="danger" :disabled="deleting" @click="remove(row)">删除</el-button>
         </div>
@@ -28,7 +28,7 @@
       </el-form>
       <template #footer><el-button @click="visible=false">关闭</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
     </el-dialog>
-    <DraftPanel :scene-id="draftScene" @close="closeDrafts" @scene-updated="load" />
+    <VersionPanel :scene-id="panelScene" @close="closeVersions" @scene-updated="load" />
   </div>
 </template>
 <style scoped>
@@ -37,12 +37,12 @@
 </style>
 <script setup>
 import request from '@/utils/request'
-import DraftPanel from './DraftPanel.vue'
+import VersionPanel from './VersionPanel.vue'
 import { useRoute, useRouter } from 'vue-router'
 const route=useRoute(),router=useRouter()
-const draftScene=computed(()=>String(route.query.draftScene||''))
-function openDrafts(row){const query={...route.query,draftScene:row.id};delete query.draftId;router.replace({query})}
-function closeDrafts(){const query={...route.query};delete query.draftScene;delete query.draftId;router.replace({query});load()}
+const panelScene=computed(()=>String(route.query.sceneId||''))
+function openVersions(row){const query={...route.query,sceneId:row.id};delete query.versionId;router.replace({query})}
+function closeVersions(){const query={...route.query};delete query.sceneId;delete query.versionId;router.replace({query});load()}
 import { ElMessage, ElMessageBox } from 'element-plus'
 const deleting=ref(false)
 const items=ref([]),total=ref(0),page=ref(1),limit=ref(20),name=ref(''),loading=ref(false),visible=ref(false),saving=ref(false),form=ref({})

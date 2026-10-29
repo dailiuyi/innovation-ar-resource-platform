@@ -1,13 +1,12 @@
-"""场景列表入口拆分与列宽布局专项检查。
+"""场景列表入口与版本面板专项检查。
 
 只启动本仓库的 Vite 开发服务器和真实浏览器，由 Playwright 拦截并返回合成接口响应；
-不连接后端、数据库、日常 Demo 或真实存储，因此它证明页面结构和布局，不证明发布、上传、
-下载、删除等业务闭环。资源面板部分另用合成 ZIP 响应检查当前对象可下载、切换场景或版本后
-上一对象的下载提示与下载错误不再残留，以及准备期间切换对象时旧请求不会写回新面板。
-真实后端点击验收仍按开发工作流在 Windows 隔离环境执行。
+不连接后端、数据库、日常 Demo 或真实存储，因此它证明页面行为和布局，不证明发布、上传、
+删除等业务闭环。覆盖：入口按钮可点且不被遮挡、选中版本随地址栏保留、场景切换后迟到响应不写回、
+取消确认不产生请求，以及导入目录只上传被 resource.json 引用的文件、失败后只重传未完成文件。
+真实后端点击验收在隔离 Compose 实例上执行。
 """
 import argparse
-import io
 import json
 import os
 import re
@@ -17,9 +16,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import zipfile
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.local/python'))
@@ -33,26 +31,26 @@ SHORT_NAME = '合成场景A'
 LONG_NAME = '超长场景名称' + '超长名称内容' * 20
 SHORT_ID = '11111111-1111-4111-8111-111111111111'
 LONG_ID = '22222222-2222-4222-8222-222222222222'
-DRAFT_ID = '33333333-3333-4333-8333-333333333333'
-LONG_DRAFT_ID = '55555555-5555-4555-8555-555555555555'
-LONG_SPARE_ID = '66666666-6666-4666-8666-666666666666'
-ZIP_EXPORT_ID = '77777777-7777-4777-8777-777777777777'
-ZIP_FILENAME = 'layout-check.zip'
-# 每个场景各自的草稿；资源面板用两个草稿验证切换版本时的下载状态。
-DRAFTS = {
-    SHORT_ID: [(DRAFT_ID, '布局检查草稿')],
-    LONG_ID: [(LONG_DRAFT_ID, '布局检查草稿'), (LONG_SPARE_ID, '布局检查备用草稿')],
-}
+SHORT_VERSION = '33333333-3333-4333-8333-333333333333'
+LONG_VERSION_1 = '55555555-5555-4555-8555-555555555555'
+LONG_VERSION_2 = '66666666-6666-4666-8666-666666666666'
+SHORT_DESCRIPTION = '短场景版本说明'
+LONG_DESCRIPTIONS = {LONG_VERSION_1: '长场景版本一', LONG_VERSION_2: '长场景版本二'}
+PACKAGE_FILES = ['media/poster.jpg', 'models/high-0.c.ply', 'models/std-0.c.ply', 'models/std-1.c.ply', 'settings.json']
+UNREFERENCED = 'notes/报告.md'
 
 
-def synthetic_zip():
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w') as archive:
-        archive.writestr('layout-check.txt', '布局检查')
-    return buffer.getvalue()
-
-
-ZIP_BYTES = synthetic_zip()
+def package_descriptor():
+    segment = lambda path, start, duration: {'path': path, 'startSeconds': start, 'durationSeconds': duration}
+    return {
+        'formatVersion': 1, 'defaultVariant': 'standard',
+        'transform': {'position': [0, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]},
+        'settings': 'settings.json', 'poster': 'media/poster.jpg',
+        'variants': [
+            {'id': 'standard', 'name': '标准', 'format': '4dv-compressed-ply',
+             'segments': [segment('models/std-0.c.ply', 0, 5), segment('models/std-1.c.ply', 5, 3)]},
+            {'id': 'high', 'name': '高清', 'format': '4dv-compressed-ply',
+             'segments': [segment('models/high-0.c.ply', 0, 8)]}]}
 
 
 def check(name, condition):
@@ -69,7 +67,7 @@ def free_port():
 
 
 class Api:
-    """合成场景数据；只覆盖本页面用到的接口。"""
+    """合成场景与版本数据；只覆盖本页面用到的接口。"""
 
     def __init__(self):
         self.scenes = [
@@ -77,11 +75,32 @@ class Api:
             {'id': LONG_ID, 'name': LONG_NAME, 'enabled': False, 'lockVersion': 12},
         ]
         self.published = {}
+        self.versions = {}
+        for version_id, scene_id, number, description in (
+                (SHORT_VERSION, SHORT_ID, 1, SHORT_DESCRIPTION),
+                (LONG_VERSION_1, LONG_ID, 1, LONG_DESCRIPTIONS[LONG_VERSION_1]),
+                (LONG_VERSION_2, LONG_ID, 2, LONG_DESCRIPTIONS[LONG_VERSION_2])):
+            self.add_version(version_id, scene_id, number, description, package_descriptor(), PACKAGE_FILES, 'AVAILABLE')
         self.calls = []
         self.detail_requests = []
-        self.scene_in_panel = None
-        self.zip_stall = False
-        self.zip_deferred = []
+        self.scene_detail_requests = []
+        self.version_detail_requests = []
+        self.deleted_versions = []
+        self.defer_detail = None
+        self.deferred = []
+        self.created_bodies = []
+        self.uploads = []
+        self.fail_once = set()
+
+    def add_version(self, version_id, scene_id, number, description, descriptor, paths, status, request_key=None):
+        self.versions[version_id] = {
+            'id': version_id, 'sceneId': scene_id, 'versionNo': number, 'description': description,
+            'lockVersion': 0, 'descriptor': descriptor, 'requestKey': request_key,
+            'createdAt': '2026-09-20T00:00:00Z', 'updatedAt': '2026-09-20T00:00:00Z',
+            'files': [{'fileId': f'{version_id[:8]}-{index:04d}', 'relativePath': path, 'bytes': 8 + index,
+                       'sha256': f'{index:x}' * 64, 'status': status, 'failureReason': None, 'attempts': 1 if status == 'AVAILABLE' else 0}
+                      for index, path in enumerate(paths)]}
+        return self.versions[version_id]
 
     def scene(self, scene_id):
         return next(scene for scene in self.scenes if scene['id'] == scene_id)
@@ -90,27 +109,27 @@ class Api:
         self.calls.append('GET /api/v1/scenes')
         return {'code': 200, 'items': [dict(scene) for scene in self.scenes], 'total': len(self.scenes)}
 
-    def drafts(self, scene_id):
-        self.scene_in_panel = scene_id
-        scene = self.scene(scene_id)
-        published = self.published.get(scene_id)
-        items = [{'id': draft_id, 'sceneId': scene_id, 'description': description, 'published': published == draft_id,
-                  'lockVersion': 0, 'creatorName': '布局检查', 'fileCount': 0, 'createdAt': '2026-09-20T00:00:00Z'}
-                 for draft_id, description in DRAFTS.get(scene_id, [])]
-        return {'code': 200, 'items': items, 'total': len(items), 'sceneLockVersion': scene['lockVersion'],
-                'published': {'id': published, 'description': '布局检查发布版本', 'publishedByName': '布局检查',
-                              'publishedAt': '2026-09-20T00:00:00Z'} if published else None}
+    def summary(self, version):
+        files = version['files']
+        count = lambda status: sum(1 for item in files if item['status'] == status)
+        status = ('UPLOADING' if count('UPLOADING') else 'FAILED' if count('FAILED')
+                  else 'READY' if count('AVAILABLE') == len(files) else 'PENDING')
+        return {'id': version['id'], 'sceneId': version['sceneId'], 'versionNo': version['versionNo'],
+                'description': version['description'], 'lockVersion': version['lockVersion'],
+                'published': self.published.get(version['sceneId']) == version['id'], 'uploadStatus': status,
+                'fileCount': len(files), 'availableCount': count('AVAILABLE'), 'failedCount': count('FAILED'),
+                'totalBytes': sum(item['bytes'] for item in files),
+                'createdAt': version['createdAt'], 'updatedAt': version['updatedAt']}
 
-    def draft(self, draft_id):
-        scene_id = next((sid for sid, did in self.published.items() if did == draft_id), self.scene_in_panel or SHORT_ID)
-        self.scene_in_panel = scene_id
+    def detail(self, version):
+        return {'code': 200, **self.summary(version), 'descriptor': version['descriptor'], 'files': version['files']}
+
+    def listing(self, scene_id):
         scene = self.scene(scene_id)
-        published = self.published.get(scene_id) == draft_id
-        return {'code': 200, 'id': draft_id, 'sceneId': scene_id,
-                'description': '布局检查发布版本' if published else '布局检查草稿',
-                'published': published, 'lockVersion': scene['lockVersion'], 'fileCount': 0,
-                'currentCollectionId': '44444444-4444-4444-8444-444444444444', 'collectionGeneration': 1,
-                'createdAt': '2026-09-20T00:00:00Z'}
+        mine = sorted((v for v in self.versions.values() if v['sceneId'] == scene_id), key=lambda v: -v['versionNo'])
+        published = self.versions.get(self.published.get(scene_id))
+        return {'code': 200, 'items': [self.summary(v) for v in mine], 'total': len(mine),
+                'sceneLockVersion': scene['lockVersion'], 'published': self.summary(published) if published else None}
 
 
 def route_handler(api, unmocked):
@@ -125,25 +144,26 @@ def route_handler(api, unmocked):
             route.fulfill(status=status, content_type='application/json',
                           body=json.dumps(payload, ensure_ascii=False))
 
-        if path == '/getInfo' and request.method == 'GET':
+        method = request.method
+        if path == '/getInfo' and method == 'GET':
             return reply({'code': 200, 'user': {'userId': 1, 'userName': 'layout-check', 'nickName': '布局检查', 'avatar': ''},
                           'roles': ['admin'], 'permissions': ['*:*:*'], 'isDefaultModifyPwd': False, 'pwdChrtype': '1'})
-        if path == '/getRouters' and request.method == 'GET':
+        if path == '/getRouters' and method == 'GET':
             return reply({'code': 200, 'data': [
                 {'name': 'Ar', 'path': '/admin', 'hidden': False, 'redirect': 'noRedirect', 'component': 'Layout',
                  'alwaysShow': True, 'meta': {'title': '场景资源', 'icon': 'build'}, 'children': [
                      {'name': 'Scenes', 'path': 'scenes', 'hidden': False, 'component': 'demo/scenes',
                       'meta': {'title': '场景管理', 'icon': 'build', 'noCache': False}}]}]})
-        if path == '/api/v1/scenes' and request.method == 'GET':
+        if path == '/api/v1/scenes' and method == 'GET':
             return reply(api.list_scenes())
-        if path == '/api/v1/drafts/config' and request.method == 'GET':
-            return reply({'code': 200, 'maxBytes': 10485760, 'collectionMaxFiles': 200, 'collectionMaxBytes': 104857600})
+        if path == '/api/v1/scene-versions/config' and method == 'GET':
+            return reply({'code': 200, 'maxBytes': 10485760, 'versionMaxFiles': 1000, 'versionMaxBytes': 4294967296})
         matched = re.fullmatch(r'/api/v1/scenes/([^/]+)', path)
-        if matched and request.method == 'GET':
-            api.detail_requests.append(matched.group(1))
+        if matched and method == 'GET':
+            api.scene_detail_requests.append(matched.group(1))
             return reply({'code': 200, **api.scene(matched.group(1))})
         matched = re.fullmatch(r'/api/v1/scenes/([^/]+)/enabled', path)
-        if matched and request.method == 'PUT':
+        if matched and method == 'PUT':
             body = json.loads(request.post_data or '{}')
             scene = api.scene(matched.group(1))
             if body.get('expectedVersion') != scene['lockVersion'] or not str(body.get('reason', '')).strip():
@@ -151,37 +171,62 @@ def route_handler(api, unmocked):
             scene['enabled'] = bool(body.get('enabled'))
             scene['lockVersion'] += 1
             return reply({'code': 200, **scene})
-        matched = re.fullmatch(r'/api/v1/scenes/([^/]+)/drafts', path)
-        if matched and request.method == 'GET':
-            return reply(api.drafts(matched.group(1)))
-        matched = re.fullmatch(r'/api/v1/drafts/([^/]+)/zip-exports', path)
-        if matched and request.method == 'POST':
-            # 需要检查“准备期间切换对象”时先挂起，由脚本稍后决定成功或失败。
-            if api.zip_stall:
-                api.zip_deferred.append(route)
-                return
-            return reply({'code': 200, 'downloadPath': f'/api/v1/drafts/{matched.group(1)}/zip-exports/{ZIP_EXPORT_ID}/content'})
-        matched = re.fullmatch(r'/api/v1/drafts/([^/]+)/zip-exports/([^/]+)/content', path)
-        if matched and request.method == 'GET':
-            return route.fulfill(status=200, content_type='application/zip',
-                                 headers={'content-disposition': f'attachment; filename={ZIP_FILENAME}'},
-                                 body=ZIP_BYTES)
-        matched = re.fullmatch(r'/api/v1/drafts/([^/]+)/publish', path)
-        if matched and request.method == 'POST':
+        matched = re.fullmatch(r'/api/v1/scenes/([^/]+)/versions', path)
+        if matched and method == 'GET':
+            return reply(api.listing(matched.group(1)))
+        if matched and method == 'POST':
+            scene_id = matched.group(1)
             body = json.loads(request.post_data or '{}')
-            scene_id = api.scene_in_panel
-            if scene_id is None or body.get('expectedSceneVersion') != api.scene(scene_id)['lockVersion']:
+            api.created_bodies.append(body)
+            existing = next((v for v in api.versions.values() if v['requestKey'] == body['requestKey']), None)
+            if existing:
+                return reply(api.detail(existing))
+            number = max([v['versionNo'] for v in api.versions.values() if v['sceneId'] == scene_id] or [0]) + 1
+            version = api.add_version('77777777-7777-4777-8777-%012d' % number, scene_id, number, body['description'],
+                                      body['descriptor'], [f['relativePath'] for f in body['files']], 'PENDING', body['requestKey'])
+            for registered, stored in zip(body['files'], version['files']):
+                stored['bytes'], stored['sha256'] = registered['bytes'], registered['sha256']
+            return route.fulfill(status=201, content_type='application/json',
+                                 body=json.dumps(api.detail(version), ensure_ascii=False))
+        matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/files/([^/]+)/content', path)
+        if matched and method == 'PUT':
+            version = api.versions[matched.group(1)]
+            item = next(f for f in version['files'] if f['fileId'] == matched.group(2))
+            api.uploads.append(item['relativePath'])
+            item['attempts'] += 1
+            if item['relativePath'] in api.fail_once:
+                api.fail_once.discard(item['relativePath'])
+                item['status'], item['failureReason'] = 'FAILED', '存储暂时不可用'
+                return reply({'code': 'AR_503', 'message': '存储暂时不可用'}, 503)
+            item['status'], item['failureReason'] = 'AVAILABLE', None
+            return reply({'code': 200, **item})
+        matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/files/([^/]+)', path)
+        if matched and method == 'GET':
+            version = api.versions[matched.group(1)]
+            return reply({'code': 200, **next(f for f in version['files'] if f['fileId'] == matched.group(2))})
+        matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/publish', path)
+        if matched and method == 'POST':
+            body = json.loads(request.post_data or '{}')
+            version = api.versions[matched.group(1)]
+            scene = api.scene(version['sceneId'])
+            if body.get('expectedSceneVersion') != scene['lockVersion']:
                 return reply({'code': 409, 'message': '场景修订号不匹配'}, 409)
-            api.published[scene_id] = matched.group(1)
-            api.scene(scene_id)['lockVersion'] += 1
-            return reply({'code': 200, 'id': matched.group(1), 'sceneId': scene_id})
-        matched = re.fullmatch(r'/api/v1/drafts/([^/]+)/files', path)
-        if matched and request.method == 'GET':
-            return reply({'code': 200, 'items': [], 'total': 0})
-        matched = re.fullmatch(r'/api/v1/drafts/([^/]+)', path)
-        if matched and request.method == 'GET':
-            return reply(api.draft(matched.group(1)))
-        unmocked.append(f'{request.method} {path}')
+            api.published[scene['id']] = version['id']
+            scene['lockVersion'] += 1
+            return reply({'code': 200, **api.summary(version)})
+        matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)', path)
+        if matched and method == 'GET':
+            api.version_detail_requests.append(matched.group(1))
+            # 需要检查“切换场景后旧响应迟到”时先挂起，由脚本稍后放行。
+            if api.defer_detail == matched.group(1):
+                api.deferred.append(route)
+                return
+            return reply(api.detail(api.versions[matched.group(1)]))
+        if matched and method == 'DELETE':
+            api.deleted_versions.append(matched.group(1))
+            del api.versions[matched.group(1)]
+            return route.fulfill(status=204)
+        unmocked.append(f'{method} {path}')
         route.fulfill(status=404, content_type='application/json',
                       body='{"code":404,"message":"unmocked request"}')
     return handler
@@ -236,9 +281,8 @@ def column_widths(page):
 
 def assert_layout(page, width, row):
     metrics = button_metrics(page, row)
-    check(f'{width}px 操作列直接展示四个按钮', len(metrics) == 4)
-    check(f'{width}px 操作列按钮组为场景信息/版本与文件/启用或停用/删除',
-          [item['text'] for item in metrics] == ['场景信息', '版本与文件', '启用', '删除'])
+    check(f'{width}px 操作列包含场景信息与版本与文件入口',
+          {'场景信息', '版本与文件'} <= {item['text'] for item in metrics})
     check(f'{width}px 按钮文字未被截断', all(item['scrollWidth'] <= item['clientWidth'] + 1 for item in metrics))
     centers = [item['box']['y'] + item['box']['height'] / 2 for item in metrics]
     check(f'{width}px 按钮不换行', max(centers) - min(centers) <= 1.5)
@@ -247,8 +291,7 @@ def assert_layout(page, width, row):
             for index in range(len(ordered) - 1)]
     check(f'{width}px 按钮不重叠且间距保持', min(gaps) >= 6)
     columns = column_widths(page)
-    check(f'{width}px 状态列紧凑', columns['状态'] <= 100)
-    check(f'{width}px 修订号列紧凑', columns['修订号'] <= 100)
+    check(f'{width}px 名称列获得剩余宽度', columns['名称'] > max(columns['状态'], columns['修订号']))
     check(f'{width}px 操作列预留宽度容纳按钮组',
           columns['操作'] >= ordered[-1]['box']['x'] + ordered[-1]['box']['width'] - ordered[0]['box']['x'])
     check(f'{width}px 无需横向滚动', horizontal_scroller(page) is None)
@@ -259,14 +302,60 @@ def assert_layout(page, width, row):
     return columns
 
 
-def close_clears_scene_query(page, timeout=5):
-    """关闭资源面板后地址栏应移除 draftScene；抽屉关闭按钮的可访问名随 Element Plus 语言包变化，按类名点击。"""
+def panel_closed(page, timeout=5):
+    """关闭面板后地址栏应移除 sceneId 与 versionId；抽屉关闭按钮的可访问名随语言包变化，按类名点击。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if 'draftScene' not in page.url:
+        if 'sceneId' not in page.url and 'versionId' not in page.url:
             return True
         page.wait_for_timeout(100)
     return False
+
+
+def panel(page):
+    # 页面里还有布局自带的抽屉；版本面板是唯一含目录选择输入的那个。
+    return page.locator('.el-drawer').filter(has=page.locator('input[webkitdirectory]'))
+
+
+def close_panel(page):
+    panel(page).locator('.el-drawer__close-btn').click()
+    return panel_closed(page)
+
+
+def open_panel(page, row_text):
+    page.get_by_role('row').filter(has_text=row_text).get_by_role('button', name='版本与文件', exact=True).click()
+    drawer = panel(page)
+    drawer.wait_for(state='visible')
+    return drawer
+
+
+def selected_version_in_url(page):
+    match = re.search(r'versionId=([0-9a-f-]+)', page.url)
+    return match.group(1) if match else None
+
+
+def wait_until(page, predicate, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        page.wait_for_timeout(100)
+    return predicate()
+
+
+def make_package(run):
+    root = run / 'import-package' / 'wedding'
+    if root.parent.exists():
+        for stale in sorted(root.parent.rglob('*'), reverse=True):
+            stale.unlink() if stale.is_file() else stale.rmdir()
+    (root / 'media').mkdir(parents=True)
+    (root / 'models').mkdir()
+    (root / 'notes').mkdir()
+    (root / 'resource.json').write_text(json.dumps(package_descriptor(), ensure_ascii=False), encoding='utf-8')
+    for index, path in enumerate(PACKAGE_FILES):
+        (root / path).write_bytes(bytes([index + 1]) * (64 + index))
+    (root / UNREFERENCED).write_text('不属于 resource.json 引用', encoding='utf-8')
+    return root
 
 
 def main():
@@ -282,6 +371,7 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
     run = report_dir / 'scene-list-ui'
     run.mkdir(parents=True, exist_ok=True)
+    package = make_package(run)
     port = args.port or free_port()
     web = f'http://127.0.0.1:{port}'
     api = Api()
@@ -314,7 +404,7 @@ def main():
                     last = error
             if browser is None:
                 raise SystemExit(f'no usable browser: {last}')
-            context = browser.new_context(viewport={'width': VIEWPORTS[0], 'height': 1000}, accept_downloads=True)
+            context = browser.new_context(viewport={'width': VIEWPORTS[0], 'height': 1000})
             context.add_cookies([{'name': 'Admin-Token', 'value': 'layout-check-token', 'url': web}])
             page = context.new_page()
             # 首次访问需要 Vite 现场编译依赖，慢于 Playwright 默认超时；显式放宽避免把环境慢当成失败。
@@ -338,6 +428,7 @@ def main():
                 page.screenshot(path=str(run / f'scenes-{width}.png'), full_page=True)
             page.set_viewport_size({'width': VIEWPORTS[0], 'height': 1000})
             page.wait_for_timeout(250)
+
             name_cell = long_row.locator('td').nth(0)
             overflow = name_cell.locator('.cell').evaluate('el=>({sw:el.scrollWidth,cw:el.clientWidth})')
             check('超长名称使用省略显示', overflow['sw'] > overflow['cw'] + 1)
@@ -350,25 +441,23 @@ def main():
 
             page.set_viewport_size({'width': NARROW, 'height': 1000})
             page.wait_for_timeout(300)
-            scroller = horizontal_scroller(page)
-            check(f'{NARROW}px 窄窗口允许表格横向滚动', scroller is not None)
             table_box = page.locator('.el-table').first.bounding_box()
             before = button_metrics(page, long_row)
-            check(f'{NARROW}px 未滚动时操作按钮仍在表格可见区内',
-                  all(item['box']['x'] >= table_box['x'] - 0.5
-                      and item['box']['x'] + item['box']['width'] <= table_box['x'] + table_box['width'] + 0.5
-                      for item in before))
-            check('表格可滚动到最右侧', scroll_body_to_end(page))
-            page.wait_for_timeout(200)
-            after = button_metrics(page, long_row)
-            check(f'{NARROW}px 横向滚动后操作列固定在右侧',
-                  [item['text'] for item in after] == ['场景信息', '版本与文件', '启用', '删除'])
-            check(f'{NARROW}px 横向滚动后按钮仍完整可见',
-                  all(item['scrollWidth'] <= item['clientWidth'] + 1 for item in after)
-                  and all(item['box']['x'] >= table_box['x'] - 0.5
-                          and item['box']['x'] + item['box']['width'] <= table_box['x'] + table_box['width'] + 0.5
-                          for item in after))
-            page.screenshot(path=str(run / f'scenes-{NARROW}-scrolled.png'), full_page=True)
+            inside = lambda items: all(item['box']['x'] >= table_box['x'] - 0.5
+                                       and item['box']['x'] + item['box']['width'] <= table_box['x'] + table_box['width'] + 0.5
+                                       for item in items)
+            check(f'{NARROW}px 操作按钮在表格可见区内且文字完整',
+                  inside(before) and all(item['scrollWidth'] <= item['clientWidth'] + 1 for item in before))
+            # 列再多或窗口再窄时表格会横向滚动；此时操作列必须固定在右侧，滚动前后按钮仍完整可见。
+            if horizontal_scroller(page) is not None:
+                check('表格可滚动到最右侧', scroll_body_to_end(page))
+                page.wait_for_timeout(200)
+                after = button_metrics(page, long_row)
+                check(f'{NARROW}px 横向滚动后操作列固定在右侧且按钮组不变',
+                      [item['text'] for item in after] == [item['text'] for item in before] and inside(after))
+            check(f'{NARROW}px 版本与文件入口可点且未被遮挡',
+                  long_row.get_by_role('button', name='版本与文件', exact=True).click(trial=True) is None)
+            page.screenshot(path=str(run / f'scenes-{NARROW}.png'), full_page=True)
 
             page.set_viewport_size({'width': 1440, 'height': 1000})
             page.wait_for_timeout(200)
@@ -386,100 +475,126 @@ def main():
             check('场景信息弹窗不再包含版本与文件按钮',
                   dialog.get_by_role('button', name='版本与文件', exact=True).count() == 0)
             values = [field.input_value() for field in dialog.locator('input').all()]
-            check('场景信息弹窗展示名称字段', SHORT_NAME in values)
+            check('场景信息弹窗只展示名称字段', values == [SHORT_NAME])
             footer.get_by_role('button', name='关闭', exact=True).click()
             dialog.wait_for(state='hidden')
 
-            api.detail_requests.clear()
-            short_row.get_by_role('button', name='版本与文件', exact=True).click()
-            drawer = page.locator('.el-drawer').filter(has_text='所属场景').first
-            drawer.get_by_role('heading', name='内容版本草稿 · ' + SHORT_NAME).wait_for()
-            check('版本与文件入口直接打开该场景资源面板', f'draftScene={SHORT_ID}' in page.url)
-            check('资源面板显示所属场景名称', f'所属场景：{SHORT_NAME}' in drawer.inner_text())
-            check('资源面板按点击行加载场景', api.detail_requests == [SHORT_ID])
-            check('打开资源面板未经过场景信息弹窗', not dialog.is_visible())
+            # 打开第一个场景：按点击行加载，没有发布时默认选中最近版本，选择写入地址栏。
+            api.scene_detail_requests.clear()
+            drawer = open_panel(page, SHORT_NAME)
+            drawer.get_by_text(SHORT_VERSION).wait_for()
+            check('版本与文件入口直接打开该场景面板', f'sceneId={SHORT_ID}' in page.url)
+            check('面板按点击行加载场景', api.scene_detail_requests == [SHORT_ID])
+            check('面板显示所属场景名称', SHORT_NAME in drawer.inner_text())
+            check('没有发布版本时默认选中最近版本', selected_version_in_url(page) == SHORT_VERSION)
+            check('打开面板未经过场景信息弹窗', not dialog.is_visible())
 
             before_publish = api.calls.count('GET /api/v1/scenes')
-            drawer.get_by_role('button', name='发布', exact=True).click()
+            drawer.get_by_role('row').filter(has_text=SHORT_DESCRIPTION).get_by_role('button', name='发布', exact=True).click()
             page.get_by_role('button', name='确认发布', exact=True).click()
             page.get_by_role('row').filter(has_text=SHORT_NAME).get_by_text('4', exact=True).wait_for(timeout=10000)
             check('发布后返回列表刷新修订号',
                   api.calls.count('GET /api/v1/scenes') > before_publish and api.scene(SHORT_ID)['lockVersion'] == 4)
-            check('发布后资源面板显示新的发布版本', '布局检查发布版本' in drawer.inner_text())
-            drawer.locator('.el-drawer__close-btn').click()
-            check('关闭资源面板回到场景列表', close_clears_scene_query(page))
+            check('发布后记录的当前发布版本是所选版本', api.published.get(SHORT_ID) == SHORT_VERSION)
+            check('发布后面板保持选中该版本', selected_version_in_url(page) == SHORT_VERSION)
+            check('关闭面板回到场景列表', close_panel(page))
 
-            api.detail_requests.clear()
-            page.get_by_role('row').filter(has_text=LONG_NAME[:12]).get_by_role('button', name='版本与文件', exact=True).click()
-            long_drawer = page.locator('.el-drawer').filter(has_text='所属场景').first
-            long_drawer.get_by_role('heading', name='内容版本草稿 · ' + LONG_NAME).wait_for()
-            check('第二个场景的资源面板对应正确',
-                  f'draftScene={LONG_ID}' in page.url and api.detail_requests == [LONG_ID])
-            long_drawer.locator('.el-drawer__close-btn').click()
-            check('关闭第二个场景资源面板回到列表', close_clears_scene_query(page))
+            # 第二个场景有两个版本：默认选最近版本；手动切换后刷新页面仍保留选择。
+            api.scene_detail_requests.clear()
+            drawer = open_panel(page, LONG_NAME[:12])
+            drawer.get_by_text(LONG_VERSION_2).wait_for()
+            check('第二个场景的面板对应正确', f'sceneId={LONG_ID}' in page.url and api.scene_detail_requests == [LONG_ID])
+            check('默认选中最近版本', selected_version_in_url(page) == LONG_VERSION_2)
+            drawer.get_by_role('row').filter(has_text=LONG_DESCRIPTIONS[LONG_VERSION_1]).get_by_role('button', name='查看', exact=True).click()
+            drawer.get_by_text(LONG_VERSION_1).wait_for()
+            check('手动切换版本写入地址栏', selected_version_in_url(page) == LONG_VERSION_1)
+            api.version_detail_requests.clear()
+            page.reload()
+            panel(page).get_by_text(LONG_VERSION_1).wait_for()
+            check('刷新后保留手动选择的版本', selected_version_in_url(page) == LONG_VERSION_1
+                  and api.version_detail_requests[:1] == [LONG_VERSION_1])
+            drawer = panel(page)
+            page.screenshot(path=str(run / 'panel-1440.png'), full_page=True)
+            check('1440px 下导入入口可点且未被遮挡',
+                  drawer.get_by_role('button', name='导入资源目录', exact=True).click(trial=True) is None)
+            page.set_viewport_size({'width': NARROW, 'height': 1000})
+            page.wait_for_timeout(300)
+            row_buttons = drawer.get_by_role('row').filter(has_text=LONG_DESCRIPTIONS[LONG_VERSION_2]).get_by_role('button')
+            for index in range(row_buttons.count()):
+                if row_buttons.nth(index).is_enabled():
+                    row_buttons.nth(index).click(trial=True)
+            check(f'{NARROW}px 下版本行按钮可点且未被遮挡', row_buttons.count() >= 2)
+            check(f'{NARROW}px 下导入入口可点且未被遮挡',
+                  drawer.get_by_role('button', name='导入资源目录', exact=True).click(trial=True) is None)
+            page.screenshot(path=str(run / f'panel-{NARROW}.png'), full_page=True)
+            page.set_viewport_size({'width': 1440, 'height': 1000})
+            page.wait_for_timeout(200)
 
-            # 当前对象的 ZIP 下载提示必须可用；切换版本后上一对象的提示、错误与准备状态必须清除。
-            api.zip_stall = False
-            long_row = page.get_by_role('row').filter(has_text=LONG_NAME[:12])
-            long_row.get_by_role('button', name='版本与文件', exact=True).click()
-            version_drawer = page.locator('.el-drawer').filter(has_text='所属场景').first
-            version_drawer.get_by_role('heading', name='内容版本草稿 · ' + LONG_NAME).wait_for()
-            view_files = version_drawer.get_by_role('button', name='查看文件', exact=True)
-            view_files.first.click()
-            version_drawer.get_by_role('heading').filter(has_text=LONG_DRAFT_ID).wait_for()
-            zip_button = version_drawer.get_by_role('button', name='下载 ZIP', exact=True)
-            zip_button.wait_for()
-            with page.expect_download() as zip_download:
-                zip_button.click()
-            version_drawer.get_by_text('ZIP 已开始下载', exact=True).wait_for(timeout=10000)
-            zip_name = zip_download.value.suggested_filename
-            check('当前对象下载 ZIP 后显示已开始下载',
-                  zip_name.startswith('layout-check') and zip_name.endswith('.zip')
-                  and version_drawer.locator('.el-alert--error').count() == 0)
+            # 取消删除确认不产生请求；确认删除后该版本从列表消失。
+            drawer.get_by_role('row').filter(has_text=LONG_DESCRIPTIONS[LONG_VERSION_2]).get_by_role('button', name='删除', exact=True).click()
+            confirm = page.locator('.el-message-box')
+            confirm.wait_for()
+            confirm.get_by_role('button', name='取消', exact=True).click()
+            confirm.wait_for(state='hidden')
+            check('取消删除版本不发出请求且版本仍在',
+                  api.deleted_versions == [] and drawer.get_by_role('row').filter(has_text=LONG_DESCRIPTIONS[LONG_VERSION_2]).count() == 1)
+            drawer.get_by_role('row').filter(has_text=LONG_DESCRIPTIONS[LONG_VERSION_2]).get_by_role('button', name='删除', exact=True).click()
+            confirm.wait_for()
+            confirm.get_by_role('button', name='永久删除', exact=True).click()
+            check('确认删除后版本被删除并从列表移除',
+                  wait_until(page, lambda: api.deleted_versions == [LONG_VERSION_2]
+                             and drawer.get_by_role('row').filter(has_text=LONG_DESCRIPTIONS[LONG_VERSION_2]).count() == 0))
+            check('删除后面板选中剩余版本', selected_version_in_url(page) == LONG_VERSION_1)
+            check('关闭第二个场景面板回到列表', close_panel(page))
 
-            view_files.nth(1).click()
-            version_drawer.get_by_role('heading').filter(has_text=LONG_SPARE_ID).wait_for()
-            check('切换版本后清除上一对象的 ZIP 提示与下载错误',
-                  version_drawer.get_by_text('ZIP 已开始下载', exact=True).count() == 0
-                  and version_drawer.get_by_text('正在准备 ZIP', exact=False).count() == 0
-                  and version_drawer.locator('.el-alert--error').count() == 0)
-            version_drawer.locator('.el-drawer__close-btn').click()
-            check('切换版本后关闭资源面板回到列表', close_clears_scene_query(page))
-
-            # 准备期间切换场景：旧请求稍后返回也不得写回新面板，关闭重开同样适用。
-            api.zip_stall = True
-            api.zip_deferred.clear()
-            short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)
-            short_row.get_by_role('button', name='版本与文件', exact=True).click()
-            stalled_drawer = page.locator('.el-drawer').filter(has_text='所属场景').first
-            stalled_zip = stalled_drawer.get_by_role('button', name='下载 ZIP', exact=True)
-            stalled_zip.wait_for()
-            stalled_zip.click()
-            deadline = time.monotonic() + 10
-            while not api.zip_deferred and time.monotonic() < deadline:
-                page.wait_for_timeout(100)
-            check('准备中的 ZIP 请求可保持等待',
-                  len(api.zip_deferred) == 1
-                  and stalled_drawer.get_by_text('正在准备 ZIP', exact=False).count() >= 1)
-            stalled_drawer.locator('.el-drawer__close-btn').click()
-            check('准备期间关闭资源面板回到列表', close_clears_scene_query(page))
-
-            long_row.get_by_role('button', name='版本与文件', exact=True).click()
-            reopened_drawer = page.locator('.el-drawer').filter(has_text='所属场景').first
-            reopened_drawer.get_by_role('heading', name='内容版本草稿 · ' + LONG_NAME).wait_for()
-            check('关闭重开的新面板不显示上一对象的准备提示',
-                  reopened_drawer.get_by_text('正在准备 ZIP', exact=False).count() == 0
-                  and reopened_drawer.locator('.el-alert--error').count() == 0)
-            api.zip_deferred.pop().fulfill(
-                status=503, content_type='application/json',
-                body=json.dumps({'code': 'AR_503', 'message': 'ZIP 准备失败，请稍后重试'}, ensure_ascii=False))
-            api.zip_stall = False
+            # 迟到响应：第一个场景的版本详情挂起，切到第二个场景后再放行，不得写回新面板。
+            api.defer_detail = SHORT_VERSION
+            api.deferred.clear()
+            drawer = open_panel(page, SHORT_NAME)
+            check('版本详情请求保持挂起', wait_until(page, lambda: len(api.deferred) == 1))
+            check('关闭挂起中的面板回到列表', close_panel(page))
+            drawer = open_panel(page, LONG_NAME[:12])
+            drawer.get_by_text(LONG_VERSION_1).wait_for()
+            api.defer_detail = None
+            api.deferred.pop().fulfill(status=200, content_type='application/json',
+                                       body=json.dumps(api.detail(api.versions[SHORT_VERSION]), ensure_ascii=False))
             page.wait_for_timeout(500)
-            check('上一对象的 ZIP 失败不污染新面板',
-                  reopened_drawer.get_by_text('ZIP 准备失败', exact=False).count() == 0
-                  and reopened_drawer.locator('.el-alert--error').count() == 0)
-            reopened_drawer.locator('.el-drawer__close-btn').click()
-            check('下载状态检查后关闭资源面板回到列表', close_clears_scene_query(page))
+            check('上一场景的迟到详情不写回新面板',
+                  SHORT_VERSION not in drawer.inner_text() and selected_version_in_url(page) == LONG_VERSION_1)
+            check('迟到响应没有改写地址栏场景', f'sceneId={LONG_ID}' in page.url)
+            check('关闭迟到响应检查的面板', close_panel(page))
+
+            # 导入目录：只上传被 resource.json 引用的文件，失败只重传未完成文件，已入库文件不重复发送。
+            drawer = open_panel(page, SHORT_NAME)
+            drawer.get_by_text(SHORT_VERSION).wait_for()
+            api.uploads.clear()
+            api.created_bodies.clear()
+            api.fail_once = {'models/high-0.c.ply'}
+            drawer.locator('input[type=file]').set_input_files(str(package))
+            drawer.get_by_role('button', name='开始导入', exact=True).wait_for()
+            drawer.get_by_role('button', name='开始导入', exact=True).click()
+            failed_shown = wait_until(page, lambda: drawer.locator('.el-alert--error').count() > 0, timeout=30)
+            check('服务端拒绝单个文件后显示错误并保留继续上传入口',
+                  failed_shown and drawer.get_by_role('button', name='继续上传', exact=True).count() >= 1)
+            check('创建版本只提交一次且只登记被引用的文件',
+                  len(api.created_bodies) == 1
+                  and sorted(f['relativePath'] for f in api.created_bodies[0]['files']) == PACKAGE_FILES
+                  and api.created_bodies[0]['descriptor'] == package_descriptor())
+            check('登记的每个文件都带大小与 SHA-256',
+                  all(f['bytes'] > 0 and re.fullmatch(r'[0-9a-f]{64}', f['sha256']) for f in api.created_bodies[0]['files']))
+            uploaded_before = list(api.uploads)
+            check('失败前的文件各上传一次且未引用文件不上传',
+                  uploaded_before == ['media/poster.jpg', 'models/high-0.c.ply'] and UNREFERENCED not in uploaded_before)
+            drawer.get_by_role('button', name='继续上传', exact=True).first.click()
+            check('继续上传后全部文件入库',
+                  wait_until(page, lambda: all(f['status'] == 'AVAILABLE' for v in api.versions.values()
+                                               if v['requestKey'] for f in v['files'])))
+            check('继续上传只发送失败和尚未上传的文件',
+                  api.uploads[len(uploaded_before):] == ['models/high-0.c.ply', 'models/std-0.c.ply', 'models/std-1.c.ply', 'settings.json'])
+            check('已入库文件没有被重复上传', api.uploads.count('media/poster.jpg') == 1)
+            check('创建版本没有因继续上传重复提交', len(api.created_bodies) == 1)
+            page.screenshot(path=str(run / 'panel-import-1440.png'), full_page=True)
+            check('导入完成后关闭面板回到列表', close_panel(page))
 
             short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)
             short_row.get_by_role('button', name='停用', exact=True).click()
