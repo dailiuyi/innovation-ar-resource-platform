@@ -49,7 +49,7 @@
     <el-table :data="versions" highlight-current-row :current-row-key="selected?.id" row-key="id">
       <el-table-column label="版本" width="70"><template #default="{row}">v{{row.versionNo}}</template></el-table-column>
       <el-table-column prop="description" label="版本说明" min-width="100" show-overflow-tooltip />
-      <el-table-column label="状态" width="140"><template #default="{row}"><el-tag :type="statusType(row.uploadStatus)">{{uploadStates[row.uploadStatus]}}</el-tag><el-tag v-if="row.published" type="success" class="tag-gap">当前发布</el-tag></template></el-table-column>
+      <el-table-column label="状态" width="200"><template #default="{row}"><el-tag :type="statusType(row.uploadStatus)">{{uploadStates[row.uploadStatus]}}</el-tag><el-tag v-if="row.published" type="success" class="tag-gap">当前发布</el-tag></template></el-table-column>
       <el-table-column label="文件" width="110"><template #default="{row}">{{row.availableCount}} / {{row.fileCount}}<span v-if="row.failedCount">，失败 {{row.failedCount}}</span></template></el-table-column>
       <el-table-column label="总大小" width="90"><template #default="{row}">{{size(row.totalBytes)}}</template></el-table-column>
       <el-table-column label="创建时间" width="140"><template #default="{row}">{{formatTime(row.createdAt)}}</template></el-table-column>
@@ -395,16 +395,17 @@ watch(()=>props.sceneId,async id=>{
 onBeforeUnmount(()=>{cancel();++runToken})
 </script>
 <style scoped>
-.version-detail{margin-top:24px}.action-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}.hint{color:#909399}.el-alert{margin-bottom:16px}
-.digest{word-break:break-all}.file-detail{padding:4px 16px;line-height:1.8}.tag-gap{margin-left:8px}.group-meta{margin-left:16px;color:#909399;font-weight:normal}
-.import-card{border:1px solid #d9ecff;background:#ecf5ff;border-radius:4px;padding:16px 20px;margin:8px 0 20px}
+.version-detail{margin-top:24px}.action-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}.hint{color:var(--el-text-color-secondary)}.el-alert{margin-bottom:16px}
+.digest{word-break:break-all}.file-detail{padding:4px 16px;line-height:1.8}.tag-gap{margin-left:8px}.group-meta{margin-left:16px;color:var(--el-text-color-secondary);font-weight:normal}
+.import-card{border:1px solid var(--el-color-primary-light-5);background:color-mix(in srgb,var(--el-color-primary) 10%,var(--el-bg-color));color:var(--el-text-color-primary);border-radius:4px;padding:16px 20px;margin:8px 0 20px}
 .import-card h3{margin:0 0 12px;font-size:16px}
-.published-card{border:1px solid #e1f3d8;background:#f0f9eb;border-radius:4px;padding:16px 20px;margin:8px 0 20px}
-.published-card.empty{border-color:#ebeef5;background:#f5f7fa}
+.published-card{border:1px solid var(--el-color-success-light-5);background:color-mix(in srgb,var(--el-color-success) 10%,var(--el-bg-color));color:var(--el-text-color-primary);border-radius:4px;padding:16px 20px;margin:8px 0 20px}
+.published-card.empty{border-color:var(--el-border-color-light);background:var(--el-fill-color-light)}
 .published-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .published-card h3{margin:0;font-size:16px}
 .published-card p{margin:6px 0}
-.meta-label{display:inline-block;width:72px;color:#909399}
-.published-note,.published-empty{color:#909399}
+.meta-label{display:inline-block;width:72px;color:var(--el-text-color-secondary)}
+.published-note,.published-empty{color:var(--el-text-color-secondary)}
 .published-empty{text-align:center;margin:24px 0}
+:deep(.el-table--enable-row-hover .el-table__body tr.current-row>td.el-table__cell),:deep(.el-table__body tr.current-row>td.el-table__cell){background-color:color-mix(in srgb,var(--el-color-primary) 14%,var(--el-bg-color))}
 </style>
