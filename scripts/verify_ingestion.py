@@ -275,7 +275,8 @@ def scenario(s, check):
     actions = [(a['action'], a['detail']) for a in audits if a['sceneId'] == scene_id]
     check('version lifecycle audits are written', {'VERSION_CREATE', 'VERSION_EDIT', 'VERSION_PUBLISH', 'VERSION_DELETE_REQUEST',
                                                    'VERSION_DELETE'} <= {name for name, _ in actions})
-    check('repeat publish wrote no second audit', sum(1 for name, detail in actions if name == 'VERSION_PUBLISH' and v1_id in detail) == 1)
+    check('repeat publish wrote no second audit', sum(1 for name, detail in actions
+                                                      if name == 'VERSION_PUBLISH' and json.loads(detail).get('toVersionId') == v1_id) == 1)
 
     big = None
     if config['maxBytes'] >= 22 * MIB and config['versionMaxBytes'] >= 22 * MIB:
@@ -337,10 +338,16 @@ def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
             for width in (1440, 1024):
                 page.set_viewport_size({'width': width, 'height': 1000})
                 buttons = [b for b in drawer.get_by_role('button').all() if b.is_visible()]
-                obscured = [b.inner_text() for b in buttons if not b.evaluate(
-                    """el => { const r = el.getBoundingClientRect(); if (r.width === 0) return true;
-                       const top = document.elementFromPoint(Math.min(r.x + r.width / 2, innerWidth - 1), r.y + r.height / 2);
-                       return !!top && (top === el || el.contains(top)); }""")]
+                obscured = []
+                for b in buttons:
+                    b.scroll_into_view_if_needed()
+                    # Fully inside the viewport and the topmost element at its centre is the button itself.
+                    if not b.evaluate(
+                            """el => { const r = el.getBoundingClientRect();
+                               if (r.x < 0 || r.x + r.width > innerWidth) return false;
+                               const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                               return !!top && (top === el || el.contains(top)); }"""):
+                        obscured.append(b.inner_text() or b.get_attribute('class'))
                 check(f'browser panel buttons are not covered at {width}px', not obscured and len(buttons) > 0)
             version_row = drawer.get_by_role('row').filter(has_text='v1')
             version_row.get_by_role('button', name='发布', exact=True).click()
