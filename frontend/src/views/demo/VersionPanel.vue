@@ -14,7 +14,7 @@
       </div>
       <template v-if="published">
         <p><span class="meta-label">版本</span>v{{published.versionNo}}　{{published.description || '（无说明）'}}</p>
-        <p><span class="meta-label">文件</span>{{published.fileCount}} 个，共 {{size(published.totalBytes)}}</p>
+        <p><span class="meta-label">发布</span>{{formatTime(published.publishedAt)}}，{{published.publishedByName}}</p>
         <p class="published-note">已发布版本的描述和文件固定，仅可修改说明；导入新版本不会改变它。</p>
         <el-button link type="primary" @click="selectVersion(published.id)">查看详情</el-button>
       </template>
@@ -47,13 +47,13 @@
     <p v-if="progressText" role="status">{{progressText}}</p>
     <el-progress v-if="busy" :percentage="progress" />
     <el-table :data="versions" highlight-current-row :current-row-key="selected?.id" row-key="id">
-      <el-table-column label="版本" width="90"><template #default="{row}">v{{row.versionNo}}</template></el-table-column>
-      <el-table-column prop="description" label="版本说明" min-width="200" show-overflow-tooltip />
-      <el-table-column label="状态" width="120"><template #default="{row}"><el-tag :type="statusType(row.uploadStatus)">{{uploadStates[row.uploadStatus]}}</el-tag><el-tag v-if="row.published" type="success" class="tag-gap">当前发布</el-tag></template></el-table-column>
-      <el-table-column label="文件" width="170"><template #default="{row}">{{row.availableCount}} / {{row.fileCount}}<span v-if="row.failedCount">，失败 {{row.failedCount}}</span></template></el-table-column>
-      <el-table-column label="总大小" width="110"><template #default="{row}">{{size(row.totalBytes)}}</template></el-table-column>
-      <el-table-column label="创建时间" width="160"><template #default="{row}">{{formatTime(row.createdAt)}}</template></el-table-column>
-      <el-table-column label="操作" width="220"><template #default="{row}">
+      <el-table-column label="版本" width="70"><template #default="{row}">v{{row.versionNo}}</template></el-table-column>
+      <el-table-column prop="description" label="版本说明" min-width="100" show-overflow-tooltip />
+      <el-table-column label="状态" width="140"><template #default="{row}"><el-tag :type="statusType(row.uploadStatus)">{{uploadStates[row.uploadStatus]}}</el-tag><el-tag v-if="row.published" type="success" class="tag-gap">当前发布</el-tag></template></el-table-column>
+      <el-table-column label="文件" width="110"><template #default="{row}">{{row.availableCount}} / {{row.fileCount}}<span v-if="row.failedCount">，失败 {{row.failedCount}}</span></template></el-table-column>
+      <el-table-column label="总大小" width="90"><template #default="{row}">{{size(row.totalBytes)}}</template></el-table-column>
+      <el-table-column label="创建时间" width="140"><template #default="{row}">{{formatTime(row.createdAt)}}</template></el-table-column>
+      <el-table-column label="操作" width="200"><template #default="{row}">
         <el-button link type="primary" :disabled="busy||removing" @click="selectVersion(row.id)">查看</el-button>
         <el-button v-if="row.published" link disabled>当前发布</el-button>
         <el-button v-else link type="primary" :disabled="busy||removing||publishing||row.uploadStatus!=='READY'" @click="publish(row)">{{published?'替换发布':'发布'}}</el-button>
