@@ -446,3 +446,23 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
   - 日常实例 18081 没有升级，V017 也没有在日常库执行。
   - 参考播放器和 `verify_4dgs.py` 按用户决定保留，未适配，对 0.5.0 不可用。
   - Unity 和手机端没有验证。
+
+## 2026-10-29 部署到日常实例（去掉描述，V017）
+
+- 用户授权部署，并要求 `https://4dgs.elma-gohan.xyz` 运行最新代码。部署源是本地分支 `remove-resource-descriptor` 的提交 `e0b1363`；没有合并到 main，也没有推送。
+- 部署前日常库在 Flyway 16，有 3 个场景、1 个版本、49 个文件、1 个发布指针、105 条审计和 3 个账号。
+  - 备份：`pg_dump -Fc` 写到 `.local/backups/daily-18081-before-v017-20261029.dump`（0600，sha256 `f6e2efb0…d0a4ca`），`pg_restore --list` 能读出 144 个条目。
+  - 回退镜像：旧镜像另打标签 `innovation-ar-resource-platform-backend:before-v017` 和 `innovation-ar-resource-platform-gateway:before-v017`。
+- 部署命令：`docker compose --env-file config/compose.env -f compose.yaml -f .local/viewer-18081/compose.override.yaml build backend gateway`，然后 `up -d --no-build --wait --wait-timeout 240 backend gateway`。PostgreSQL 和 Redis 没有重建，参考播放器的本地 override 照旧挂载。
+  - 新镜像：backend `sha256:73078001b3e96d745575ffe875375100c3e1916b2403fa88b8bb3dd67e71143f`，gateway `sha256:f88792b0fc7774087b21dc3b17a9219372a6fec0a721adbb07560840efcb1dfc`。四个服务都是 healthy。
+- 部署后数据库：Flyway 016、017 都成功；`descriptor` 列已删除；场景、版本、文件、发布指针、审计、账号的数量都和部署前一致。
+- `http://192.168.0.12:18081` 和 `https://4dgs.elma-gohan.xyz` 实测结果相同：
+  - `/healthz` 返回 200；`/prod-api/captchaImage` 业务码 200。
+  - 匿名目录 1 项，字段只有 `id,name,versionId,versionNo`。
+  - 详情返回平铺文件清单：49 个文件，共 1,534,783,789 B。
+  - 第一个文件的 `Range: bytes=0-15` 返回 206。
+  - 公网实际下发的 `VersionPanel-DKCh9XDu.js` 包含新提示「所选目录下的全部文件都会上传」，已经没有「目录根缺少」和 `resource.json`。
+- 未验证：
+  - 管理员登录和后台真实点击导入（bootstrap 账号已退役，没有生成会话）。
+  - 18081 上挂载的参考播放器：按代码推断，它读取已删除的 `variants`/`descriptor`，现在不可用，但没有实测。
+- 回退步骤：先把两个 `before-v017` 镜像重新打回 `infra-v1` 标签，再从备份恢复数据库（V017 删掉的列只能这样找回），最后 `up -d --no-build` 重建 backend 和 gateway。

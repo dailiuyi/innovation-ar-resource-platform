@@ -78,6 +78,6 @@
 - 决定：删除 `resource.json` v1 描述。一个内容版本只是所选目录的固定文件清单（相对路径、大小、SHA256）加可编辑说明。
 - 原因（用户）：档位、分段、时间、变换和媒体用途的逻辑在 Unity 客户端定义，平台不再重复声明。
 - 改动：后端删除 `SceneResourceDescriptor`/`ResourceDescriptorValidator`，发布只要求全部文件 AVAILABLE，幂等重试比较说明与文件集合；迁移 `V017__remove_version_descriptor.sql` 删除 `ar_scene_version.descriptor`。契约升为 `4DGS Scene Resource API 0.5.0`（不兼容）：创建版本 body `{requestKey, description, files}`，管理详情无 `descriptor`，客户端目录项只有 `id,name,versionId,versionNo`，详情为平铺文件清单，Content-Type 只按扩展名；删除描述 Schema 与示例。后台“导入资源目录”上传所选目录下全部文件（去掉顶层目录名，空选择和零字节文件提前拒绝），“继续上传”要求路径集合与大小一致。`download_scene.py` 去掉 `--variant`，下载整个版本到 `<output>/<sceneId>/<versionId>/payload/`；`import_scene_package.py` 改为 `--state-file`，登记包根下全部普通文件；删除 `prepare_4dgs_samples.py`；文档同步更新。
-- V017 未在日常库 18081 执行；执行前须备份并获批准（该列数据不可恢复）。
-- 按用户决定保留但已不可用：参考播放器适配（`scripts/reference_viewer/catalog-adapter.js`、`platform.js`、`prepare_reference_viewer.py`）与 `scripts/verify_4dgs.py` 仍读取 `descriptor`/`variants`，对 0.5.0 接口不可用。日常实例 18081 仍运行旧后端，上一节挂载的播放器在日常实例升级到本分支之前不受影响，升级后会失效。阶段 5 播放验收只作旧描述基线的历史记录。
+- V017 起初只在隔离实例执行。用户随后要求部署，2026-10-29 已在日常实例 18081 执行：先备份数据库，再重建 backend/gateway 并升级到 V017，过程见 docs/06-validation.md「部署到日常实例」。
+- 按用户决定保留但已不可用：参考播放器适配（`scripts/reference_viewer/catalog-adapter.js`、`platform.js`、`prepare_reference_viewer.py`）与 `scripts/verify_4dgs.py` 仍读取 `descriptor`/`variants`，对 0.5.0 接口不可用。日常实例升级后，上一节挂载在 18081 的播放器同样不可用；override 仍保留。阶段 5 播放验收只作旧描述基线的历史记录。
 - 验证：见 docs/06-validation.md 同日条目。

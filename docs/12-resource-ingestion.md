@@ -4,7 +4,7 @@
 
 ## 数据与状态
 
-实际迁移随应用 Flyway 执行：`V014__remove_scene_geography.sql` 删除地址、经纬度和坐标系；`V015__scene_product_versions.sql` 是**破坏性清洁切换**，明确清空旧成品业务记录（`ar_audit`、旧草稿/文件/ZIP 表和 `ar_scene`）后删除旧表，不涉及任何 `sys_*` 账号和菜单表，也不能对日常库自动执行；`V017__remove_version_descriptor.sql` 删除 `ar_scene_version.descriptor` 列（该列数据不可恢复，日常库 18081 执行前须备份并获批准，尚未在日常库执行）。根目录 `database/migrations` 仍是历史候选设计。
+实际迁移随应用 Flyway 执行：`V014__remove_scene_geography.sql` 删除地址、经纬度和坐标系；`V015__scene_product_versions.sql` 是**破坏性清洁切换**，明确清空旧成品业务记录（`ar_audit`、旧草稿/文件/ZIP 表和 `ar_scene`）后删除旧表，不涉及任何 `sys_*` 账号和菜单表，也不能对日常库自动执行；`V017__remove_version_descriptor.sql` 删除 `ar_scene_version.descriptor` 列（该列数据不可恢复，执行前须备份并获批准；日常库 18081 已于 2026-10-29 经授权备份后执行，见 [验证记录](06-validation.md)）。根目录 `database/migrations` 仍是历史候选设计。
 
 - `ar_scene`：只保留名称、启停、修订号及时间/删除信息，加当前发布指针 `published_version_id`、`published_at`、`published_by_*`（复合外键保证不跨场景发布）。
 - `ar_scene_version`：不可变版本，含场景内版本号、`request_key`、说明、说明修订号。同场景同请求键幂等。
