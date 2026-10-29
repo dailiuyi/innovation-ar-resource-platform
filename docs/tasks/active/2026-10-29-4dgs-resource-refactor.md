@@ -16,7 +16,7 @@
 - [x] 阶段 2：存储接口收敛为 `store`/`recover`（提交 530c877）。存储门禁通过（`.local/stage2-gate`/`.local/stage2_gate.py`，44 项）。
 - [x] 阶段 3：成品版本业务、后台与调用方切换（后端 f2b09b1、前端 31ccec3、工具 92786e3，集成修复 f519283、faeafaa、fbe07da）。后端门禁（V015 空库/升级、HTTP 生命周期、删除失败 503 与启动恢复）58 项通过；经隔离网关的集成门禁、真实 Chrome 后台操作见下。`scripts/test_scene_package.mjs` 与 `agent_check.py --profile frontend` 的全量结果由主代理统一运行并记录。
 - [x] 阶段 4：匿名成品读取、Range 补全与完整下载参考工具（提交 69dc9b0、8ee4725）。`ClientSceneController`/`ClientSceneService`、`SecurityConfig` 逐路由放行、网关 `/api/v1/client/`、后缀 Range 与 `HttpRangeTest`、`scripts/download_scene.py`、`artifact_transfer.py` 控制目录/边写边算/OS 锁。门禁 73 项通过，见下。
-- [~] 阶段 5：真实样包与参考客户端工具已交付（提交 5e7d0e6）；三份真实样包导入/发布/匿名读取/完整下载/JFR 证据通过，参考播放器真实播放因参考仓库在本机缺失阻塞。验收记录见 [真实样包验收记录](../../20-4dgs-sample-validation.md)。
+- [x] 阶段 5：真实样包与参考客户端闭环（提交 5e7d0e6 及后续）；三份真实样包导入/发布/匿名读取/完整下载/JFR 证据通过，真实 Chrome 对参考播放器（构建 20261016/230726）播放 wedding 标准、wedding 高清、dance_color 标准跨 5 秒通过，`verify_4dgs.py` 103 项通过、0 阻塞、退出码 0。手机/原生、音频和 shiku_dtwd 窗口未验收。验收记录见 [真实样包验收记录](../../20-4dgs-sample-validation.md)。
 
 已确认决定：
 
@@ -55,17 +55,17 @@
 
 阶段 5（提交 5e7d0e6 与随后的文档提交；新 Jar sha256 `fa7eb0d4…ac7cc`，63 项测试 0 失败/错误/跳过；实例由 `prepare_4dgs_check.py prepare` 重启并给测试后端开 JFR）：
 
-- `scripts/prepare_4dgs_samples.py`、`import_scene_package.py`、`prepare_reference_viewer.py`（含 `scripts/reference_viewer/` 适配模块和联调页模板）、`verify_4dgs.py` 已实现；`prepare_4dgs_check.py` 的参考播放器覆盖修复（正则加引号、前缀不遮蔽场景 ID 路由、跨源隔离头）并新增 JFR 配置。永久回归：`scripts/test_prepare_reference_viewer.py`（10 项）、`scripts/test_verify_4dgs.py`（4 项）、`node --test scripts/test_reference_catalog_adapter.mjs`（8 项）；`harness.py check --profile quick` 通过。
-- 真实运行 `verify_4dgs.py`（计划命令块；`--viewer-root` 指向不存在的目录）：68 项通过、4 项阻塞、退出码 4。覆盖：`run_http_checks` 78 项（含 1440/1024 宽真实 Chrome）；三份样包导入/发布/匿名读取与逐文件 SHA-256；Range/HEAD；wedding 与 dance_color 标准档完整下载（无高清/VR 字节）；JFR 证明上传、列表、详情、发布幂等、HEAD、Range、重启不读取存储内容，Range 32 字节只读 32 字节，恢复夹具只读该文件一次。耗时与明细见验收记录。
+- `scripts/prepare_4dgs_samples.py`、`import_scene_package.py`、`prepare_reference_viewer.py`（含 `scripts/reference_viewer/` 适配模块、联调页和入口页模板）、`verify_4dgs.py` 已实现；`prepare_4dgs_check.py` 的参考播放器覆盖修复（正则加引号、前缀不遮蔽场景 ID 路由、跨源隔离头），新增 JFR 配置，并在对真实播放器核对后改为：网关带 CSP 响应头、每次 prepare 重建网关容器。永久回归：`scripts/test_prepare_reference_viewer.py`（11 项）、`scripts/test_verify_4dgs.py`（6 项）、`node --test scripts/test_reference_catalog_adapter.mjs`（8 项），均已在本轮运行通过。
+- 第一次运行 `verify_4dgs.py`（无参考播放器）：68 项通过、4 项阻塞、退出码 4；其覆盖项在对真实播放器核对后的完整运行（计划命令块，`--source /data/前端4DGS调研/local-viewer/public`，`--viewer-root .local/4dgs-check/reference-viewer`）中重新执行：103 项通过、0 阻塞、退出码 0。覆盖：`run_http_checks` 78 项（含 1440/1024 宽真实 Chrome）；三份样包导入/发布/匿名读取与逐文件 SHA-256；Range/HEAD；wedding 与 dance_color 标准档完整下载（无高清/VR 字节）；JFR 证明上传、列表、详情、发布幂等、HEAD、Range、重启不读取存储内容，Range 32 字节只读 32 字节，恢复夹具只读该文件一次；真实 Chrome 播放三项（GPU 渲染器 RTX 4060，所有到达网络的请求只发往 127.0.0.1:18082，外部统计主机被 CSP 拦下未发出，播放器时间前进 ≥5 s，dance_color 越过 5 s 分段，标准/高清请求的模型文件互不相交）。耗时与明细见验收记录，截图与逐次请求在 `.local/4dgs-check/evidence/stage5/playback/`。
 - 导入 CLI 实测：同命令重跑跳过全部 AVAILABLE；对 dance_color 导入中途 `SIGKILL` 后（11 个文件已完成、1 个中断），同命令继续，仅中断文件 attempts 为 2，其余不重传，最终 49 文件 AVAILABLE；错误的包根明确拒绝。该临时场景和版本已删除。
-- 阻塞：参考仓库 `/home/elma/文档/ChatGPT/前端4DGS调研/` 不存在（全盘按构建文件名搜索无结果）。`prepare_reference_viewer.py` 对真实源明确失败；真实 Chrome 播放 wedding 标准/高清、dance_color 标准跨 5 秒、shiku_dtwd 窗口均未执行，适配模块只经假 API 的行为测试验证，`verify_4dgs.py` 的 `playback()` 未对真实播放器运行。无头 Chrome 默认软件渲染（SwiftShader），GPU 参数下为 RTX 4060，两者均已记录。
+- 对真实播放器核对时修正的上一版假设：`/data/前端4DGS调研/local-viewer/public` 没有 `viewer/index.html`、`viewer/sw.js`（也没有 manifest.json、logo 和字体），上游当前页面已是更新构建，故入口页由模板写出、不装 Service Worker（`/viewer/sw.js`、`/viewer-static/Gineso-ConMed.png` 404 属来源缺文件，验收脚本逐一列为允许项）；`__S4D_BENCH__` 必须调用 `snapshot()` 取状态（对象本身序列化为空）；CSP 需要 `'unsafe-eval'` 否则解码阶段 `window is not defined`、停在 0%；主包的 Sentry/PostHog 请求被 CSP 拦下。无头 Chrome 默认软件渲染（SwiftShader），GPU 参数下为 RTX 4060，两者均已记录。详见验收记录。
 - 发现并修复：JFR 全量 JSON 导出写满磁盘（改为容器内过滤）；网关日志整秒窗口混入前序流量（改为按场景和时间窗过滤）；网关覆盖配置的 `{36}` 正则未加引号导致 `nginx -t` 失败、`^~ /viewer/` 遮蔽场景 ID 路由。后端、存储、下载工具未发现缺陷。
 
 ## 交接与恢复
 
-工作模式与当前阶段：普通本地开发，阶段 5 工具与真实样包门禁完成，参考播放器播放项阻塞。用户已授权：本地独立分支与隔离验收；不推送、不合并、不更新日常实例。
+工作模式与当前阶段：普通本地开发，阶段 5 完成（桌面 Chrome 范围）。用户已授权：本地独立分支与隔离验收；不推送、不合并、不更新日常实例。
 
-下一步：用户提供参考仓库 `local-viewer/public` 后，依次运行 `prepare_reference_viewer.py --source <public> --origin http://127.0.0.1:18082 --output .local/4dgs-check/reference-viewer`、`prepare_4dgs_check.py prepare ... --reference-viewer .local/4dgs-check/reference-viewer`、`verify_4dgs.py`（命令见 `.local/PLAN.md` 真包命令块），补齐真实播放证据；手机/原生部分由用户真机验收。库中保留阶段 3/4/5 门禁留下的合成场景与 wedding、dance_color、shiku_dtwd 三个真实场景（当前发布版本）。
+下一步：手机/原生部分由用户真机验收（解码、手机网络访问、音画主观效果；音频播放和 shiku_dtwd 窗口也未验证）。复现命令见 `.local/PLAN.md` 真包命令块；重新运行 `prepare_reference_viewer.py` 后需再运行 `prepare_4dgs_check.py prepare` 让网关挂载新目录。库中保留阶段 3/4/5 门禁留下的合成场景与 wedding、dance_color、shiku_dtwd 三个真实场景（当前发布版本）。
 
 本任务可能保留的运行资源：固定项目 `innovation-ar-resource-platform-infra-check` 的容器和卷；用 `scripts/prepare_4dgs_check.py stop --report-dir <目录>` 停止，不执行 `down -v`。
 

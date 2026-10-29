@@ -1,4 +1,4 @@
-"""Tests for the pure helpers of scripts/verify_4dgs.py (log/JFR attribution and player-state parsing).
+"""Tests for the pure helpers of scripts/verify_4dgs.py (log/JFR attribution and playback-evidence classification).
 The instance-level behaviour is exercised by running the tool itself against the isolated instance."""
 import datetime
 from pathlib import Path
@@ -39,10 +39,26 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(tool.per_file(tool.window(events, 0.5, 2.9, read=True)), {FILE_A: 32, FILE_B: 5})
         self.assertEqual(tool.per_file(tool.window(events, 0.5, 2.9, read=False)), {FILE_B: 9})
 
-    def test_find_time_reads_nested_numeric_time_only(self):
-        self.assertEqual(tool.find_time({'gpu': {'renderer': 'x'}, 'player': {'currentTime': 2.5, 'playing': True}}), ('player.currentTime', 2.5))
-        self.assertIsNone(tool.find_time({'time': 'now', 'flag': True}))
-        self.assertIsNone(tool.find_time(None))
+    def test_longest_run_ignores_the_loop_wrap(self):
+        samples = [(0.0, 5.0, 1), (0.5, 5.5, 2), (1.0, 7.9, 3), (1.5, 0.2, 4), (2.0, 0.7, 5), (2.5, 1.2, 6), (3.0, 1.7, 7)]
+        self.assertEqual(tool.longest_run(samples), (1.5, 1.5))
+        self.assertEqual(tool.longest_run([(0.0, 3.0, 1)]), (0.0, 0.0))
+
+    def test_network_split_separates_platform_csp_blocked_and_leaked_requests(self):
+        platform = {'url': tool.BASE + '/api/v1/client/scenes?limit=100', 'status': 200}
+        blocked = {'url': 'https://pd.4dv.ai/array/x/config.js', 'failure': 'csp'}
+        leaked = {'url': 'https://example.org/a.js', 'status': 200}
+        local = {'url': 'blob:http://127.0.0.1:18082/abc', 'status': 200}
+        self.assertEqual(tool.split_network([platform, blocked, leaked, local]), ([platform], [blocked], [leaked]))
+
+    def test_console_findings_accept_only_csp_stopped_external_hosts_and_known_404s(self):
+        csp = "Connecting to 'https://pd.4dv.ai/flags/?v=2' violates the following Content Security Policy directive: \"connect-src 'self'\"."
+        own = f"Connecting to '{tool.BASE}/api/x' violates the following Content Security Policy directive: \"connect-src 'none'\"."
+        known = 'Failed to load resource: the server responded with a status of 404 (Not Found)'
+        unexpected, hosts = tool.console_findings([csp, known, own, 'pageerror: window is not defined'])
+        self.assertEqual(hosts, {'pd.4dv.ai'})
+        self.assertEqual(len(unexpected), 2)
+        self.assertTrue(unexpected[1].startswith('pageerror'))
 
 
 if __name__ == '__main__':

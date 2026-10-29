@@ -5,13 +5,18 @@ models, no network access). The copy is checked against the fixed build 20261016
 file is missing or the main bundle no longer imports the catalogue module at the recorded place; there is no fallback to
 the built-in static scene list.
 
+The reference source does NOT contain the page that boots the bundle (viewer/index.html) nor the service worker
+(viewer/sw.js): only the hashed build directory is there. This tool therefore writes viewer/index.html from
+scripts/reference_viewer/index.html, a minimal shell for the fixed build (module script, stylesheet, manifest and the
+#dropArea mount point the bundle renders into), and installs no service worker. The page is NOT the original upstream
+file and no upstream page is fetched.
+
 In the copy: Drq6wweV.js (the built-in scene map module) is replaced by scripts/reference_viewer/catalog-adapter.js;
-the reference origin http://127.0.0.1:8787 becomes --origin; the local build suffix is updated; the service-worker
-precache revisions are recomputed from the copied files; a same-origin CSP is set on the pages; viewer/platform.html and
-platform.js (scene/variant launcher) are added. Never edits the reference repository.
+the reference origin http://127.0.0.1:8787 becomes --origin; the local build suffix is updated; a same-origin CSP is set
+on the pages (and recorded in the marker file so the isolated gateway can send it as a header, which also covers
+workers); viewer/platform.html and platform.js (scene/variant launcher) are added. Never edits the reference repository.
 """
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -25,8 +30,8 @@ BUILD = Path('viewer/20261016/230726')
 CATALOG_MODULE = BUILD / 'js/Drq6wweV.js'
 MAIN_BUNDLE = BUILD / 'js/D8TV3hLS.js'
 MAIN_BUNDLE_IMPORT_LINE = 46
-REQUIRED = ('viewer/index.html', 'viewer/sw.js', str(MAIN_BUNDLE), str(BUILD / 'js/DfIBC3Nc.js'), str(CATALOG_MODULE),
-            str(BUILD / 'assets/main.D9zuS0dI.css'), str(BUILD / 'assets/worker-Cmdae1oK.js'), str(BUILD / 'assets/worker-Cn3mf7d7.js'))
+REQUIRED = (str(MAIN_BUNDLE), str(BUILD / 'js/DfIBC3Nc.js'), str(CATALOG_MODULE), str(BUILD / 'assets/main.D9zuS0dI.css'),
+            str(BUILD / 'manifest.webmanifest'), str(BUILD / 'assets/worker-Cmdae1oK.js'), str(BUILD / 'assets/worker-Cn3mf7d7.js'))
 REFERENCE_ORIGIN = 'http://127.0.0.1:8787'
 BUILD_TAG = re.compile(r'(20261016230726-5a40c21)-local1')
 BUILD_TAG_REPLACEMENT = r'\1-platform1'
@@ -34,10 +39,12 @@ TEXT_SUFFIXES = {'.js', '.css', '.json', '.html', '.webmanifest'}
 MODEL_SUFFIXES = {'.ply', '.4dv'}
 MARKER = '.prepared-reference-viewer.json'
 FOREIGN_HOST = re.compile(r'https?://[a-z0-9.-]*(?:4dv|posthog|sentry|googleapis|google-analytics|googletagmanager)[a-z0-9./?=_-]*', re.I)
-CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; "
+# 'unsafe-eval' is required by the bundle itself: its self-defence code obtains the global object with Function(...) and
+# falls back to `window`, which does not exist in the decode workers ("window is not defined", models never load) when
+# eval is blocked. The reference server's own policy allows it too. Exfiltration stays closed by connect-src 'self'.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; "
        "connect-src 'self' blob: data:; img-src 'self' blob: data:; media-src 'self' blob: data:; "
        "style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'")
-SW_ENTRY = re.compile(r'\{"revision":"[0-9a-f]{32}","url":"([^"]+)"\}')
 
 
 class Blocked(Exception):
@@ -98,45 +105,18 @@ def rewrite_text(destination, origin):
     return changed
 
 
-def install_adapter(destination, origin):
+def install_pages(destination, origin):
+    """Catalogue module, launcher page and the viewer shell (the source has no index.html)."""
     template = (TEMPLATES / 'catalog-adapter.js').read_text(encoding='utf-8')
     if '__PLATFORM_ORIGIN__' not in template:
         raise Blocked('catalog-adapter.js template lost its origin placeholder')
     (destination / CATALOG_MODULE).write_text(template.replace('__PLATFORM_ORIGIN__', origin), encoding='utf-8')
     (destination / 'viewer/platform.js').write_text((TEMPLATES / 'platform.js').read_text(encoding='utf-8'), encoding='utf-8')
-    (destination / 'viewer/platform.html').write_text(
-        (TEMPLATES / 'platform.html').read_text(encoding='utf-8').replace('__PLATFORM_CSP__', CSP), encoding='utf-8')
-
-
-def set_csp(destination):
-    index = destination / 'viewer/index.html'
-    html = index.read_text(encoding='utf-8')
-    html = re.sub(r'<meta[^>]+http-equiv=["\']Content-Security-Policy["\'][^>]*>\s*', '', html, flags=re.I)
-    if '<head>' not in html:
-        raise Blocked('viewer/index.html has no <head> to place the Content-Security-Policy meta in')
-    index.write_text(html.replace('<head>', f'<head>\n<meta http-equiv="Content-Security-Policy" content="{CSP}">', 1), encoding='utf-8')
-
-
-def refresh_service_worker(destination):
-    worker = destination / 'viewer/sw.js'
-    text = worker.read_text(encoding='utf-8')
-    missing, count = [], 0
-
-    def revise(match):
-        nonlocal count
-        target = destination / 'viewer' / match.group(1).lstrip('/')
-        if not target.is_file():
-            missing.append(match.group(1))
-            return match.group(0)
-        count += 1
-        return '{"revision":"%s","url":"%s"}' % (hashlib.md5(target.read_bytes()).hexdigest(), match.group(1))
-    text = SW_ENTRY.sub(revise, text)
-    if count == 0 and not missing:
-        raise Blocked('viewer/sw.js has no {"revision":..,"url":..} precache entries to recompute')
-    if missing:
-        raise Blocked('service-worker precache lists files absent from the copy: ' + ', '.join(missing[:10]))
-    worker.write_text(text, encoding='utf-8')
-    return count
+    for page in ('platform.html', 'index.html'):
+        text = (TEMPLATES / page).read_text(encoding='utf-8')
+        if '__PLATFORM_CSP__' not in text:
+            raise Blocked(f'{page} template lost its CSP placeholder')
+        (destination / 'viewer' / page).write_text(text.replace('__PLATFORM_CSP__', CSP), encoding='utf-8')
 
 
 def prepare(source, origin, output):
@@ -151,14 +131,13 @@ def prepare(source, origin, output):
     output.mkdir(parents=True, exist_ok=True)
     skipped = copy_tree(source, output)
     changed = rewrite_text(output, origin)
-    install_adapter(output, origin)
-    set_csp(output)
-    revisions = refresh_service_worker(output)
+    install_pages(output, origin)
     foreign = sorted({m.group(0) for path in output.rglob('*') if path.is_file() and path.suffix.lower() in TEXT_SUFFIXES
                       for m in FOREIGN_HOST.finditer(path.read_text(encoding='utf-8', errors='replace'))})
-    manifest = {'origin': origin, 'source': str(source), 'rewrittenFiles': changed, 'skippedModelFiles': skipped,
-                'serviceWorkerRevisions': revisions, 'remainingForeignHostReferences': foreign,
-                'files': sum(1 for p in output.rglob('*') if p.is_file())}
+    manifest = {'origin': origin, 'source': str(source), 'csp': CSP, 'rewrittenFiles': changed, 'skippedModelFiles': skipped,
+                'entryPage': 'viewer/index.html written from scripts/reference_viewer/index.html (absent from the source)',
+                'serviceWorker': 'none (viewer/sw.js absent from the source)',
+                'remainingForeignHostReferences': foreign, 'files': sum(1 for p in output.rglob('*') if p.is_file())}
     (output / MARKER).write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     for path in [output, *output.rglob('*')]:
         path.chmod(0o755 if path.is_dir() else 0o644)
@@ -176,8 +155,8 @@ def main(argv=None):
     except (Blocked, OSError, UnicodeDecodeError) as error:
         print('BLOCKED: ' + str(error), file=sys.stderr)
         return 2
-    print(f'prepared {manifest["files"]} files; {manifest["serviceWorkerRevisions"]} SW revisions; '
-          f'foreign host references left (blocked by CSP): {len(manifest["remainingForeignHostReferences"])}')
+    print(f'prepared {manifest["files"]} files; foreign host references left (blocked by CSP): '
+          f'{len(manifest["remainingForeignHostReferences"])}')
     return 0
 
 

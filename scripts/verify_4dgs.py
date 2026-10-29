@@ -40,8 +40,10 @@ TOOL_IMAGE = 'innovation-ar-resource-platform-java-check:4dgs'
 SCENES = ('wedding', 'dance_color', 'shiku_dtwd')
 DOWNLOADS = (('wedding', 'standard_quality'), ('dance_color', 'standard_quality'))
 PLAYBACK = (('wedding', 'standard_quality', False), ('wedding', 'high_quality', False), ('dance_color', 'standard_quality', True))
-VIEWER_FILES = ('viewer/index.html', 'viewer/platform.html', 'viewer/sw.js', 'viewer/20261016/230726/js/D8TV3hLS.js',
+VIEWER_FILES = ('viewer/index.html', 'viewer/platform.html', 'viewer/20261016/230726/js/D8TV3hLS.js',
                 'viewer/20261016/230726/js/Drq6wweV.js', 'viewer/20261016/230726/js/DfIBC3Nc.js')
+# The reference source has no service worker and no font files; these requests 404 on the platform gateway by design of the source.
+KNOWN_MISSING_PATHS = ('/viewer/sw.js', '/viewer-static/Gineso-ConMed.png', '/viewer-static/Gineso-ConMed.json')
 GIB = 1024 ** 3
 STORAGE = ('/data/artifacts/staging/', '/data/artifacts/committed/')
 UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
@@ -419,8 +421,21 @@ WEBGL_JS = """() => {
         }
     }
     return out; }"""
-BENCH_JS = "() => { try { return JSON.parse(JSON.stringify(window.__S4D_BENCH__ ?? null)); } catch (e) { return {error: String(e)}; } }"
-TIME_KEY = re.compile(r'^(current|play|playback|global|timeline)?_?time(s|sec|seconds)?$', re.I)
+BENCH_JS = """() => {
+    const bench = window.__S4D_BENCH__;
+    if (!bench) return null;
+    const s = bench.snapshot();
+    const keep = ['currentTime', 'playerCurrentTime', 'timeCursorValue', 'duration', 'timePaused', 'renderReady', 'appFrame',
+                  'graphicsWidth', 'graphicsHeight', 'canvasClientWidth', 'canvasClientHeight', 'deviceType', 'sortingEngine',
+                  'showLoading', 'loadedTime', 'loadTimeIndex'];
+    return {ready: bench.ready(), ...Object.fromEntries(keep.map((k) => [k, s[k] ?? null]))};
+}"""
+BIGGEST_CANVAS_JS = """() => {
+    let best = -1, area = 0;
+    [...document.querySelectorAll('canvas')].forEach((c, i) => { const a = c.clientWidth * c.clientHeight; if (a > area) { area = a; best = i; } });
+    return best;
+}"""
+RESPONSE_FIELDS = ('content-length', 'content-range', 'accept-ranges', 'etag')
 
 
 def webgl_probe(report, executable):
@@ -441,104 +456,267 @@ def webgl_probe(report, executable):
 
 
 def viewer_missing(viewer_root):
-    return [str(viewer_root / name) for name in VIEWER_FILES if not (viewer_root / name).is_file()]
+    missing = [str(viewer_root / name) for name in VIEWER_FILES if not (viewer_root / name).is_file()]
+    catalogue = viewer_root / 'viewer/20261016/230726/js/Drq6wweV.js'
+    if not missing:
+        text = catalogue.read_text(encoding='utf-8')
+        if 'api/v1/client/scenes' not in text or '/4dgs/demo' in text:
+            missing.append(f'{catalogue} is not the platform catalogue adapter (built-in scene map still in place)')
+    return missing
 
 
-def find_time(value, path='', depth=0):
-    """First numeric field of the player state that looks like the playback time, as (dotted path, number)."""
-    if depth > 4 or not isinstance(value, dict):
-        return None
-    for key, item in value.items():
-        if isinstance(item, (int, float)) and not isinstance(item, bool) and TIME_KEY.match(key):
-            return (path + key, float(item))
-    for key, item in value.items():
-        found = find_time(item, path + key + '.', depth + 1)
-        if found:
-            return found
-    return None
+class Network:
+    """Whitelisted request log of one browser context: url, method, type, Range, status and the length/range/etag headers.
+    Covers the page, its workers and navigations; response bodies and credentials are never stored."""
+
+    def __init__(self, context):
+        self.entries, self.by_request = [], {}
+        context.on('request', self.request)
+        context.on('response', self.response)
+        context.on('requestfailed', self.failed)
+
+    def request(self, request):
+        headers = request.headers
+        entry = {'url': request.url, 'method': request.method, 'type': request.resource_type, 'at': time.time(),
+                 'range': headers.get('range'), 'authorization': 'authorization' in headers}
+        self.entries.append(entry)
+        self.by_request[request] = entry
+
+    def response(self, response):
+        entry = self.by_request.get(response.request)
+        if entry is not None:
+            entry['status'] = response.status
+            entry.update({key: response.headers.get(key) for key in RESPONSE_FIELDS})
+
+    def failed(self, request):
+        entry = self.by_request.get(request)
+        if entry is not None:
+            entry['failure'] = request.failure
 
 
-def canvas_drawn(page):
-    """True when the page's largest canvas has more than one colour (a real picture, not a cleared surface)."""
+def split_network(entries):
+    """(served by the platform, external attempts the page CSP blocked, external requests that were not blocked)."""
+    served, blocked, leaked = [], [], []
+    for entry in entries:
+        url = entry['url']
+        if url.startswith(('blob:', 'data:')):
+            continue
+        if url.startswith(BASE + '/'):
+            served.append(entry)
+        elif 'csp' in str(entry.get('failure', '')).lower():
+            blocked.append(entry)
+        else:
+            leaked.append(entry)
+    return served, blocked, leaked
+
+
+def ok_status(entry):
+    return entry.get('status') in (200, 206)
+
+
+def host_of(url):
+    return re.match(r'https?://([^/?]+)', url).group(1)
+
+
+CSP_CONSOLE = re.compile(r"(?:Connecting to|Loading the script|Fetch API cannot load) '?(https?://[^\s']+)")
+MISSING_CONSOLE = ('Failed to load resource: the server responded with a status of 404', 'A bad HTTP response code (404) was received when fetching the script')
+
+
+def console_findings(errors):
+    """(unexpected, hosts the CSP kept the page from reaching). Expected: CSP refusals of external URLs and the 404s of
+    KNOWN_MISSING_PATHS (those are pinned separately against the network log)."""
+    unexpected, hosts = [], set()
+    for text in errors:
+        found = CSP_CONSOLE.search(text)
+        if found and 'Content Security Policy' in text and not found.group(1).startswith(BASE):
+            hosts.add(host_of(found.group(1)))
+        elif not any(text.startswith(prefix) for prefix in MISSING_CONSOLE):
+            unexpected.append(text[:300])
+    return unexpected, hosts
+
+
+def frame_stats(page):
+    """Distinct colours and mean luma of the largest canvas as composited on screen (a screenshot of its box)."""
     from PIL import Image
-    import io as _io
-    canvas = page.locator('canvas').first
-    if canvas.count() == 0:
-        return False
-    image = Image.open(_io.BytesIO(canvas.screenshot())).convert('RGB').resize((64, 36))
-    return len(set(image.getdata())) > 8
+    index = page.evaluate(BIGGEST_CANVAS_JS)
+    if index < 0:
+        return {'colours': 0, 'luma': 0.0, 'canvas': False}
+    image = Image.open(io.BytesIO(page.locator('canvas').nth(index).screenshot())).convert('RGB').resize((64, 36))
+    raw = image.tobytes()
+    pixels = [tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)]
+    return {'colours': len(set(pixels)), 'luma': sum(0.299 * r + 0.587 * g + 0.114 * b for r, g, b in pixels) / len(pixels), 'canvas': True}
+
+
+def longest_run(samples):
+    """Longest strictly forward stretch of (monotonic seconds, player time, frame) samples: (wall seconds, player seconds)."""
+    best, start = (0.0, 0.0), 0
+    for i in range(1, len(samples) + 1):
+        if i == len(samples) or samples[i][1] < samples[i - 1][1]:
+            best = max(best, (samples[i - 1][0] - samples[start][0], samples[i - 1][1] - samples[start][1]))
+            start = i
+    return best
+
+
+def sample_state(page, samples):
+    state = page.evaluate(BENCH_JS)
+    samples.append((time.monotonic(), state['playerCurrentTime'], state['appFrame']))
+    return state
+
+
+def play(playwright, executable, result, variant, cross, folder, tag):
+    """One fresh Chrome context: launcher page -> /viewer/<scene>?showdemo=4dv&variant=<variant> -> observe playback."""
+    segments = next(v for v in result['descriptor']['variants'] if v['id'] == variant)['segments']
+    trace, errors = {'tag': tag, 'segments': len(segments)}, []
+    browser = playwright.chromium.launch(executable_path=str(executable), headless=True, args=BROWSER_ARGS)
+    try:
+        context = browser.new_context(viewport={'width': 1280, 'height': 720})  # fresh: no service worker, cache or storage
+        network = Network(context)
+        page = context.new_page()
+        page.on('console', lambda message: errors.append(message.text) if message.type == 'error' else None)
+        page.on('pageerror', lambda error: errors.append('pageerror: ' + str(error)))
+        page.goto(BASE + '/viewer/platform.html')
+        page.wait_for_function("() => !document.getElementById('scene').disabled", timeout=30000)
+        page.select_option('#scene', result['sceneId'])
+        trace['launcherVariants'] = page.eval_on_selector_all('#variant option', 'options => options.map((o) => o.value)')
+        page.select_option('#variant', variant)
+        page.click('#open')
+        page.wait_for_url(re.compile(r'/viewer/[0-9a-f-]{36}\?'), timeout=30000)
+        trace['viewerUrl'] = page.url
+        begin = time.monotonic()
+        bench = None
+        while time.monotonic() - begin < 180:
+            bench = page.evaluate(BENCH_JS)
+            if bench and bench['ready'] and bench['renderReady']:
+                break
+            page.wait_for_timeout(500)
+        trace['readyAfterSeconds'] = round(time.monotonic() - begin, 1)
+        trace['benchAtReady'] = bench
+        page.wait_for_timeout(500)
+        first = folder / f'playback-{tag}-first.png'
+        page.screenshot(path=str(first))
+        trace['firstFrame'] = {**frame_stats(page), 'screenshot': str(first)}
+        trace['webgl'] = page.evaluate(WEBGL_JS)
+        samples = []
+        until = time.monotonic() + 5.5
+        while time.monotonic() < until:
+            sample_state(page, samples)
+            page.wait_for_timeout(500)
+        trace['samples'] = [[round(t - samples[0][0], 2), round(p, 3), f] for t, p, f in samples]
+        trace['advance'] = longest_run(samples)
+        if cross:
+            boundary = segments[1]['startSeconds'] + 0.5
+            trace['crossBoundarySeconds'] = boundary
+            until = time.monotonic() + 120
+            state = sample_state(page, samples)
+            while time.monotonic() < until and state['playerCurrentTime'] < boundary:
+                page.wait_for_timeout(250)
+                state = sample_state(page, samples)
+            trace['crossedAt'] = state
+            page.wait_for_timeout(2000)
+            trace['afterCross'] = sample_state(page, samples)
+        later = folder / f'playback-{tag}-later.png'
+        page.screenshot(path=str(later))
+        trace['laterFrame'] = {**frame_stats(page), 'screenshot': str(later)}
+        trace['finalBench'] = page.evaluate(BENCH_JS)
+    finally:
+        browser.close()
+    trace['maxPlayerTime'] = max(p for _, p, _ in samples)
+    return trace, network.entries, errors
 
 
 def playback(report, executable, viewer_root, results, evidence):
-    """Real Chrome (GPU launch args), fresh context per run, against the prepared reference viewer.
+    """Real Chrome (GPU launch args, fresh context per run) against the prepared reference viewer.
 
-    Records whitelisted request fields only (url, status, range/length/etag), WebGL state and __S4D_BENCH__ snapshots.
-    Accepted only when: every network source is 127.0.0.1:18082; the selected variant's models (and no other variant's)
-    were requested; a non-uniform frame is drawn; the player's own time (a numeric time field of __S4D_BENCH__) advances
-    over >= 2 s; for the cross-segment run the time passes 5 s and the second segment is requested.
-    NOTE: written against the reference player's documented state interface; NOT exercised in this environment because
-    the reference viewer source is absent. If __S4D_BENCH__ has no recognisable time field the run fails with its snapshot."""
+    Accepted per run only when: every request that reached the network went to 127.0.0.1:18082 (external attempts were
+    stopped by the page CSP and are listed); no request carried Authorization and none used the built-in /4dgs/demo or
+    research-server catalogue paths; the selected variant's segments up to the observed time were served non-empty and no
+    file of another variant was requested; the player reports ready/renderReady with advancing frames and a non-uniform
+    on-screen picture; the player's own time advances >= 2 s without wrapping; the cross-segment run passes the second
+    segment's start and requests it. After the wedding runs, standard and high must have requested disjoint model files."""
     from playwright.sync_api import sync_playwright
-    for name, variant, cross in PLAYBACK:
-        result = results.get(name)
-        label = f'playback {name}/{variant}'
-        if not result:
-            report.block(label, 'scene was not imported')
-            continue
-        descriptor = result['descriptor']
-        selected = next(v for v in descriptor['variants'] if v['id'] == variant)
-        file_ids = result['fileIds']
-        wanted = [file_ids[s['path']] for s in selected['segments']]
-        other = {file_ids[s['path']] for v in descriptor['variants'] if v['id'] != variant for s in v['segments']} - set(wanted)
-        requests, errors, trace = [], [], {}
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(executable_path=str(executable), headless=True, args=BROWSER_ARGS)
-            try:
-                page = browser.new_context(viewport={'width': 1280, 'height': 720}, service_workers='block').new_page()
-                page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
-                page.on('pageerror', lambda e: errors.append(str(e)))
-                page.on('response', lambda r: requests.append({
-                    'url': r.url, 'status': r.status, 'at': time.time(),
-                    **{k: r.headers.get(k) for k in ('content-length', 'content-range', 'accept-ranges', 'etag')}}))
-                page.goto(f'{BASE}/viewer/{result["sceneId"]}?showdemo=4dv&variant={variant}')
-                deadline = time.monotonic() + 120
-                while time.monotonic() < deadline and not canvas_drawn(page):
-                    page.wait_for_timeout(1000)
-                trace['firstFrame'] = canvas_drawn(page)
-                bench = page.evaluate(BENCH_JS)
-                trace['bench'] = bench
-                first = find_time(bench)
-                trace['timeField'] = first[0] if first else None
-                if first:
-                    page.wait_for_timeout(2500)
-                    second = find_time(page.evaluate(BENCH_JS))
-                    trace['time'] = [first[1], second[1] if second else None]
-                    if cross:
-                        until = time.monotonic() + 120
-                        while time.monotonic() < until and (find_time(page.evaluate(BENCH_JS)) or ('', 0))[1] < 5.5:
-                            page.wait_for_timeout(500)
-                        trace['crossedAt'] = find_time(page.evaluate(BENCH_JS))
-                        page.wait_for_timeout(1500)
-                shot = evidence / f'playback-{name}-{variant}.png'
-                page.screenshot(path=str(shot))
-                trace['screenshot'] = str(shot)
-                trace['webgl'] = page.evaluate(WEBGL_JS)
-            finally:
-                browser.close()
-        result.setdefault('playback', {})[variant] = {'trace': trace, 'requests': requests}
-        origins = {re.match(r'^(\w+://[^/]+)', r['url']).group(1) for r in requests if r['url'].startswith('http')}
-        report.check(f'{label}: all network sources are {BASE}', origins <= {BASE}, sorted(origins))
-        urls = ' '.join(r['url'] for r in requests)
-        report.check(f'{label}: catalogue, description, settings and every segment of the selected variant came from the platform',
-                     '/api/v1/client/scenes' in urls and all(i in urls for i in wanted), [i for i in wanted if i not in urls])
-        report.check(f'{label}: no file of another variant was requested', not any(i in urls for i in other))
-        report.check(f'{label}: a non-uniform frame is drawn', trace['firstFrame'], trace.get('screenshot'))
-        advanced = bool(trace.get('time')) and trace['time'][1] is not None and trace['time'][1] - trace['time'][0] >= 1.5
-        report.check(f'{label}: player time advances over >= 2 s', advanced, {k: trace.get(k) for k in ('timeField', 'time')})
-        if cross:
-            crossed = bool(trace.get('crossedAt')) and trace['crossedAt'][1] >= 5.5 and wanted[1] in urls
-            report.check(f'{label}: time crosses 5 s and the second segment is requested', crossed, trace.get('crossedAt'))
-        report.check(f'{label}: no console errors', not errors, errors[:3])
+    folder = evidence / 'playback'
+    folder.mkdir(exist_ok=True)
+    models = {}
+    report.data['playback'] = {}
+    with sync_playwright() as playwright:
+        for name, variant, cross in PLAYBACK:
+            result = results.get(name)
+            label = f'playback {name}/{variant}'
+            if not result:
+                report.block(label, 'scene was not imported')
+                continue
+            tag = f'{name}-{variant}'
+            descriptor = result['descriptor']
+            selected = next(v for v in descriptor['variants'] if v['id'] == variant)
+            file_ids = result['fileIds']
+            wanted = [file_ids[s['path']] for s in selected['segments']]
+            other = {file_ids[s['path']] for v in descriptor['variants'] if v['id'] != variant for s in v['segments']} - set(wanted)
+            trace, entries, errors = play(playwright, executable, result, variant, cross, folder, tag)
+            served, blocked, leaked = split_network(entries)
+            unexpected, csp_hosts = console_findings(errors)
+            blocked_hosts = sorted({host_of(e['url']) for e in blocked} | csp_hosts)
+            urls = [e['url'] for e in served]
+            joined = ' '.join(urls)
+
+            def served_ok(file_id):
+                return [e for e in served if f'/files/{file_id}/' in e['url'] and ok_status(e)]
+
+            models[tag] = sorted(i for i in wanted if any(f'/files/{i}/' in u for u in urls))
+            record = folder / f'playback-{tag}.json'
+            record.write_text(json.dumps(
+                {'trace': trace, 'requests': [{k: v for k, v in e.items() if k != 'authorization'} for e in served],
+                 'externalAttemptsBlockedByCsp': [{'host': host_of(e['url']), 'failure': e.get('failure')} for e in blocked],
+                 'consoleCspHosts': sorted(csp_hosts), 'unexpectedConsoleErrors': unexpected}, indent=2, default=str) + '\n', encoding='utf-8')
+            report.data['playback'][tag] = {'trace': {k: v for k, v in trace.items() if k != 'samples'}, 'servedRequests': len(served),
+                                            'externalBlockedHosts': blocked_hosts, 'file': str(record)}
+
+            report.check(f'{label}: launcher page lists exactly the scene variants and opens /viewer/<scene>?showdemo=4dv&variant={variant}',
+                         trace['launcherVariants'] == [v['id'] for v in descriptor['variants']]
+                         and trace['viewerUrl'].endswith(f'/viewer/{result["sceneId"]}?showdemo=4dv&variant={variant}'),
+                         {'launcher': trace['launcherVariants'], 'url': trace['viewerUrl']})
+            report.check(f'{label}: every request that reached the network went to {BASE} (external hosts only attempted, stopped by the page CSP: {blocked_hosts})',
+                         not leaked, [e['url'][:120] for e in leaked[:3]])
+            report.check(f'{label}: no request carried Authorization and none used the built-in /4dgs/demo or /api/v1/viewer catalogue',
+                         not any(e['authorization'] for e in entries) and not any('/4dgs/' in e['url'] or '/api/v1/viewer' in e['url'] for e in entries))
+            catalogue = [e for e in served if '/api/v1/client/scenes?' in e['url'] and ok_status(e)]
+            detail = [e for e in served if e['url'].endswith(f'/api/v1/client/scenes/{result["sceneId"]}') and ok_status(e)]
+            settings = served_ok(file_ids[descriptor['settings']])
+            report.check(f'{label}: catalogue, scene description and settings came from the platform', bool(catalogue and detail and settings),
+                         {'catalogue': len(catalogue), 'detail': len(detail), 'settings': len(settings)})
+            due = [i for i, s in zip(wanted, selected['segments']) if s['startSeconds'] <= trace['maxPlayerTime'] or s is selected['segments'][0]]
+            lengths = {i: [int(e['content-length'] or 0) for e in served_ok(i)] for i in due}
+            report.check(f'{label}: every segment of the selected variant up to the observed time was served non-empty ({len(due)} of {len(wanted)})',
+                         all(lengths[i] and max(lengths[i]) > 0 for i in due), lengths)
+            report.check(f'{label}: no file of another variant was requested', not any(f'/files/{i}/' in joined for i in other))
+            bench = trace['benchAtReady'] or {}
+            final = trace['finalBench'] or {}
+            frames = [s[2] for s in trace['samples']]
+            report.check(f'{label}: player reports ready/renderReady, a real canvas size and advancing frames',
+                         bool(bench.get('ready') and bench.get('renderReady') and (bench.get('graphicsWidth') or 0) > 0
+                              and frames[-1] > frames[0] and final.get('renderReady')), {'bench': bench, 'frames': [frames[0], frames[-1]]})
+            first_frame, later_frame = trace['firstFrame'], trace['laterFrame']
+            report.check(f'{label}: a non-uniform, non-black picture is on screen at first frame and later',
+                         first_frame['colours'] > 8 and first_frame['luma'] > 3 and later_frame['colours'] > 8 and later_frame['luma'] > 3,
+                         {'first': first_frame, 'later': later_frame})
+            wall, played = trace['advance']
+            report.check(f'{label}: player time advances >= 2 s without wrapping (wall {wall:.1f} s, player {played:.1f} s)',
+                         wall >= 2.0 and played >= 2.0, trace['samples'])
+            if cross:
+                after = trace['afterCross']
+                crossed = trace['crossedAt']
+                report.check(f'{label}: time passes {selected["segments"][1]["startSeconds"]} s, keeps advancing, and segment 2 was served',
+                             crossed['playerCurrentTime'] >= trace['crossBoundarySeconds'] and after['playerCurrentTime'] > crossed['playerCurrentTime']
+                             and bool(after['renderReady']) and bool(served_ok(wanted[1])),
+                             {'crossedAt': crossed, 'afterCross': after, 'segment2Responses': len(served_ok(wanted[1]))})
+            unknown = [(e['status'], e['url'][len(BASE):][:120]) for e in served
+                       if e.get('status', 0) >= 400 and e['url'][len(BASE):].split('?')[0] not in KNOWN_MISSING_PATHS]
+            report.check(f'{label}: the only 4xx responses are the reference source\'s absent files {list(KNOWN_MISSING_PATHS)}', not unknown, unknown[:3])
+            report.check(f'{label}: no console error other than CSP-stopped external hosts and those absent files', not unexpected, unexpected[:3])
+    if 'wedding-standard_quality' in models and 'wedding-high_quality' in models:
+        standard, high = models['wedding-standard_quality'], models['wedding-high_quality']
+        report.check('switching wedding standard -> high_quality yields different, disjoint model requests',
+                     bool(standard) and bool(high) and not set(standard) & set(high), {'standard': standard, 'high': high})
+    report.data['playbackScope'] = {'shiku_dtwd': 'not played: its 0-5 s window is a sample assumption (the source timeOption is empty)'}
 
 
 # ---- main -----------------------------------------------------------------------------------------------

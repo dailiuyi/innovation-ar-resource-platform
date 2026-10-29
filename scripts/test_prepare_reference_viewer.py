@@ -3,10 +3,8 @@
 The viewer source here is a minimal FIXTURE with the file layout the tool checks; it is not the 4DV player and proves
 nothing about playback. The real reference source is verified only by running the tool on it.
 """
-import hashlib
 import json
 from pathlib import Path
-import re
 import sys
 import tempfile
 import unittest
@@ -21,7 +19,7 @@ BUILD = 'viewer/20261016/230726'
 
 def fixture(root, import_line=46, with_wasm=True):
     files = {
-        'viewer/index.html': '<!doctype html><html><head><title>x</title><meta http-equiv="Content-Security-Policy" content="default-src *"></head></html>',
+        f'{BUILD}/manifest.webmanifest': '{"start_url":"http://127.0.0.1:8787/viewer/20261016/230726/"}',
         f'{BUILD}/js/D8TV3hLS.js': '\n' * (import_line - 1) + 'import d from"./Drq6wweV.js";const u="http://127.0.0.1:8787/api";const b="20261016230726-5a40c21-local1";\n',
         f'{BUILD}/js/DfIBC3Nc.js': 'export default 1;',
         f'{BUILD}/js/Drq6wweV.js': 'export default {rocket:{}};',
@@ -36,8 +34,6 @@ def fixture(root, import_line=46, with_wasm=True):
     for name, text in files.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(text, encoding='utf-8')
-    precache = ','.join('{"revision":"%s","url":"%s"}' % ('0' * 32, url) for url in ('index.html', '20261016/230726/js/D8TV3hLS.js'))
-    (root / 'viewer/sw.js').write_text('precacheAndRoute([%s]);' % precache, encoding='utf-8')
     return root
 
 
@@ -83,14 +79,15 @@ class ReferenceViewerTest(unittest.TestCase):
         html = (out / 'viewer/index.html').read_text()
         self.assertEqual(html.count('Content-Security-Policy'), 1)
         self.assertIn("default-src 'self'", html)
-        self.assertNotIn('default-src *', html)
-        sw = (out / 'viewer/sw.js').read_text()
-        for url in re.findall(r'"url":"([^"]+)"', sw):
-            expected = hashlib.md5((out / 'viewer' / url).read_bytes()).hexdigest()
-            self.assertIn('{"revision":"%s","url":"%s"}' % (expected, url), sw)
+        self.assertIn('/viewer/20261016/230726/js/D8TV3hLS.js', html)
+        self.assertIn('id="dropArea"', html)
+        self.assertFalse((out / 'viewer/sw.js').exists(), 'no service worker is invented')
+        self.assertIn('http://127.0.0.1:18082/viewer/20261016/230726/', (out / BUILD / 'manifest.webmanifest').read_text())
         self.assertIn("default-src 'self'", (out / 'viewer/platform.html').read_text())
         self.assertTrue((out / 'viewer/platform.js').is_file())
-        self.assertEqual(json.loads((out / tool.MARKER).read_text())['skippedModelFiles'], ['viewer/model.ply'])
+        marker = json.loads((out / tool.MARKER).read_text())
+        self.assertEqual(marker['skippedModelFiles'], ['viewer/model.ply'])
+        self.assertEqual(marker['csp'], tool.CSP)
 
     def test_rerun_replaces_own_output_but_refuses_foreign_directory(self):
         source = fixture(self.root / 'src')
@@ -102,10 +99,11 @@ class ReferenceViewerTest(unittest.TestCase):
         self.assertEqual(self.run_tool(source, foreign), 2)
         self.assertEqual((foreign / 'keep.txt').read_text(), 'mine')
 
-    def test_service_worker_entry_for_missing_file_fails(self):
+    def test_source_without_entry_page_is_accepted_and_page_is_not_fetched(self):
         source = fixture(self.root / 'src')
-        (source / 'viewer/sw.js').write_text('x([{"revision":"' + '0' * 32 + '","url":"gone.js"}])', encoding='utf-8')
-        self.assertEqual(self.run_tool(source), 2)
+        self.assertFalse((source / 'viewer/index.html').exists())
+        self.assertFalse((source / 'viewer/sw.js').exists())
+        self.assertEqual(self.run_tool(source), 0)
 
     def test_origin_must_be_bare(self):
         with self.assertRaises(tool.Blocked):
@@ -177,12 +175,18 @@ class OverlayConfigTest(unittest.TestCase):
     """The isolated gateway overlay; `nginx -t` on this text was run by hand (braces in a regex must be quoted)."""
 
     def test_scene_id_route_is_quoted_and_not_shadowed_by_the_viewer_prefix(self):
-        config = prepare_4dgs_check.gateway_config(True)
+        config = prepare_4dgs_check.gateway_config(tool.CSP)
         self.assertIn('location ~ "^/viewer/[0-9a-fA-F-]{36}$" {', config)
         self.assertIn('rewrite ^ /viewer/index.html break;', config)
         self.assertNotIn('^~ /viewer/ ', config)
         self.assertEqual(config.count('Cross-Origin-Embedder-Policy require-corp'), 3)
-        self.assertEqual(prepare_4dgs_check.gateway_config(False), (prepare_4dgs_check.ROOT / 'deploy/nginx.conf').read_text(encoding='utf-8'))
+        self.assertEqual(config.count(f'add_header Content-Security-Policy "{tool.CSP}" always;'), 3)
+        self.assertEqual(prepare_4dgs_check.gateway_config(None), (prepare_4dgs_check.ROOT / 'deploy/nginx.conf').read_text(encoding='utf-8'))
+
+    def test_csp_comes_from_the_prepared_marker_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(prepare_4dgs_check.Blocked):
+                prepare_4dgs_check.reference_csp(Path(temp))
 
 
 if __name__ == '__main__':

@@ -172,16 +172,30 @@ def frontend_handoff(dist):
     return {'sha256': actual['sha256'], 'files': actual['files'], 'buildLog': build.get('log')}
 
 
-def gateway_config(reference):
+def reference_csp(reference):
+    """The CSP recorded by prepare_reference_viewer.py in the prepared copy; the gateway sends it as a header so it also
+    binds workers (a meta tag in the page does not)."""
+    marker = reference / '.prepared-reference-viewer.json'
+    if not marker.is_file():
+        raise Blocked(f'{reference} was not prepared by scripts/prepare_reference_viewer.py (no marker file)')
+    csp = json.loads(marker.read_text(encoding='utf-8')).get('csp')
+    if not csp or '"' in csp or '\n' in csp:
+        raise Blocked(f'{marker} has no usable csp')
+    return csp
+
+
+def gateway_config(csp):
+    """`csp` is None without a reference viewer (production gateway text unchanged), else the viewer CSP header value."""
     source = (ROOT / 'deploy/nginx.conf').read_text(encoding='utf-8')
-    if not reference:
+    if not csp:
         return source
     if source.count(NGINX_ANCHOR) != 1:
         raise Blocked('deploy/nginx.conf no longer has the single catch-all location this overlay anchors on')
     isolation = ("        add_header X-Content-Type-Options nosniff always;\n"
                  "        add_header Cross-Origin-Opener-Policy same-origin always;\n"
                  "        add_header Cross-Origin-Embedder-Policy require-corp always;\n"
-                 "        add_header Cross-Origin-Resource-Policy same-origin always;\n")
+                 "        add_header Cross-Origin-Resource-Policy same-origin always;\n"
+                 f'        add_header Content-Security-Policy "{csp}" always;\n')
     locations = (
         '    # Reference viewer overlay for isolated acceptance only; never part of the production gateway.\n'
         '    # Cross-origin isolation headers are what the player\'s shared-memory WASM needs (same as the reference server).\n'
@@ -196,7 +210,7 @@ def bind(source, target):
 
 
 def write_override(instance, images, jar, dist, reference, token):
-    write_private(instance.nginx, gateway_config(reference))
+    write_private(instance.nginx, gateway_config(reference_csp(reference) if reference else None))
     instance.jfr_dir.mkdir(exist_ok=True)
     instance.jfc.write_text(JFR_JFC, encoding='utf-8')
     instance.jfr_dir.chmod(0o755)
@@ -341,6 +355,12 @@ def prepare(args):
     up = run([*instance.compose, 'up', '--no-build', '-d', '--wait', '--wait-timeout', '180'], instance.log, timeout=300)
     if up.returncode:
         raise Blocked(f'docker compose up failed; see {instance.log}')
+    # The gateway is stateless and its bind mounts (nginx config, dist, reference viewer) are rewritten files/directories
+    # on every prepare; a running container would keep serving the replaced inodes. Recreate it so it sees the new ones.
+    gateway = run([*instance.compose, 'up', '--no-build', '-d', '--wait', '--wait-timeout', '120', '--no-deps', '--force-recreate', 'gateway'],
+                  instance.log, timeout=200)
+    if gateway.returncode:
+        raise Blocked(f'recreating the gateway failed; see {instance.log}')
     wait_for_gateway()
     version = verify_running(instance, jar_sha256)
     ensure_admin(instance, env)
