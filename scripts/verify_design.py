@@ -45,6 +45,31 @@ def main():
     check('OpenAPI matches authoring source',spec==module.spec)
     check('manifest schema matches authoring source',schema==module.manifest)
     check('manifest example matches authoring source',example==module.example)
+    descriptor_schema=json.loads((ROOT/'contracts/schemas/resource-descriptor.schema.json').read_text(encoding='utf-8'))
+    descriptor=json.loads((ROOT/'contracts/examples/resource-descriptor.json').read_text(encoding='utf-8'))
+    Draft202012Validator.check_schema(descriptor_schema)
+    descriptor_validator=Draft202012Validator(descriptor_schema,format_checker=FormatChecker())
+    descriptor_validator.validate(descriptor)
+    check('resource descriptor Draft 2020-12 schema and example')
+    check('resource descriptor schema matches authoring source',descriptor_schema==module.resource_descriptor_schema())
+    check('resource descriptor example matches authoring source',descriptor==module.resource_descriptor_example())
+    variant_ids=[v['id'] for v in descriptor['variants']]
+    check('resource descriptor variant IDs unique and default exists',len(variant_ids)==len(set(variant_ids)) and descriptor['defaultVariant'] in variant_ids)
+    for v in descriptor['variants']:
+        ends=[s['startSeconds']+s['durationSeconds'] for s in v['segments']]
+        starts=[s['startSeconds'] for s in v['segments']]
+        check('resource descriptor segments ordered without overlap '+v['id'],all(starts[i+1]>=ends[i] for i in range(len(starts)-1)))
+    for name, mutate in [
+       ('missing settings',lambda x:x.pop('settings')),
+       ('unknown descriptor field',lambda x:x.update(address='x')),
+       ('empty variants',lambda x:x.update(variants=[])),
+       ('invalid variant ID',lambda x:x['variants'][0].update(id='Bad Id')),
+       ('unsupported format version',lambda x:x.update(formatVersion=2)),
+       ('zero segment duration',lambda x:x['variants'][0]['segments'][0].update(durationSeconds=0)),
+       ('negative segment start',lambda x:x['variants'][0]['segments'][0].update(startSeconds=-1)),
+       ('two-element scale',lambda x:x['transform'].update(scale=[1,1]))]:
+        changed=copy.deepcopy(descriptor);mutate(changed)
+        check('reject descriptor '+name,bool(list(descriptor_validator.iter_errors(changed))))
     operations=[]
     for path,methods in spec['paths'].items():
         for method,operation in methods.items():

@@ -30,9 +30,7 @@ CHECKS = []
 VIEWPORTS = (1280, 1440, 1920)
 NARROW = 1024
 SHORT_NAME = '合成场景A'
-SHORT_ADDRESS = '合成地址一号'
 LONG_NAME = '超长场景名称' + '超长名称内容' * 20
-LONG_ADDRESS = '某省某市某区某街道' + '很长的地址内容' * 40
 SHORT_ID = '11111111-1111-4111-8111-111111111111'
 LONG_ID = '22222222-2222-4222-8222-222222222222'
 DRAFT_ID = '33333333-3333-4333-8333-333333333333'
@@ -75,8 +73,8 @@ class Api:
 
     def __init__(self):
         self.scenes = [
-            {'id': SHORT_ID, 'name': SHORT_NAME, 'address': SHORT_ADDRESS, 'enabled': True, 'lockVersion': 3},
-            {'id': LONG_ID, 'name': LONG_NAME, 'address': LONG_ADDRESS, 'enabled': False, 'lockVersion': 12},
+            {'id': SHORT_ID, 'name': SHORT_NAME, 'enabled': True, 'lockVersion': 3},
+            {'id': LONG_ID, 'name': LONG_NAME, 'enabled': False, 'lockVersion': 12},
         ]
         self.published = {}
         self.calls = []
@@ -251,7 +249,6 @@ def assert_layout(page, width, row):
     columns = column_widths(page)
     check(f'{width}px 状态列紧凑', columns['状态'] <= 100)
     check(f'{width}px 修订号列紧凑', columns['修订号'] <= 100)
-    check(f'{width}px 地址列宽于名称列', columns['地址'] > columns['名称'])
     check(f'{width}px 操作列预留宽度容纳按钮组',
           columns['操作'] >= ordered[-1]['box']['x'] + ordered[-1]['box']['width'] - ordered[0]['box']['x'])
     check(f'{width}px 无需横向滚动', horizontal_scroller(page) is None)
@@ -339,18 +336,11 @@ def main():
                 page.wait_for_timeout(250)
                 assert_layout(page, width, long_row)
                 page.screenshot(path=str(run / f'scenes-{width}.png'), full_page=True)
-            wide = column_widths(page)
             page.set_viewport_size({'width': VIEWPORTS[0], 'height': 1000})
             page.wait_for_timeout(250)
-            narrow_columns = column_widths(page)
-            check('地址列随窗口变宽获得剩余空间', wide['地址'] > narrow_columns['地址'] > narrow_columns['名称'])
-
             name_cell = long_row.locator('td').nth(0)
-            address_cell = long_row.locator('td').nth(1)
             overflow = name_cell.locator('.cell').evaluate('el=>({sw:el.scrollWidth,cw:el.clientWidth})')
             check('超长名称使用省略显示', overflow['sw'] > overflow['cw'] + 1)
-            overflow = address_cell.locator('.cell').evaluate('el=>({sw:el.scrollWidth,cw:el.clientWidth})')
-            check('超长地址使用省略显示', overflow['sw'] > overflow['cw'] + 1)
             name_cell.hover()
             tooltip = page.locator('.el-popper[role=tooltip]').filter(has_text=LONG_NAME).first
             tooltip.wait_for(state='visible', timeout=5000)
@@ -382,10 +372,6 @@ def main():
 
             page.set_viewport_size({'width': 1440, 'height': 1000})
             page.wait_for_timeout(200)
-            page.goto(web + '/index')
-            page.get_by_role('heading', name='操作步骤').wait_for()
-            check('首页入口说明指向版本与文件入口',
-                  '场景列表的“版本与文件”' in page.locator('.step-grid').inner_text())
             page.goto(web + '/admin/scenes')
             short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)
             long_row = page.get_by_role('row').filter(has_text=LONG_NAME[:12])
@@ -400,7 +386,7 @@ def main():
             check('场景信息弹窗不再包含版本与文件按钮',
                   dialog.get_by_role('button', name='版本与文件', exact=True).count() == 0)
             values = [field.input_value() for field in dialog.locator('input').all()]
-            check('场景信息弹窗展示名称与地址字段', SHORT_NAME in values and SHORT_ADDRESS in values)
+            check('场景信息弹窗展示名称字段', SHORT_NAME in values)
             footer.get_by_role('button', name='关闭', exact=True).click()
             dialog.wait_for(state='hidden')
 

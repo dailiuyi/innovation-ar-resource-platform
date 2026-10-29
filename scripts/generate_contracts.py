@@ -50,10 +50,7 @@ schemas = {
     'Login': obj({'username': string(minLength=1), 'password': string(minLength=1)}),
     'Me': obj({'id': uuid, 'displayName': string()}),
     'Resource': obj({'id': uuid}),
-    'SceneCreate': obj({'name': string(minLength=1, maxLength=200), 'address': string(),
-                       'longitude': {'type': 'number', 'minimum': -180, 'maximum': 180},
-                       'latitude': {'type': 'number', 'minimum': -90, 'maximum': 90},
-                       'geoCrs': enum('WGS84', 'GCJ02', 'BD09')}, ['name']),
+    'SceneCreate': obj({'name': string(minLength=1, maxLength=200)}),
     'SceneView': obj({'id': uuid, 'name': string(), 'lockVersion': integer(minimum=0), 'enabled': {'type': 'boolean'},
                      'currentDayVersionId': string(format='uuid', nullable=True),
                      'currentNightVersionId': string(format='uuid', nullable=True)}),
@@ -109,7 +106,7 @@ def add(path, method, operation, summary, request=None, response=None, status='2
 
 def query(name, schema, required=True): return {'name': name, 'in': 'query', 'required': required, 'schema': schema}
 
-add('/api/v1/scenes','post','createScene','创建场景（包含地点信息）','SceneCreate','SceneView','201')
+add('/api/v1/scenes','post','createScene','创建场景','SceneCreate','SceneView','201')
 add('/api/v1/scenes','get','listScenes','列出场景',response='SceneList',
     query=[query('limit',integer(minimum=1,maximum=100,default=20),False),query('offset',integer(minimum=0,default=0),False)])
 add('/api/v1/scenes/{sceneId}','get','getScene','查看场景和当前昼夜版本',response='SceneView')
@@ -142,12 +139,6 @@ add('/api/v1/client/markers/{code}/manifest','get','resolveManifest','游客扫�
 # Demo contracts coexist with explicitly labelled future candidate operations.
 schemas.pop('Csrf')
 schemas.pop('Me')
-schemas['SceneCreate']['properties'].update({
-    'address': string(maxLength=1000, nullable=True),
-    'longitude': {'type':'number','minimum':-180,'maximum':180,'nullable':True},
-    'latitude': {'type':'number','minimum':-90,'maximum':90,'nullable':True},
-    'geoCrs': dict(enum('WGS84','GCJ02','BD09'),nullable=True),
-})
 schemas['SceneUpdate'] = obj(dict(schemas['SceneCreate']['properties'], expectedVersion=integer(minimum=0)), ['name','expectedVersion'])
 schemas['SceneView'] = obj(dict(schemas['SceneCreate']['properties'], id=uuid,
     enabled={'type':'boolean'},lockVersion=integer(minimum=0),createdAt=string(format='date-time'),updatedAt=string(format='date-time')),
@@ -317,8 +308,39 @@ example = {'schemaVersion': 1, 'sceneId': '10000000-0000-4000-8000-000000000001'
                       'bytes': 1024, 'url': 'https://cdn.example.invalid/catalog.json?signature=EXAMPLE', 'expiresAt': '2026-09-14T12:10:00Z'}],
            'entrypoint': 'catalog.json', 'playback': {'mode': 'LOCAL_INDEPENDENT', 'durationMs': 60000, 'recoveryPolicy': 'RESUME_LOCAL_TIME'}}
 
+def resource_descriptor_schema():
+    relative_path = string(minLength=1, maxLength=1024)
+    vector3 = array({'type': 'number'}, minItems=3, maxItems=3)
+    segment = obj({'path': relative_path, 'startSeconds': {'type': 'number', 'minimum': 0},
+                   'durationSeconds': {'type': 'number', 'exclusiveMinimum': 0}})
+    variant = obj({'id': string(pattern='^[a-z][a-z0-9_-]{0,63}$'), 'name': string(minLength=1),
+                   'format': enum('4dv-compressed-ply'), 'segments': array(segment, minItems=1)})
+    return {'$schema': 'https://json-schema.org/draft/2020-12/schema',
+            '$id': 'https://schemas.example.invalid/innovation-ar-resource-platform/resource-descriptor-v1.json',
+            'title': 'resource.json v1', **obj({
+                'formatVersion': integer(enum=[1]), 'defaultVariant': string(pattern='^[a-z][a-z0-9_-]{0,63}$'),
+                'transform': obj({'position': vector3, 'rotation': vector3, 'scale': vector3}),
+                'settings': relative_path, 'poster': relative_path, 'audio': relative_path,
+                'audioPosition': vector3, 'preview': relative_path, 'variants': array(variant, minItems=1)},
+                ['formatVersion', 'defaultVariant', 'transform', 'settings', 'variants'])}
+
+def resource_descriptor_example():
+    media = 'media_and_settings/'
+    def variant(id, name):
+        return {'id': id, 'name': name, 'format': '4dv-compressed-ply', 'segments': [
+            {'path': id + '/00.c.ply', 'startSeconds': 0, 'durationSeconds': 5},
+            {'path': id + '/01.c.ply', 'startSeconds': 5, 'durationSeconds': 3}]}
+    return {'formatVersion': 1, 'defaultVariant': 'standard_quality',
+            'transform': {'position': [0, 0, 0], 'rotation': [0, 0, 0], 'scale': [1, 1, 1]},
+            'settings': media + 'wedding_settings.json', 'poster': media + 'wedding_1205.jpg',
+            'audio': media + 'wedding.wav', 'preview': media + 'wedding.webm',
+            'variants': [variant('standard_quality', '标准画质'), variant('high_quality', '高清画质'),
+                         variant('vr_foreground', 'VR 前景')]}
+
 if __name__ == '__main__':
     (ROOT/'contracts/openapi.yaml').write_text(yaml.safe_dump(spec,allow_unicode=True,sort_keys=False),encoding='utf-8')
-    for path, value in [('schemas/runtime-manifest.schema.json',manifest),('examples/runtime-manifest.json',example)]:
+    for path, value in [('schemas/runtime-manifest.schema.json',manifest),('examples/runtime-manifest.json',example),
+                        ('schemas/resource-descriptor.schema.json',resource_descriptor_schema()),
+                        ('examples/resource-descriptor.json',resource_descriptor_example())]:
         (ROOT/'contracts'/path).write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
     print('Generated',sum(len(v) for v in paths.values()),'operations')

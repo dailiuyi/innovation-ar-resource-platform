@@ -99,7 +99,7 @@ def main():
 
     token = login()
     name = 'infra-' + str(uuid.uuid4())
-    status, body = request('/prod-api/api/v1/scenes', 'POST', {'name': name, 'address': 'synthetic infrastructure verification'}, token)
+    status, body = request('/prod-api/api/v1/scenes', 'POST', {'name': name}, token)
     scene = json.loads(body)
     check('scene write through proxy', status == 201 and scene.get('name') == name)
     scene_id = scene['id']

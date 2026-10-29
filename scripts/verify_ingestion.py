@@ -501,7 +501,7 @@ def main():
                 check(f'browser scene actions share one line at {width}px',max(box['y']+box['height']/2 for box in boxes)-min(box['y']+box['height']/2 for box in boxes)<=1.5)
                 check(f'browser scene actions keep spacing at {width}px',all(boxes[index+1]['x']-(boxes[index]['x']+boxes[index]['width'])>=6 for index in range(len(boxes)-1)))
                 columns={header.inner_text().strip():header.bounding_box()['width'] for header in page.locator('.el-table__header th').all()}
-                check(f'browser scene columns stay compact at {width}px',columns['状态']<=110 and columns['修订号']<=110 and columns['地址']>columns['名称'])
+                check(f'browser scene columns stay compact at {width}px',columns['状态']<=110 and columns['修订号']<=110)
             page.set_viewport_size({'width':1500,'height':1050})
             check('browser scene action labels are not truncated',all(button.evaluate('el=>el.scrollWidth<=el.clientWidth+1') for button in row.locator('.scene-actions button').all()))
             row.get_by_role('button',name='场景信息',exact=True).click()

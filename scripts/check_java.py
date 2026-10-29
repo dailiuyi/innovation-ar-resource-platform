@@ -1,5 +1,6 @@
 """Run selected Java module tests, rejecting zero-test or skipped-test delivery."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,11 +29,14 @@ def main():
     parser.add_argument('--module', required=True, help='Affected reactor module, e.g. ruoyi-framework')
     parser.add_argument('--tests', help='Optional Surefire test class selector')
     parser.add_argument('--offline', action='store_true')
+    parser.add_argument('--package', action='store_true', help='Run clean package (same tests) and record ruoyi-admin.jar path and SHA-256')
     parser.add_argument('--root', type=Path, default=ROOT)
     args = parser.parse_args()
     ROOT = args.root.resolve()
     if not re.fullmatch(r'ruoyi-[a-z]+', args.module) or not (ROOT / 'backend' / args.module / 'pom.xml').is_file():
         parser.error('Unknown module')
+    if args.package and args.module != 'ruoyi-admin':
+        parser.error('--package requires --module ruoyi-admin')
     evidence = ROOT / '.local/java-check' / uuid.uuid4().hex[:12]
     evidence.mkdir(parents=True)
     env = dict(os.environ)
@@ -45,7 +49,7 @@ def main():
         print('Maven missing: provision the Java-capable execution image')
         raise SystemExit(2)
     command = [mvn, '-f', str(ROOT / 'backend/pom.xml'), '-pl', args.module, '-am',
-               '-Dmaven.repo.local=' + str(ROOT / '.local/m2'), 'clean', 'test', '-B', '-ntp']
+               '-Dmaven.repo.local=' + str(ROOT / '.local/m2'), 'clean', 'package' if args.package else 'test', '-B', '-ntp']
     if args.offline:
         command.append('-o')
     if args.tests:
@@ -66,6 +70,13 @@ def main():
     report = {'status': status, 'module': args.module, 'command': command,
               'exitCode': result.returncode, **counts, 'seconds': round(time.time() - before, 2),
               'scope': 'Java tests only; HTTP/database/session revocation not established'}
+    if args.package and passed:
+        jar = ROOT / 'backend/ruoyi-admin/target/ruoyi-admin.jar'
+        digest = hashlib.sha256()
+        with jar.open('rb') as stream:
+            for block in iter(lambda: stream.read(1 << 20), b''):
+                digest.update(block)
+        report['jar'] = {'path': str(jar), 'sha256': digest.hexdigest()}
     (evidence / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report, indent=2))
     print('Evidence: ' + str(evidence))

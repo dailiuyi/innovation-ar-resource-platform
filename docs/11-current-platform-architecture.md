@@ -86,7 +86,7 @@ flowchart TB
 | 账号与权限 | `sys_user`、`sys_role`、`sys_menu`、`sys_user_role`、`sys_role_menu` | 管理员、固定角色和后台菜单 |
 | 登录与系统日志 | `sys_logininfor`、`sys_oper_log` | 登录结果和已接入的后台管理操作 |
 | 框架配置 | `sys_config`、字典、部门及其他若依基础表 | 支撑后台框架运行 |
-| 场景 | `ar_scene` | 场景名称、地址、可选经纬度、启用状态和并发版本号 |
+| 场景 | `ar_scene` | 场景名称、启用状态和并发版本号 |
 | 场景审计 | `ar_audit` | 记录场景变更的操作人、动作、时间及变更内容 |
 
 ```mermaid
@@ -101,10 +101,6 @@ erDiagram
     AR_SCENE {
         uuid id PK
         varchar name
-        varchar address
-        numeric longitude
-        numeric latitude
-        varchar geo_crs
         boolean enabled
         bigint lock_version
         timestamptz deleted_at
@@ -123,7 +119,7 @@ erDiagram
     }
 ```
 
-`ar_scene.lock_version` 用于乐观并发控制。修改场景时，客户端必须提交读取到的版本号；版本号过期时返回 409，防止后提交的请求直接覆盖他人的修改。经纬度必须同时填写，并同时指定 `WGS84`、`GCJ02` 或 `BD09` 坐标类型。
+`ar_scene.lock_version` 用于乐观并发控制。修改场景时，客户端必须提交读取到的版本号；版本号过期时返回 409，防止后提交的请求直接覆盖他人的修改。场景只维护名称、启用状态和版本号，V014 迁移已删除地址、经纬度和坐标类型。
 
 场景列表支持删除，操作前弹出包含场景名称的确认窗口。`DELETE /api/v1/scenes/{id}?expectedVersion=...` 需要登录，成功返回 204。V006 迁移增加 `deleted_at`，用于逻辑删除；已删除场景不再出现在列表和详情中，也不能修改或启用。删除沿用修订号检查，并在同一事务内写入 `DELETE` 审计，保留历史记录。
 

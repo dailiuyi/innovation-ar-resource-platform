@@ -16,8 +16,8 @@ paths:
   /api/v1/scenes:
     post:
       operationId: createScene
-      summary: 创建场景（包含地点信息）
-      description: 创建场景（包含地点信息）
+      summary: 创建场景
+      description: 创建场景
       security:
       - bearerAuth: []
       parameters: []
@@ -1537,7 +1537,7 @@ paths:
         name: platform
         in: query
         required: true
-        schema: &id021
+        schema: &id017
           type: string
           enum:
           - ANDROID
@@ -4784,27 +4784,6 @@ components:
           type: string
           minLength: 1
           maxLength: 200
-        address: &id016
-          type: string
-          maxLength: 1000
-          nullable: true
-        longitude: &id017
-          type: number
-          minimum: -180
-          maximum: 180
-          nullable: true
-        latitude: &id018
-          type: number
-          minimum: -90
-          maximum: 90
-          nullable: true
-        geoCrs: &id019
-          type: string
-          enum:
-          - WGS84
-          - GCJ02
-          - BD09
-          nullable: true
       required:
       - name
     SceneView:
@@ -4812,10 +4791,6 @@ components:
       additionalProperties: false
       properties:
         name: *id015
-        address: *id016
-        longitude: *id017
-        latitude: *id018
-        geoCrs: *id019
         id: *id001
         enabled:
           type: boolean
@@ -4860,13 +4835,13 @@ components:
         heightMeters:
           type: number
           minimum: 1.0e-06
-        position: &id022
+        position: &id018
           type: array
           items:
             type: number
           minItems: 3
           maxItems: 3
-        rotation: &id023
+        rotation: &id019
           type: array
           items:
             type: number
@@ -4934,16 +4909,16 @@ components:
         id: *id001
         sceneId: *id001
         variant: *id004
-        versionNo: &id026
+        versionNo: &id022
           type: integer
           minimum: 1
-        state: &id027
+        state: &id023
           type: string
           enum:
           - DRAFT
           - READY
           - REVOKED
-        lockVersion: &id028
+        lockVersion: &id024
           type: integer
           minimum: 0
       required:
@@ -4963,8 +4938,8 @@ components:
         packages:
           type: object
           additionalProperties: false
-          properties: &id029
-            ANDROID: &id020
+          properties: &id025
+            ANDROID: &id016
               type: object
               additionalProperties: false
               properties:
@@ -4988,10 +4963,10 @@ components:
               - runtimeVersion
               - minClientBuild
               - entrypoint
-            IOS: *id020
-            MINIPROGRAM: *id020
+            IOS: *id016
+            MINIPROGRAM: *id016
           minProperties: 1
-        playback: &id025
+        playback: &id021
           type: object
           additionalProperties: false
           properties:
@@ -5020,7 +4995,7 @@ components:
             additionalProperties: false
             properties:
               assetId: *id001
-              platform: *id021
+              platform: *id017
               logicalPath:
                 type: string
                 minLength: 1
@@ -5100,7 +5075,7 @@ components:
           type: integer
           format: int64
           minimum: 1
-        sha256: &id024
+        sha256: &id020
           type: string
           pattern: ^[0-9a-f]{64}$
       required:
@@ -5172,7 +5147,7 @@ components:
           type: integer
           minimum: 1
         variant: *id004
-        platform: *id021
+        platform: *id017
         format:
           type: string
           minLength: 1
@@ -5212,8 +5187,8 @@ components:
                 type: object
                 additionalProperties: false
                 properties:
-                  position: *id022
-                  rotation: *id023
+                  position: *id018
+                  rotation: *id019
                 required:
                 - position
                 - rotation
@@ -5233,7 +5208,7 @@ components:
               logicalPath:
                 type: string
                 minLength: 1
-              sha256: *id024
+              sha256: *id020
               bytes:
                 type: integer
                 format: int64
@@ -5257,7 +5232,7 @@ components:
         entrypoint:
           type: string
           minLength: 1
-        playback: *id025
+        playback: *id021
       required:
       - schemaVersion
       - sceneId
@@ -5290,14 +5265,14 @@ components:
         id: *id001
         sceneId: *id001
         variant: *id004
-        versionNo: *id026
-        state: *id027
-        lockVersion: *id028
+        versionNo: *id022
+        state: *id023
+        lockVersion: *id024
         packages:
           type: object
           additionalProperties: false
-          properties: *id029
-        playback: *id025
+          properties: *id025
+        playback: *id021
         note:
           type: string
         files:
@@ -5307,7 +5282,7 @@ components:
             additionalProperties: false
             properties:
               assetId: *id001
-              platform: *id021
+              platform: *id017
               logicalPath:
                 type: string
                 minLength: 1
@@ -5331,10 +5306,6 @@ components:
       additionalProperties: false
       properties:
         name: *id015
-        address: *id016
-        longitude: *id017
-        latitude: *id018
-        geoCrs: *id019
         expectedVersion:
           type: integer
           minimum: 0
@@ -5590,7 +5561,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-        sha256: *id024
+        sha256: *id020
         relativePath:
           type: string
           minLength: 1
@@ -5621,7 +5592,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-        sha256: *id024
+        sha256: *id020
         storageKey:
           type: string
         status:
@@ -5714,7 +5685,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-        sha256: *id024
+        sha256: *id020
       required:
       - requestKey
       - relativePath
@@ -5799,7 +5770,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-        sha256: *id024
+        sha256: *id020
         downloadPath:
           type: string
       required:
@@ -5865,7 +5836,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-        sha256: *id024
+        sha256: *id020
         downloadPath:
           type: string
       required:

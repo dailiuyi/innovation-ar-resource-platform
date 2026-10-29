@@ -228,7 +228,7 @@ def seed_preview(runtime):
     token = api('/login', 'POST', {'username': user, 'password': runtime.password})['token']
     fixtures = {'username': user, 'scenes': []}
     for index, name in enumerate(['验收场景A', '超长场景名称' + '测试内容' * 25]):
-        scene = api('/api/v1/scenes', 'POST', {'name': name, 'address': '合成地址' * (1 if index == 0 else 80)}, token)
+        scene = api('/api/v1/scenes', 'POST', {'name': name}, token)
         draft = api('/api/v1/scenes/' + scene['id'] + '/drafts', 'POST',
                     {'requestKey': str(uuid.uuid4()), 'description': '人工验收用合成版本'}, token)
         payload = '这是隔离验收文件，不是真实客户端资源。'.encode('utf-8')

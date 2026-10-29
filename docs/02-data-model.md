@@ -59,7 +59,7 @@
 - 草稿编辑使用 `scene_version.lock_version`。发布和场景启停使用 `scene.lock_version`。请求中的 `expectedVersion` 过期时返回 `409`。
 - 文件状态依次表示待验证 `PENDING`、可用 `READY`、验证失败 `REJECTED` 或撤销 `REVOKED`。文件就绪后，对象键、大小和摘要不可修改。
 - V0.1 保留历史版本、成品文件元数据和发布审计，不自动删除文件。跨版本复用是否需要实现，待交付格式确认。
-- 主键使用 UUID，时间使用 UTC，地理位置保留坐标类型信息。
+- 主键使用 UUID，时间使用 UTC。
 
 ## 数据库与应用分工
 

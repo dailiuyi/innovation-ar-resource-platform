@@ -11,10 +11,9 @@ a=login('demo_a',accounts['demo_a']);b=login('demo_b',accounts['demo_b'])
 conn=psycopg.connect(host='127.0.0.1',port=15432,dbname='ar_demo',user='ar_demo',password=CONFIG['AR_DATABASE_PASSWORD'],autocommit=True)
 check('PostgreSQL 17 target',conn.execute('show server_version').fetchone()[0].startswith('17.'))
 check('AR anonymous error contract',call('/api/v1/scenes')[0]==401 and 'traceId' in call('/api/v1/scenes')[1])
-check('coordinate pair validation',call('/api/v1/scenes','POST',{'name':'invalid','longitude':10},a)[0]==400)
 check('blank name validation',call('/api/v1/scenes','POST',{'name':' '},a)[0]==400)
 name='integration-'+str(uuid.uuid4())[:8]
-status,scene=call('/api/v1/scenes','POST',{'name':name,'address':'Demo','longitude':120,'latitude':30,'geoCrs':'WGS84'},a)
+status,scene=call('/api/v1/scenes','POST',{'name':name},a)
 check('create scene',status==201)
 sid=scene['id']
 check('detail matches',call('/api/v1/scenes/'+sid,token=b)[1]['name']==name)
