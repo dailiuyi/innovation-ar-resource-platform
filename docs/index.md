@@ -5,7 +5,7 @@
 | 要回答的问题 | 入口 | 使用边界 |
 |---|---|---|
 | 收到口头需求、准备 Issue、审查 PR 或接手任务时先做什么 | [Agent 工作流入口](17-agent-workflow.md) | 先判断职责和用户授权，再进入对应手册；不依赖旧聊天 |
-| 当前后台实现了什么 | [资源入库闭环](12-resource-ingestion.md)、[项目介绍](../README.md) | 已有场景、账号、成品版本私有入库、场景发布指针、整版删除，以及匿名客户端读取当前发布版本和完整下载参考工具；预览、播放器接入未实现 |
+| 当前后台实现了什么 | [资源入库闭环](12-resource-ingestion.md)、[项目介绍](../README.md) | 已有场景、账号、成品版本私有入库、场景发布指针、整版删除，以及匿名客户端读取当前发布版本和完整下载参考工具；预览未实现；参考播放器适配工具已有，真实播放未验收，见 [真实样包验收记录](20-4dgs-sample-validation.md) |
 | 当前平台如何组成 | [当前架构](11-current-platform-architecture.md) | 结合现行实现核对；后续设计不等于已有能力 |
 | 深圳试点大资源如何传输和存储 | [公网分发架构建议](19-public-resource-delivery-proposal.md) | 云主机挂盘与 CDN，预留对象存储；方案未实施 |
 | 如何开发、启动、打包 | [开发工作流](development-workflow.md)、[本机手册](08-demo-runbook.md)、[容器手册](10-local-infrastructure.md) | 日常 Demo、隔离验收、LAN Compose 是不同环境 |

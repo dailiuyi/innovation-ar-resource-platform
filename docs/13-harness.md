@@ -41,6 +41,8 @@ python scripts/harness.py check --profile ingestion
 
 Linux 上的真实验收不走 Windows profile，而是用 `scripts/prepare_4dgs_check.py` 启动固定的隔离 Compose 实例（项目 `innovation-ar-resource-platform-infra-check`，`127.0.0.1:18082`，不使用日常 18081/43174 或 `config/compose.env`），再运行 `scripts/verify_ingestion.py --base-url http://127.0.0.1:18082 --admin-base-url http://127.0.0.1:18082/prod-api --credentials-file <runtime.json 中的 credentialsFile> [--browser-executable /opt/google/chrome/chrome]`（等价于 `run_http_checks`）。`prepare` 只用已有镜像、已测试 Jar 和已交付的前端 dist，凭据 0600 且不打印，`stop` 只 `compose stop` 并保留数据。quick 和合成 UI 检查都不是该全链验收。
 
+真实样包与参考播放器闭环由 `scripts/verify_4dgs.py --runtime <runtime.json> --samples-root <样本目录> --sample-descriptors <描述目录> --viewer-root <参考播放器副本> --browser-executable /opt/google/chrome/chrome --report-dir <.local 下目录>` 执行，只接受固定的隔离实例；退出码 0 全部通过、1 有检查失败、2 输入或运行时不可用、4 已执行项全部通过但有被阻塞项（报告 `verify-4dgs.json` 的 `blocked`）。`prepare_4dgs_check.py prepare` 同时给测试后端开启仅含文件读写事件的 JFR（`JAVA_TOOL_OPTIONS`，写入后端日志卷，正常停止时转储），可选 `--reference-viewer DIR` 只读挂入参考播放器副本。无头 Chrome 默认回退到 SwiftShader 软件渲染，需 `--use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist` 才使用本机 NVIDIA GPU，`verify_4dgs.py` 同时记录两种渲染器。详见 [真实样包验收记录](20-4dgs-sample-validation.md)。
+
 ## 报告与完成判定
 
 每次调用创建独立 `.local/harness/<UTC时间>-<随机标识>/`，保存 `report.json`、逐步日志、专项证据和必要的构建产物。目录沿用 `.local/` 忽略规则，不自动清理。日志和测试目录可能包含运行时敏感信息，应留在本机；正式共享前检查脱敏。
