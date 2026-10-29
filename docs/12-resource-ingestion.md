@@ -1,138 +1,88 @@
 # 资源入库闭环
 
-本轮完成管理员私有入库：选择场景 → 创建版本草稿 → 登记文件或选择文件夹替换 → 上传并校验 → 正式存储确认 → 后台查询 → 发布或替换发布 → 管理员按完整清单或 ZIP 下载。文件“可用”仅表示已可靠入库。同一场景只有一份当前发布版本；已发布版本文件冻结、说明可改。客户端加载仍未实现。
+一个场景对应一个独立的 4DGS 重建成品。管理员私有入库流程：选择场景 → 导入带 `resource.json` 的资源目录创建内容版本 → 逐文件上传并校验 → 正式存储确认 → 发布为场景当前版本 → 需要时整版删除。文件“可用”仅表示已可靠入库；匿名客户端读取和完整下载工具另见任务记录，当前契约只描述管理员侧。
 
 ## 数据与状态
 
-实际迁移为 `backend/ruoyi-admin/src/main/resources/db/demo/V007__resource_ingestion.sql` 起，发布指针为 `V011__scene_publication.sql`，文件集合与 ZIP 缓存为 `V012__folder_collections_and_downloads.sql`，旧文件不安全导出路径由 `V013__safe_export_relative_paths.sql` 改写（保留原 `file_name`）。随应用 Flyway 执行；根目录 `database/migrations` 仍是历史候选设计。 V012 已在需要保留的本机 Demo 库执行，因此不以修改 V012 历史的方式纠正导出路径。
+实际迁移随应用 Flyway 执行：`V014__remove_scene_geography.sql` 删除地址、经纬度和坐标系；`V015__scene_product_versions.sql` 是**破坏性清洁切换**，明确清空旧成品业务记录（`ar_audit`、旧草稿/文件/ZIP 表和 `ar_scene`）后删除旧表，不涉及任何 `sys_*` 账号和菜单表，也不能对日常库自动执行。根目录 `database/migrations` 仍是历史候选设计。
 
-- `ar_scene` 一对多 `ar_draft`：UUID、版本说明、所属场景、创建人、创建时间和说明修订号。`ar_scene.published_draft_id` 指向当前发布草稿，未发布为空。
-- `ar_draft` 一对多 `ar_draft_collection`：当前 `ACTIVE` 集合、可选 `PENDING` 替换批次；退休或取消的集合等待物理删除。
-- `ar_draft_collection` 一对多 `ar_draft_file`：原文件名、导出相对路径、文件类型、预期大小/SHA256、服务端生成的存储标识、处理状态、已验证大小/SHA256、尝试次数、失败原因、创建人和最后操作人。
-- 文件内容只写入 `ArtifactStorage`，不保存进数据库。相对路径只用于展示、ZIP 条目和按清单还原，不能指定服务器落盘路径；存储标识为服务端 UUID 加 `.bin`。旧文件在 V012 迁入当前集合；V013 只改写不安全或冲突的导出路径，保留已有合法相对路径（含嵌套目录）以及原 `file_name` 与存储内容。
-- 新增草稿时锁定有效场景，拒绝不存在或已逻辑删除的场景。删除场景不会物理删除已有草稿、文件或审计；已有草稿可按编号只读查询，禁止继续写入。
+- `ar_scene`：只保留名称、启停、修订号及时间/删除信息，加当前发布指针 `published_version_id`、`published_at`、`published_by_*`（复合外键保证不跨场景发布）。
+- `ar_scene_version`：不可变版本，含场景内版本号、`request_key`、说明、`descriptor`（jsonb）、说明修订号。同场景同请求键幂等。
+- `ar_version_file`：每文件相对路径、预期大小/SHA256、服务端 UUID 加 `.bin` 的存储标识、状态、已验证大小/摘要、尝试次数、失败原因、创建人和最后操作人。同版本相对路径唯一。
+- `ar_version_deletion`：整版删除意图、失败原因和最小幂等回执，不向已删除版本保留外键，也不复制文件内容或完整描述。
+- 文件内容只写入 `ArtifactStorage`，不进数据库。相对路径只用于清单和还原，不能指定服务器落盘路径。
 
-| 状态 | 含义 |
+| 文件状态 | 含义 |
 |---|---|
 | PENDING | 元数据已登记，尚未确认上传 |
 | UPLOADING | 正在接收或校验，不能当作成功 |
 | AVAILABLE | 接收时大小和 SHA256 校验通过并已无覆盖提交为正式文件，数据库确认可用 |
 | FAILED | 校验、传输、存储或重启核对失败，原因可查，可用原文件重试 |
 
-`AVAILABLE` 的数据库约束要求已验证大小/摘要与登记值相等，且无失败原因。状态修改和审计写入同一数据库事务；文件 I/O 不占用长数据库事务。
+版本 `uploadStatus` 读时由文件状态推导，不另存状态机：未完成删除为 `DELETING`/`DELETE_FAILED`，否则有 `UPLOADING` 为 `UPLOADING`，有 `FAILED` 为 `FAILED`，全部 `AVAILABLE` 为 `READY`，其余 `PENDING`。`AVAILABLE` 的数据库约束要求已验证大小/摘要与登记值相等且无失败原因。
 
-## 接口与后台
+## resource.json v1
 
-入口：场景列表每行的 **版本与文件**（独立于“场景信息”弹窗；编辑名称、地址和坐标仍走“场景信息”）。资源面板标题与首行显示所属场景名称和编号。可创建草稿、编辑说明、确认后整份删除草稿、分页查看草稿和文件、选择多个文件追加上传、选择文件夹替换全部文件，并将一份草稿发布为该场景的唯一发布版本。管理员可下载 ZIP、查看完整清单并按文件下载。页面顶部固定当前发布卡片；首次进入自动选中当前发布版本并展示文件，无发布时显示尚未发布和草稿管理入口。手动切换草稿后刷新保留选择；首次发布或替换发布成功后展示新的当前发布版本文件。切换场景清空上一场景的文件。切换场景、版本或关闭重开都会清除上一对象的下载提示、下载错误和准备中按钮状态；准备或下载期间切换对象后，旧请求稍后成功或失败都不再写回新面板。页面显示摘要计算进度、传输百分比、等待服务端确认和最终结果。文件表显示相对路径、文件名、类型、大小、完整 SHA256、状态、失败原因、创建人、下载和重试入口。页面刷新保留当前场景/草稿选择并重新查询数据库。
+上传目录根必须有且只有一个 `resource.json`，浏览器以它所在目录为根，描述中的路径都相对这个根。内容作为创建版本请求的 `descriptor` 存入 jsonb，不作为模型文件传输。字段、约束和示例见 [Schema](../contracts/schemas/resource-descriptor.schema.json) 与 [wedding 示例](../contracts/examples/resource-descriptor.json)，同源于 `scripts/generate_contracts.py`。
+
+- 固定 `formatVersion=1`；`defaultVariant` 指向真实档位；必须显式给出 `transform`；`settings` 必填，`poster`/`audio`/`preview` 可选，缺少就省略。
+- 每个档位有 `id`、`name`、`format`（当前唯一值 `4dv-compressed-ply`）和非空有序 `segments`（`path`、`startSeconds`、`durationSeconds`）。时间不猜测，不按文件名推断顺序，不要求各档位段数一致。
+- 引用路径去重后的集合必须与请求 `files` 的路径集合完全相等；重复路径、路径穿越、缺失引用、重复档位、未知默认档位、时间重叠返回 400 并指出字段或路径。文件大小或数量超配置返回 413。后端不解码模型。
+
+## 接口
+
+管理接口位于 `/api/v1`，类级 `ar_admin`，经网关为 `/prod-api/api/v1`。完整输入输出见生成的 [OpenAPI](../contracts/openapi.yaml)（`4DGS Scene Resource API` 0.4.0，仅描述当前实际接口）。
 
 | 方法与路径 | 用途 |
 |---|---|
-| GET `/api/v1/drafts/config` | 单文件与集合大小/数量上限 |
-| GET / POST `/api/v1/scenes/{sceneId}/drafts` | 分页查询 / 创建草稿 |
-| GET / PUT `/api/v1/drafts/{draftId}` | 查询 / 编辑说明（expectedVersion） |
-| DELETE `/api/v1/drafts/{draftId}` | 确认后永久删除草稿及全部文件；当前发布版本拒绝 |
-| POST `/api/v1/drafts/{draftId}/publish` | 发布或替换为该场景唯一发布版本 |
-| GET / POST `/api/v1/drafts/{draftId}/files` | 分页查询当前集合 / 追加登记待上传文件 |
-| DELETE `/api/v1/drafts/{draftId}/files/{fileId}` | 永久删除草稿文件与数据库文件行，保留审计及幂等回执 |
-| PUT `/api/v1/drafts/{draftId}/files/{fileId}/content` | `application/octet-stream` 原始文件流 |
-| POST `/api/v1/drafts/{draftId}/replacements` | 登记完整文件夹清单并开始替换 |
-| GET `/api/v1/drafts/{draftId}/replacements/{replacementId}` | 查看替换进度 |
-| POST `/api/v1/drafts/{draftId}/replacements/{replacementId}/cancel` | 取消替换并恢复原集合 |
-| GET `/api/v1/drafts/{draftId}/download-manifest` | 完整文件清单（非分页第一页） |
-| GET/HEAD `/api/v1/drafts/{draftId}/files/{fileId}/content` | 单文件下载，支持 Range |
-| POST `/api/v1/drafts/{draftId}/zip-exports` | 准备或复用 ZIP |
-| GET/HEAD `/api/v1/drafts/{draftId}/zip-exports/{exportId}/content` | 下载已生成的 ZIP |
+| GET `/scene-versions/config` | 单文件、单版本文件数和字节上限 |
+| GET / POST `/scenes/{sceneId}/versions` | 分页查询（含 `sceneLockVersion`、`published`）/ 创建版本 |
+| GET / PUT `/scene-versions/{versionId}` | 描述和完整文件清单 / 仅编辑说明（`expectedVersion`） |
+| DELETE `/scene-versions/{versionId}` | 整版物理删除；当前发布版本 409 |
+| POST `/scene-versions/{versionId}/publish` | 发布，body `expectedSceneVersion` |
+| GET `/scene-versions/{versionId}/files/{fileId}` | 单文件状态，用于结果未确认后核对 |
+| PUT `/scene-versions/{versionId}/files/{fileId}/content` | `application/octet-stream` 原始文件流 |
+| GET / HEAD `/scene-versions/{versionId}/files/{fileId}/content` | 管理员读取已完成文件，支持强 ETag、Range、If-Range |
 
-完整输入输出见生成的 [OpenAPI](../contracts/openapi.yaml)，修改源为 `scripts/generate_contracts.py`。仅登录后的 `ar_admin` 管理员可操作；操作人从登录身份取得，客户端不能指定。关键变更写入现有 `ar_audit`，包含场景、草稿、文件和操作人，可在“场景操作记录”查看。动作列由前端集中映射中文名称，历史记录同样生效；未知代码保留原文，溢出时可悬停查看全文。接口与数据库仍保留原始动作代码。
+操作人从登录身份取得。关键变更写入 `ar_audit`，动作为 `VERSION_CREATE`、`VERSION_EDIT`、`VERSION_PUBLISH`、`VERSION_DELETE_REQUEST`、`VERSION_DELETE`、`VERSION_DELETE_FAILED`，以及场景动作和上传结果动作，可在“场景操作记录”查看。错误沿用 `AR_<status>`/`message`/`traceId`。
 
-AAR 强制登记为 `CLIENT_LIBRARY`（客户端集成库）；普通文件为 `RESOURCE_FILE`。系统不检查 AAR 是否能被某个客户端集成，也不把它当作 Addressables 成品。
+## 创建、上传与恢复
 
-## 上传、重试与对账
+1. 创建版本时一次登记全部文件。首次 201；同 `requestKey` 且说明、描述和排序后的路径/大小/摘要完全相同返回 200 与原版本；任一不同返回 409；已整版删除的版本迟到重试返回 410，不复活。
+2. 版本创建后描述和文件清单固定，需要改变模型、配置、路径或档位时创建新版本。只有说明可编辑。
+3. 服务端逐段读取文件，同一次读取中校验实际字节数与 SHA256，超过声明大小立即拒绝；只有校验通过才能无覆盖提交为正式 `.bin`，提交后直接标记 `AVAILABLE`，不再重读。
+4. 同一文件并发处理返回 409。已 `AVAILABLE` 的文件重复上传只核对记录、文件存在和长度后返回原记录。大小或摘要不符返回 422，存储 IO 失败返回 503，均保存 `FAILED` 与原因，新尝试递增 `attempts`。
+5. 上传按文件恢复：先查询状态，`AVAILABLE` 跳过，`UPLOADING` 显示处理中，`FAILED`/`PENDING` 重新完整上传该文件。传输超时只表示结果未确认，不自动改成失败；没有自动重试、全量轮询或分片协议。
+6. 启动先恢复未完成整版删除，再只对 `PENDING`/`UPLOADING`/`FAILED` 且有遗留数据的记录恢复：完整 `.ready` 或已落盘未确认的文件至多验证一次后补记可用，中断的 `UPLOADING` 变 `FAILED`，没有遗留数据的 `PENDING` 保持不变。`AVAILABLE` 不全量重算摘要。恢复审计标明 `performedBy=SYSTEM_RECONCILIATION`。
 
-1. 草稿创建的 `requestKey` 在场景内唯一；重复创建返回原草稿，不改变说明。
-2. 文件登记的 `requestKey` 在草稿内唯一。同键同文件元数据返回原记录，元数据不同返回 409。后台从草稿、文件名、大小、摘要和类型计算稳定标识，因此再次选择同一文件不会重复登记；同内容使用不同请求键的独立登记不做全库去重。
-3. 服务端逐段读取文件，同一次读取中校验实际字节数与 SHA256，超过声明大小立即拒绝。只有校验通过的 `.ready` 才能无覆盖提交为正式 `.bin`，提交后直接标记 `AVAILABLE`，不再重读正式文件。
-4. 同一文件并发处理返回 409，不把第二个请求记为成功。已 `AVAILABLE` 的文件重复上传只核对记录、文件存在和长度后返回原记录，不覆盖已有正式文件。
-5. 上传中断后重新选择原文件，全量重传；本轮不是分片断点续传。后台取消上传也不会声称已入库，刷新可核对数据库状态。
-6. 服务启动时在接收业务前只核对 `PENDING`/`UPLOADING`/`FAILED` 的文件记录，并且只处理存储中有遗留数据的记录：完整 `.ready` 可提交；已经正式落盘但数据库未确认的文件补记可用（遗留字节只验证一次）；中断的 `UPLOADING` 标记失败并可重传；没有遗留数据的 `PENDING` 保持不变。`AVAILABLE` 文件不在启动时重新计算摘要。重启对账审计明确 `performedBy=SYSTEM_RECONCILIATION`，关联最后一次操作的管理员，不伪装成人工请求。
-7. 下次重试由存储组件清理同 ID 的中断 `.part`。无登记的孤立文件不自动删除；管理员可确认永久删除草稿文件，流程见下节。
+文件列表、版本详情、发布和管理员 GET/HEAD 不读取其他文件内容，也不计算内容摘要。已可用文件的同长度磁盘损坏不会被服务端发现，由下载端校验 SHA256 发现。当前支持一个 Spring Boot 实例和一个私有本地存储卷。
 
-当前支持一个 Spring Boot 实例和一个私有本地存储卷，不支持多个服务实例并行写同一存储。已可用文件的同长度磁盘损坏不会在启动、发布或下载时被服务端发现；本轮没有任务队列、后台 Worker 或定时扫描。
+## 发布与整版删除
 
-## 草稿文件物理删除
+1. 同场景只有一个当前发布指针。发布只检验描述引用及全部文件 `AVAILABLE`，不解析模型、不重算摘要；未完成返回 400，有处理中文件或删除意图返回 409。
+2. 目标已是当前发布版本时直接返回 200，不更新修订号、发布时间、指针或审计。实际切换时比较 `expectedSceneVersion`，不符返回 409；成功后递增场景 `lock_version` 并写一条 `VERSION_PUBLISH` 审计。
+3. 替换发布后旧版本可查看或整版删除；当前发布版本禁止删除，不保留历史分发快照。场景停用或逻辑删除后不递归删除模型。
+4. 整版删除先持久化删除意图和 `VERSION_DELETE_REQUEST` 审计，再逐 UUID 删除存储内容；全部成功才在事务内删除文件行、版本行、完成回执并写 `VERSION_DELETE` 审计。IO 失败返回 503，版本保留并显示 `DELETE_FAILED`，再次 DELETE 重试；完成后重复 DELETE 为 204。文件处理中 409。
 
-按 2026-09-17 后续需求，文件行改为“删除”按钮。确认框说明将永久删除实际文件和草稿文件记录，无法恢复。删除范围只包含该 UUID 的 `.part`、`.ready`、`.bin`，逐个校验路径且不递归、不跟随符号链接；零字节 `.lock` 保留以维持并发互斥，不包含原文件内容。
+## 后台
 
-V009 增加 `ar_file_deletion` 最小删除回执：文件 ID、草稿 ID、原请求键、操作人、请求/完成时间和失败原因。不保留文件内容或原文件名；删除请求审计保留原文件名、大小、摘要和原状态用于追溯。
-
-1. 数据库先持久化删除意图和 `FILE_DELETE_REQUEST` 审计，再执行磁盘删除。
-2. 只有存储删除成功后，才在同一事务中物理删除 `ar_draft_file` 行、确认回执和写入 `FILE_DELETE` 审计。
-3. 存储删除失败返回 503，文件行显示“删除失败”和原因，提供“重试删除”。持有删除意图的记录不允许重新上传，也不会被入库对账重新标记为可用。
-4. 服务启动先恢复未完成删除，再执行普通文件校验。不增加队列、后台 Worker 或定时任务；磁盘已删但数据库未确认时可安全重试。恢复失败会保留“删除失败”，启动后仍可人工重试。
-5. 上传/校验期间禁止删除并返回 409；重复成功删除返回 204，不重复写成功审计。完成回执保留原请求键，迟到的登记重试返回 410，不能恢复文件；重新添加必须使用新请求键。
-
-V008 历史逻辑移除记录不会因 V009 迁移自动物理删除。后续仅在用户明确授权并列出精确 ID 后清理，维护审计标明自动清理来源和原移除操作人，不冒充新的登录请求。
-
-## 草稿整份删除
-
-草稿列表提供删除入口。必须先确认：将永久删除该草稿及其全部实际文件，无法恢复；操作审计保留。取消不发请求。
-
-1. 先对草稿内每个文件走上一节的物理删除（含尚未清理的历史逻辑移除行）：写入删除意图、删除 `.part`/`.ready`/`.bin`，成功后再删文件行。
-2. 全部文件删除成功后，才删除 `ar_draft` 行，并写入 `DRAFT_DELETE` 审计。文件删除回执继续保留；V010 去掉回执对草稿行的外键，避免草稿删除被回执挡住。
-3. 任一文件正在上传/校验返回 409，草稿保留。存储删除失败返回 503，草稿和失败文件仍在列表，可重试删除草稿或单文件。
-4. 重复删除已不存在的草稿返回 204。空草稿确认后直接删除行。
-
-页面在确认成功后从列表隐藏该草稿；若正在查看该草稿的文件，关闭文件区并去掉地址中的草稿选择。
-
-## 文件夹替换与管理员下载
-
-普通“选择文件并上传”仍是向当前集合追加。文件夹入口会登记完整相对路径清单并替换全部文件：新文件全部上传且校验通过后才在事务内切换当前集合，此前继续使用旧集合。同一草稿只允许一个未完成替换批次；替换期间禁止发布、下载和其他增删。取消会清理新集合。重选相同目录按批次、相对路径、大小和摘要识别已完成文件；清单变化不得拼成另一套目录。
-
-发布、清单、单文件和 ZIP 共用完整性门槛。下载绑定集合标识和 generation，集合变化后旧请求失败，不返回新旧混合内容。ZIP 按需生成，可复用，条目使用清单中的相对路径。单文件和 ZIP 均支持强 ETag 与 Range。
-
-ZIP 的请求结果和构建结果是两件事。准备请求遇到网关 504、客户端超时或连接中断时只表示结果未确认，页面提示“请求等待超时，ZIP 构建结果尚未确认，后端可能仍在处理。请稍后重试。”，不显示“ZIP 构建失败”，也不断言已成功；后端因构建仍在进行返回 409 时，按后端消息识别为处理中并提示“ZIP 正在准备，构建结果尚未确认。请稍后手动重试。”，不显示“ZIP 准备失败”，也不轮询或自动重试；集合变化等其他 409 冲突仍显示各自的后端错误；后端明确返回失败时显示后端错误；ZIP 已准备好而内容下载出错时单独提示“ZIP 下载失败，请重试”。异常后按钮恢复可用，用户手动重试；已经生成并可用的 ZIP 会被复用，不因一次失败重做打包。这些提示、下载错误和准备中状态只属于发起时的那个草稿：切换场景、版本或关闭重开时立即清除，之后才返回的旧请求即使成功或失败也不再改写当前面板；当前对象的下载提示、失败原因与手动重试不受影响，ZIP 超时语义和后端构建、下载协议不变。
-
-## 场景发布
-
-`ar_scene.published_draft_id` 指向当前发布草稿，同一场景只有这一份。冻结由指针推导，不另存草稿状态。
-
-1. 发布条件：当前集合非空，全部文件 `AVAILABLE`，无未完成替换/上传/删除，正式存储文件存在且长度与登记值一致（发布和下载不重新计算摘要）。任一待上传、失败或缺失的文件都会拒绝发布和所有下载。存在 `UPLOADING` 或未完成删除则 409。
-2. `POST /api/v1/drafts/{draftId}/publish` 携带 `expectedSceneVersion`（场景 `lock_version`）。同一草稿重复发布 200 幂等，不重复审计。
-3. 替换指针后，原发布版本回到普通草稿，可再发布或删除。新发布版本文件冻结，说明仍可用原接口修改。
-4. 当前发布版本禁止整份删除、禁止登记/上传/删除文件，返回 409。
-5. 列表返回 `sceneLockVersion` 以及每条 `published` 布尔值；有当前发布时另含 `published` 对象，未发布时省略该字段。审计动作为 `DRAFT_PUBLISH`，详情含 `fromDraftId`/`toDraftId`。发布成功后递增场景 `lock_version`。
-6. 页面首次发布与替换使用不同确认文案；取消不发请求。不做单独下线、预览或客户端加载。管理员可下载已发布或草稿版本，前提是整份集合完整。
+入口：场景列表每行的 **版本与文件**，地址栏参数为 `sceneId`、`versionId`。面板顶部固定当前发布卡片，下方是版本列表和所选版本详情；唯一新增动作是“导入资源目录”：读取根 `resource.json` → 展示档位、段数和文件总量 → 每个引用文件用 `hash.worker.js` 按 2 MiB 块计算一次 SHA256 → 创建版本 → 顺序上传缺失文件。已存在版本可重新选择同一目录“继续上传”，已入库文件不重传。
 
 ## 配置与运行
 
-- `AR_STORAGE_ENABLED=true` 开启草稿入库接口；关闭时路由不注册。
-- `AR_STORAGE_ROOT` 指向本机私有目录或容器持久卷。
-- `AR_STORAGE_MAX_BYTES` 为正整数，后端登记和实际流式写入共同检查。Compose 必填；本机 `scripts/local_demo.py` 默认 256 MiB，可用环境变量或私密配置覆盖。此默认值不代表客户端成品已验证的包体限制。
-- `AR_STORAGE_COLLECTION_MAX_FILES` 默认 200，`AR_STORAGE_COLLECTION_MAX_BYTES` 默认 500 MiB，作为建议规模上限的配置项，不是永久产品硬限制。
-- ZIP 缓存默认保留 24 小时、总量上限 2 GiB（`AR_STORAGE_ZIP_TTL_HOURS`、`AR_STORAGE_ZIP_CACHE_MAX_BYTES`）。集合变化后旧包失效。
-- ZIP 写入在落盘前经显式批量透传边界加 64 KiB 缓冲：边界流不再退回逐字节写入，缓冲尾部先 flush，再执行 `force` 和原子移动；字节计数、SHA-256、失败清理和原子发布不变，发布的包长度与摘要对应同一份字节。约 250 MiB 不可压缩样本的同环境对比由宿主运行 [benchmark_zip_write.py](../scripts/benchmark_zip_write.py)（等价命令 `mvn -f backend/pom.xml -pl ruoyi-ar -am -Dtest=ZipWriteBenchmarkTest -Dsurefire.failIfNoSpecifiedTests=false -Dzip.benchmark.miB=250 test`）。该基准比较三条链路：`legacy-full` 在测试内复现修复前的存储写入链路（`FileChannel` 无缓冲加只重写 `close()` 的边界流）、`legacy-boundary` 仅替换边界流、`fixed` 为当前链路；三者都必须生成条目内容相同的可读 ZIP，因此差异来自写入链路而非内容。同时记录环境、样本大小与耗时；微基准倍数只说明本机链路成本，不作为实际提速承诺，也不替代网关超时下的真实构建验收。
-- 浏览器使用后台线程按 2 MiB 分块计算 SHA256，支持局域网 HTTP，不依赖安全上下文的 `crypto.subtle`。
-- Nginx 对草稿文件内容与 ZIP 下载路径使用流式转发，其余业务接口保持既有 20m 网关限制。鉴权后服务端检查文件上限，不开放匿名文件目录。下载必须携带登录身份，令牌不放进 URL。
-- 选择文件夹会保留顶层目录名。当前草稿已有文件时必须确认：新目录完整成功后才永久替换；失败可重试或取消。取消确认不发起替换。替换期间禁止发布、下载和其他增删。
-- 按清单还原目录使用 `scripts/artifact_transfer.py restore-manifest`；认证信息只从环境变量 `AR_TOKEN` 读取，不写入文档或日志。
-
-更新代码后按 [本机运行手册](08-demo-runbook.md)停止、构建并重新启动后端，刷新前端；本轮验收未修改既有 Demo 数据，也未代替用户重启现有 Demo。
+- `AR_STORAGE_ENABLED=true` 开启入库接口；关闭时路由不注册。`AR_STORAGE_ROOT` 指向私有目录或容器持久卷。
+- `AR_STORAGE_MAX_BYTES`：单文件上限，必填正整数，后端登记和实际流式写入共同检查。本机 `scripts/local_demo.py` 默认 256 MiB；真实样包验收设 1073741824。
+- `AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）：单版本文件数与总字节上限，Compose 与 `config/compose.env.example` 提供。旧 `AR_STORAGE_COLLECTION_*`、ZIP 缓存配置已删除。
+- Nginx 对 `/prod-api/api/v1/scene-versions/{versionId}/files/{fileId}/content` 关闭请求/响应缓冲和网关字节限制，超时 300s；其余业务接口保持 20m 限制。不开放匿名文件目录，下载必须携带登录身份，令牌不放进 URL。
 
 ## 验收
 
-使用 Harness 的 ingestion profile，在本次运行目录构建当前后端源码，再启动独立 PostgreSQL 17、Redis、Spring Boot、Vite 和 Edge；使用随机回环端口、隔离数据与存储目录，保留本地日志和截图。依赖由 doctor 检查，具体构建与清理边界见 [Harness](13-harness.md)。
+- 契约与链接：`python scripts/generate_contracts.py` 后 `python scripts/harness.py check --profile quick`。
+- 隔离实例：`scripts/prepare_4dgs_check.py prepare` 启动固定 `innovation-ar-resource-platform-infra-check` 项目的 `127.0.0.1:18082`，再以 `scripts/verify_ingestion.py --base-url ... --admin-base-url ... --credentials-file ...` 运行 HTTP（可选浏览器）检查；用法和限制见 [Harness](13-harness.md)。Windows 原生运行时（`review.py`、harness ingestion）继续提供数据库和私有存储故障注入。
+- 合成模型字节不是可渲染 4DGS 内容，只验证管理与传输契约；浏览器播放、Android/iOS 真机、手机网络和音画主观效果不在这些检查内。
 
-```powershell
-python scripts/harness.py doctor --profile ingestion
-python scripts/harness.py check --profile ingestion
-```
-
-每次结果以该次 `.local/harness/<运行标识>/report.json` 的范围、源码指纹和结构化证据为准。[保留证据索引](evidence/README.md)中的入库 JSON 是历史快照，不代表当前代码，也不同时代表历次验收。
-
-验收覆盖双文件关联、刷新持久化、正式存储重新读取、大小/摘要错误、重复及并发请求、真实连接中断、上传中强制结束服务、重启恢复、草稿整份删除确认/取消、空草稿拒绝发布、失败文件拒绝发布和下载、文件夹替换确认/取消、清单与 ZIP 下载及 Range、发布/替换指针、已发布文件冻结、当前发布禁止删除、说明仍可修改、发布确认取消、匿名和非管理员拒绝，以及操作审计归属。浏览器在真实 ZIP 下载成功后继续模拟网关 504、准备请求中断、构建中 409、集合变化 409、后端明确失败和下载阶段失败，检查提示文案、按钮恢复，以及每次手动重试都复用同一份已生成的包；接口层还用一条 PREPARING 记录验证真实 409 文案为“ZIP 正在准备，请稍后重试”，并在清理后确认再次手动重试可复用构建完成的包。另有`LocalArtifactStorageTest`、`LocalZipExportStoreTest`、`RelativePathTest`、`ZipWriteBenchmarkTest` 和前后端构建。
-
-端到端写操作验收使用本机独立进程。Docker 构建、迁移和健康检查另行验证，不把本机测试当作容器全链路验收。未测试磁盘写满、物理断电或服务器迁移；原子文件提交与进程重启验证不能替代断电耐久性验证。
+阶段与证据见 [任务记录](tasks/active/2026-10-29-4dgs-resource-refactor.md)。[保留证据索引](evidence/README.md)中的旧入库 JSON 是历史快照，不代表当前代码。
 
 ## 明确未实现
 
-场景资源预览、单独下线、昼夜双指针、游客/客户端下载认证、Addressables/catalog 解析、共享依赖、对象存储、CDN。客户端加载规则留到取得真实 Addressables 样包后确认。管理员发布指针、文件夹替换和清单/ZIP 下载已实现；替换上一份发布版本即回到可再发布的草稿，不另做回滚接口。空目录不保留。
+匿名客户端目录/详情/文件读取、客户端完整下载工具、场景预览、单独下线、对象存储、CDN、共享依赖与 catalog 解析。客户端加载规则以真实播放验收后的结论为准。空目录不保留。

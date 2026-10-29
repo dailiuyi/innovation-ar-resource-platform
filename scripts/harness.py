@@ -15,6 +15,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ('quick', 'frontend', 'ingestion')
+BACKEND_JAR = 'backend/ruoyi-admin/target/ruoyi-admin.jar'
 EXIT_CODES = {'passed': 0, 'failed': 1, 'blocked': 2}
 
 
@@ -79,10 +80,12 @@ def prerequisites(profile, root=ROOT):
           'Install scripts/requirements-review.txt into this Python or .local/python.')
     if profile in ('frontend', 'ingestion'):
         probe('Node.js', ['node', '--version'], 'Install Node.js supported by frontend/package.json.')
-        probe('Node repository access', ['node', '-e', "require('node:fs').realpathSync(process.argv[1])", str(root / 'scripts/verify_draft_panel.mjs')],
+        probe('Node repository access', ['node', '-e', "require('node:fs').realpathSync(process.argv[1])", str(root / 'scripts/test_scene_package.mjs')],
               'Check repository access. If the agent sandbox denies access, request permission to run this profile outside it.')
     if profile == 'ingestion':
         record('frontend dependencies', (root / 'frontend/node_modules/vite/bin/vite.js').is_file(), 'Run npm --prefix frontend ci.')
+        record('tested backend jar', (root / BACKEND_JAR).is_file(),
+               'Run scripts/check_java.py --module ruoyi-admin --package for this source first.')
     if profile == 'frontend':
         record('npm', shutil.which('npm.cmd' if os.name == 'nt' else 'npm') is not None, 'Install npm with Node.js.')
     if profile == 'ingestion':
@@ -198,20 +201,14 @@ def make_steps(profile, directory, root=ROOT):
              Step('contracts-and-links', [sys.executable, root / 'scripts/verify_design.py', '--report-dir', evidence], root,
                   evidence=evidence / 'validation-contracts.json')]
     if profile in ('frontend', 'ingestion'):
-        steps.append(Step('draft-panel', ['node', root / 'scripts/verify_draft_panel.mjs'], root))
+        steps.append(Step('scene-package', ['node', '--test', root / 'scripts/test_scene_package.mjs'], root))
     if profile == 'frontend':
         steps.append(Step('frontend-build', [sys.executable, Path(__file__).with_name('frontend_control.py'),
                                             'build', '--root', root], root, 900))
     if profile == 'ingestion':
-        # Copy source only: never replace the jar held by the running Windows Demo.
-        backend = directory / 'backend'
-        steps.append(Step('export-path-migration', [sys.executable, root / 'scripts/verify_export_path_migration.py',
-                                                    '--report-dir', evidence], root, 180,
-                          evidence / 'validation-export-path-migration.json'))
-        steps.append(Step('backend-package', ['mvn.cmd', '-f', backend / 'pom.xml',
-                                              '-Dmaven.repo.local=' + str(root / '.local/m2'), '-o', 'package', '-B', '-ntp'], root, 600))
+        # The jar is the already tested artifact from check_java.py --package; this profile neither builds nor replaces it.
         steps.append(Step('ingestion', [sys.executable, root / 'scripts/verify_ingestion.py', '--report-dir', evidence,
-                                        '--backend-jar', backend / 'ruoyi-admin/target/ruoyi-admin.jar'], root, 600,
+                                        '--backend-jar', root / BACKEND_JAR], root, 600,
                           evidence / 'validation-ingestion.json'))
     return steps
 
@@ -287,8 +284,6 @@ def main(argv=None):
         if args.action == 'check' and report['status'] == 'passed':
             report['status'] = 'blocked'  # A prepared or interrupted profile is never a passing run.
             steps = make_steps(args.profile, directory, root)
-            if args.profile == 'ingestion':
-                shutil.copytree(root / 'backend', directory / 'backend', ignore=shutil.ignore_patterns('target', '.git', 'logs'))
             report['steps'] = execute_steps(steps, directory, environment(root), retry_reason=args.retry_reason)
             report['status'] = overall_status(report['steps'])
         elif args.action == 'check':

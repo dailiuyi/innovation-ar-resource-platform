@@ -14,7 +14,7 @@ class ReviewTests(unittest.TestCase):
         self.assertIn('smoke', suites)
         self.assertNotIn('accounts', suites)
         self.assertIn('accounts', review.select_suites(['backend/ruoyi-framework/SysLoginService.java']))
-        self.assertIn('ingestion', review.select_suites(['backend/ruoyi-ar/DraftService.java']))
+        self.assertIn('ingestion', review.select_suites(['backend/ruoyi-ar/SceneVersionService.java']))
 
     def test_wrong_sha_cannot_supply_required_evidence(self):
         with patch('review.read', return_value={'status': 'passed', 'sha': 'b' * 40, 'sourceUnchanged': True}):

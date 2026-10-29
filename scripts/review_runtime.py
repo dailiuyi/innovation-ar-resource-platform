@@ -1,6 +1,5 @@
 """Disposable Windows PostgreSQL/Redis/Java runtime, owned by its foreground parent."""
 import json
-import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -226,20 +225,21 @@ def seed_preview(runtime):
     user = 'review_admin'
     api('/system/user', 'POST', {'userName': user, 'nickName': '隔离验收账号', 'password': runtime.password}, token)
     token = api('/login', 'POST', {'username': user, 'password': runtime.password})['token']
+    from verify_ingestion import synthetic_package, version_request
     fixtures = {'username': user, 'scenes': []}
     for index, name in enumerate(['验收场景A', '超长场景名称' + '测试内容' * 25]):
         scene = api('/api/v1/scenes', 'POST', {'name': name}, token)
-        draft = api('/api/v1/scenes/' + scene['id'] + '/drafts', 'POST',
-                    {'requestKey': str(uuid.uuid4()), 'description': '人工验收用合成版本'}, token)
-        payload = '这是隔离验收文件，不是真实客户端资源。'.encode('utf-8')
-        path = '/api/v1/drafts/' + draft['id'] + '/files'
-        file = api(path, 'POST', {'requestKey': str(uuid.uuid4()), 'fileName': '验收示例.txt',
-                                  'kind': 'RESOURCE_FILE', 'bytes': len(payload),
-                                  'sha256': hashlib.sha256(payload).hexdigest()}, token)
-        uploaded = api(path + '/' + file['id'] + '/content', 'PUT', payload, token)
-        if uploaded.get('status') != 'AVAILABLE':
-            raise RuntimeError('Synthetic payload was not verified')
-        fixtures['scenes'].append({'id': scene['id'], 'name': name, 'draftId': draft['id'], 'fileId': file['id']})
+        # Synthetic text bytes under a valid descriptor: exercises management and transfer, not playback.
+        files, descriptor = synthetic_package('review-' + str(index))
+        version = api('/api/v1/scenes/' + scene['id'] + '/versions', 'POST',
+                      version_request(files, descriptor, '人工验收用合成版本，模型不可渲染'), token)
+        for entry in version['files']:
+            uploaded = api('/api/v1/scene-versions/' + version['id'] + '/files/' + entry['fileId'] + '/content', 'PUT',
+                           files[entry['relativePath']], token)
+            if uploaded.get('status') != 'AVAILABLE':
+                raise RuntimeError('Synthetic payload was not verified')
+        fixtures['scenes'].append({'id': scene['id'], 'name': name, 'versionId': version['id'],
+                                   'fileIds': [entry['fileId'] for entry in version['files']]})
     (runtime.directory / 'fixtures.json').write_text(json.dumps(fixtures, ensure_ascii=False, indent=2), encoding='utf-8')
     return fixtures
 
@@ -267,10 +267,10 @@ def browser_smoke(runtime, fixtures):
             dialog.locator('.el-dialog__footer').get_by_role('button', name='关闭', exact=True).click()
             dialog.wait_for(state='hidden')
             row.get_by_role('button', name='版本与文件', exact=True).click()
-            page.get_by_role('heading', name='内容版本草稿 · ' + fixtures['scenes'][0]['name']).wait_for()
+            page.get_by_role('heading', name='版本与文件 · ' + fixtures['scenes'][0]['name']).wait_for()
             page.screenshot(path=str(runtime.directory / 'real-browser.png'), full_page=True)
             if errors:
                 raise RuntimeError('Browser page errors; inspect isolated browser evidence')
-            return [{'name': 'real login, scene information and corresponding draft panel', 'passed': True}]
+            return [{'name': 'real login, scene information and corresponding version panel', 'passed': True}]
         finally:
             browser.close()

@@ -28,7 +28,7 @@ python E:/code/java/innovation-ar-resource-platform/scripts/review.py stop --pr 
 
 prepare 按完整 SHA 的改动路径选择专项，并写入 snapshot。所有实例要求 frontend 和 smoke；前端改动追加 scene-ui（当前覆盖场景页面），账号登录相关后端追加 accounts，入库/存储/迁移追加 ingestion。需求准备时选定的额外专项使用 `prepare --require-suite accounts` 等补充；重复 prepare 只增加、不删除原门槛。其他页面的业务操作尚无专项时应先补充检查器，不能把场景检查当作该页面通过。
 
-`check --suite auto` 按 snapshot 执行。smoke 创建独立 PostgreSQL 17、Redis、存储和随机回环端口，自动创建 review_admin、长短名称场景、对应草稿及已校验的合成小文件；真实 Edge 登录后点击场景信息和对应版本面板。scene-ui 覆盖场景按钮及多视口布局，使用合成响应；accounts 覆盖密码边界和会话失效；ingestion 执行既有真实 HTTP/数据库/浏览器业务链。所有数据与日常 Demo 隔离。
+`check --suite auto` 按 snapshot 执行。smoke 创建独立 PostgreSQL 17、Redis、存储和随机回环端口，自动创建 review_admin、长短名称场景、对应的合成成品版本（有效 resource.json 加合成小文件，不可渲染）；真实 Edge 登录后点击场景信息和对应版本面板。scene-ui 覆盖场景按钮及多视口布局，使用合成响应；accounts 覆盖密码边界和会话失效；ingestion 执行既有真实 HTTP/数据库/浏览器业务链。所有数据与日常 Demo 隔离。
 
 依赖通过 frontend_control 复用；同 SHA 通过测试的后端 Jar 按哈希复用，记录 executed/reused。开始新检查先废止旧绿色记录。serve 按 snapshot 的全部专项检查证据，核对源码、Jar、独立审查 SHA 和远端 PR head。PR 更新后新 SHA 另建目录，旧实例始终保留旧 SHA，旧批准不能用于新版本。`--reviewed-sha` 是独立审查声明，不是自动批准。
 

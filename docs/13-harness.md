@@ -14,7 +14,7 @@ Harness 把仓库约束、验证脚本与交接记录组织成统一工作流。
 
 单次构建上限 900 秒，每 30 秒输出耗时和日志位置。相同输入失败、超时或中断后保留状态，不再自动重试；代码失败仍返回 failed，不能变成“仅环境待验收”。调查并修复后，使用 `python scripts/agent_check.py --profile frontend --retry-reason "具体修复条件"` 明确重试一次。不要绕过入口再次直接运行 npm 构建。历史无记录 dist 不自动采信。
 
-quick、草稿面板、浏览器、数据库和真实业务验收不缓存；复用构建不是业务验收或合并批准。当前环境指纹针对本项目 Vite 配置使用的 VITE_/NODE_/NPM_CONFIG_/AR_/SASS_、CI、PATH、语言/时区和 SOURCE_DATE_EPOCH；以后新增其他构建环境输入或外部文件读取时须扩展指纹。记录保存在 `.local/`，不打印环境变量或 npm 配置值。
+quick、成品包解析测试、浏览器、数据库和真实业务验收不缓存；复用构建不是业务验收或合并批准。当前环境指纹针对本项目 Vite 配置使用的 VITE_/NODE_/NPM_CONFIG_/AR_/SASS_、CI、PATH、语言/时区和 SOURCE_DATE_EPOCH；以后新增其他构建环境输入或外部文件读取时须扩展指纹。记录保存在 `.local/`，不打印环境变量或 npm 配置值。
 
 ## 使用
 
@@ -32,12 +32,14 @@ python scripts/harness.py check --profile ingestion
 | Profile | 检查范围 | 前置条件 |
 |---|---|---|
 | quick（默认） | Harness 故障回归、审查工具回归、Symphony 模型路由协议回归、OpenAPI/Schema/示例、生成源一致性、AGENTS/README/docs 递归本地链接 | Python 3.11+、Git、requirements-review 中的契约验证依赖 |
-| frontend | quick + 草稿面板乱序响应回归 + Vue 生产构建 | Node、npm、已通过 npm ci 安装的前端依赖 |
-| ingestion | quick + 草稿面板回归 + 当前后端源码独立 Maven package（含测试）+ 原有隔离入库 API/Edge 验收 | Windows、项目 .local 中 PostgreSQL 17/JDK 21、Maven、Redis、Node、前端依赖、psycopg、Playwright、Edge |
+| frontend | quick + 成品包解析消费者行为测试（`scripts/test_scene_package.mjs`）+ Vue 生产构建 | Node、npm、已通过 npm ci 安装的前端依赖 |
+| ingestion | quick + 成品包解析测试 + 已测试 Jar 上的 Windows 隔离入库 API/Edge 验收（版本导入、逐文件上传与恢复、发布、整版删除） | Windows、项目 .local 中 PostgreSQL 17/JDK 21、Redis、Node、前端依赖、psycopg、Playwright、Edge，以及同源码由 `scripts/check_java.py --module ruoyi-admin --package` 产出的 `backend/ruoyi-admin/target/ruoyi-admin.jar` |
 
 `doctor` 只探测所选 profile 的必要环境，不安装依赖、不启动应用、不连接日常数据库。Python 同时搜索当前解释器和 `.local/python`；缺依赖时按输出提示准备。版本和路径沿用已有入库脚本的约定。Node 还会对现有回归脚本进行路径访问探测；如沙箱拒绝读取项目父目录，应申请对应命令的沙箱外权限，不修改业务代码绕过限制。
 
-`ingestion` 把后端源码复制到本次运行目录，排除旧 target，再用项目 `.local/m2` 缓存离线打包；不覆盖正在运行的 Jar。缺少 Maven 缓存时 package 会失败，需要先按开发工作流准备依赖后重跑，不自动联网安装。测试使用随机回环端口、新数据库、新存储目录和合成账号。不会启动 Docker、重建网关或操作现有 Demo 账号。
+`ingestion` 不再自行构建后端：不复制源码，也不运行 Maven，只复用同一源码已由 `check_java.py --package` 执行并通过全部测试后产出的 Jar（缺失则 doctor 阻塞）。旧的 `export-path-migration`（只验证已完成的 V013 历史行为，脚本 `verify_export_path_migration.py` 保留为独立历史脚本）和 `backend-package` 步骤随旧 Windows 流程移除。测试使用随机回环端口、新数据库、新存储目录和合成账号。不会启动 Docker、重建网关或操作现有 Demo 账号。
+
+Linux 上的真实验收不走 Windows profile，而是用 `scripts/prepare_4dgs_check.py` 启动固定的隔离 Compose 实例（项目 `innovation-ar-resource-platform-infra-check`，`127.0.0.1:18082`，不使用日常 18081/43174 或 `config/compose.env`），再运行 `scripts/verify_ingestion.py --base-url http://127.0.0.1:18082 --admin-base-url http://127.0.0.1:18082/prod-api --credentials-file <runtime.json 中的 credentialsFile> [--browser-executable /opt/google/chrome/chrome]`（等价于 `run_http_checks`）。`prepare` 只用已有镜像、已测试 Jar 和已交付的前端 dist，凭据 0600 且不打印，`stop` 只 `compose stop` 并保留数据。quick 和合成 UI 检查都不是该全链验收。
 
 ## 报告与完成判定
 
@@ -52,13 +54,13 @@ python scripts/harness.py check --profile ingestion
 
 契约和入库步骤同时要求进程成功与非空、全部通过的结构化证据。除上述带输入和产物校验的前端构建外，不读取过去的报告补齐结果。每步有时限，遇错停止后续步骤；超时/中断尝试停止本次子进程树，并停止本次证据目录下遗留的 PostgreSQL。主机崩溃或直接强杀整个 harness 无法保证执行清理，应检查该运行目录和进程，不得扩大到日常 Demo。
 
-现有 `verify_design.py` 和 `verify_ingestion.py` 新增 `--report-dir`；未指定时保留写入 docs 的旧行为。入库脚本另支持 `--backend-jar`。只有 harness 的 ingestion profile 保证先构建当前源码，再验收该产物；单独运行旧命令仍需自行确认 Jar 来源。
+`verify_design.py` 和 `verify_ingestion.py` 支持 `--report-dir`；未指定时保留写入 docs 的旧行为。入库脚本的 Windows 模式使用 `--backend-jar`，harness 只验收固定路径的已测试 Jar；单独运行仍需自行确认 Jar 与源码一致。`verify_design.py` 只验证当前 OpenAPI（`scripts/generate_contracts.py` 同源）和 resource.json v1 的 Schema/示例，数据库约束由真实 PostgreSQL 验收承担；`contracts/` 中的 runtime-manifest 是历史静态资料，不再生成也不是当前门禁。
 
 ## 怎么选检查
 
 文档、契约、规则修改先跑 quick。纯文案/按钮还需按开发工作流检查引用该控件的选择器；frontend profile 不代替人工视觉检查，视口与列宽类布局可用 `scripts/verify_scene_list_ui.py`（Vite 加真实浏览器、Playwright 返回合成响应，不连后端）先做专项自查。前端行为改动跑 frontend；涉及入库、文件删除、恢复、审计或对应鉴权时跑 ingestion。账号等其他业务仍需对应专项验收，当前 harness 不宣称覆盖所有业务。
 
-入库 profile 不运行历史候选七表数据库验收；候选结构校验不属于已实现业务的数据库证明。Docker Nginx 路由、LAN、真实客户端加载仍需独立验收。
+入库 profile 不运行历史候选七表数据库验收，也不再运行 V013 历史迁移验证；候选结构校验不属于已实现业务的数据库证明。Docker Nginx 路由、LAN、真实客户端加载仍需独立验收。
 
 正式证据的保存和引用遵循 [证据索引](evidence/README.md)。将真实验收摘要加入 [验证记录](06-validation.md)；需要提交专项 JSON 时只提升人工核对后的证据，避免把本机绝对路径或敏感日志一起提交。扩展入口时先明确测试环境、副作用和完成证据，再加入 profile。以后是否接 CI 或 Agent 调度，见 [基础决策](decisions/0001-harness-baseline.md)。
 

@@ -1,4 +1,8 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.invalid/utopia/runtime-manifest-v1.json",
+  "title": "Runtime manifest (historical candidate)",
+  "description": "Historical static candidate material from the superseded marker/day-night design. Not the current contract and no longer generated; see openapi.yaml and resource-descriptor.schema.json.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -213,7 +217,5 @@
     "files",
     "entrypoint",
     "playback"
-  ],
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.invalid/utopia/runtime-manifest-v1.json"
+  ]
 }

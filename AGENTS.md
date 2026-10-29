@@ -22,18 +22,18 @@ Review actual changes against the user's intent and accepted project constraints
 
 ## V0.1 boundaries
 
-One Spring Boot service, intranet local ArtifactStorage, manual content production, and separate accounts with equal administrator privileges. Private ingestion implements scene-linked drafts, multiple file records, upload/verification, retry, startup reconciliation and administrator audit.
+One Spring Boot service, intranet local ArtifactStorage, manual content production, and separate accounts with equal administrator privileges. One scene is one independent 4DGS reconstruction product. Private ingestion implements immutable scene versions carrying a `resource.json` v1 descriptor and a fixed file list, per-file upload/verification and retry, startup recovery and administrator audit.
 
-Draft file deletion is physical: remove stored payloads and the row, retain audit and minimal idempotency receipts, and recover unfinished deletions at startup. Preserve the separation of scenes, content versions and deliverable files.
+Version deletion is whole-version and physical: remove every stored payload and the rows, retain audit and a minimal idempotency receipt, and recover unfinished deletions at startup. Preserve the separation of scenes, content versions and deliverable files.
 
-Administrator publication is one published draft pointer per scene: files freeze, description stays editable, and replacing the pointer returns the previous draft to an unpublished state. Preview, unpublish-without-replace and client download/loading are unimplemented pending a real Addressables sample and client contract. Shared dependencies, day/night variants, coordinates and catalog parsing remain provisional. Do not introduce task queues, Worker services, tenant isolation or approval roles without a new requirement.
+Administrator publication is one published version pointer per scene: the version's descriptor and files are fixed, its description stays editable, and the previous version stays viewable and deletable after a replacement. Anonymous client reads, the complete-download tool and playback acceptance are later stages. Day/night variants, coordinates, scene addresses and catalog parsing are not part of the current model. Do not introduce task queues, Worker services, tenant isolation or approval roles without a new requirement.
 
 ## Repository map
 
 - `backend/`: pinned RuoYi Spring Boot 3, MyBatis, Bearer authentication, fixed-role accounts and ruoyi-ar. Only `classpath:db/demo` migrations initialize the application.
 - `frontend/`: pinned RuoYi Vue3; use `scripts/agent_check.py --profile frontend` for task-local dependency/build reuse. It installs with `npm ci` when needed; preserve the lockfile and do not repeat installs/builds outside the entrypoint.
 - `database/migrations/`: historical candidate SQL, not current application migrations.
-- `contracts/`: generated OpenAPI and historical candidate manifest examples. Edit `scripts/generate_contracts.py`, then regenerate; never fix drift only in generated files.
+- `contracts/`: generated OpenAPI and resource.json v1 schema/example (the runtime-manifest files are static historical candidates, no longer generated). Edit `scripts/generate_contracts.py`, then regenerate; never fix drift only in generated files.
 - `scripts/`: development, contract and acceptance tooling; `harness.py` is the common check entrypoint.
 - `compose.yaml`, `deploy/`: single-host containers; container tests must use isolated `innovation-ar-resource-platform-infra-check` resources.
 - `.local/`: ignored runtime, logs, harness evidence and secrets. Never commit or print credentials.
@@ -61,7 +61,7 @@ When preparing a Symphony issue, follow the runbook's model-selection procedure:
 
 Use four-space Python indentation, SQL/Python `snake_case`, API `camelCase`, UUIDs and UTC timestamps. Keep Chinese documentation concise. No global formatter/linter is configured. Update SQL, generated contracts and documentation together when their behavior changes.
 
-Use descriptive incremental Flyway migrations for subsequent changes; keep empty-database initialization reproducible. Use real isolated PostgreSQL for changed data invariants; PostgreSQL 18 results do not establish PostgreSQL 17 compatibility. Verify applicable concurrency, audit, storage and authentication behavior. Day/night publication and client-loading invariants belong to candidate design checks until implemented.
+Use descriptive incremental Flyway migrations for subsequent changes; keep empty-database initialization reproducible. Use real isolated PostgreSQL for changed data invariants; PostgreSQL 18 results do not establish PostgreSQL 17 compatibility. Verify applicable concurrency, audit, storage and authentication behavior. Client-loading invariants belong to later stages and are not claimed until implemented and verified.
 
 Record commands, tested versions, results and limitations in [validation records](docs/06-validation.md). SQL checks do not establish HTTP, cloud storage or client behavior. No percentage coverage threshold exists.
 

@@ -21,30 +21,12 @@ def main():
     spec=yaml.safe_load((ROOT/'contracts/openapi.yaml').read_text(encoding='utf-8'))
     validate(spec)
     check('OpenAPI 3.0 structural validation')
-    schema=json.loads((ROOT/'contracts/schemas/runtime-manifest.schema.json').read_text(encoding='utf-8'))
-    example=json.loads((ROOT/'contracts/examples/runtime-manifest.json').read_text(encoding='utf-8'))
-    Draft202012Validator.check_schema(schema)
-    validator=Draft202012Validator(schema,format_checker=FormatChecker())
-    validator.validate(example)
-    check('runtime manifest Draft 2020-12 schema and example')
-    paths=[f['logicalPath'] for f in example['files']]
-    check('entrypoint resolves to unique file', len(paths)==len(set(paths)) and example['entrypoint'] in paths)
-    for marker in example['markers']:
-        check('example quaternion normalized', abs(sum(v*v for v in marker['sceneFromMarker']['rotation'])-1)<1e-5)
-    for name, mutate in [
-       ('unsupported platform',lambda x:x.update(platform='DESKTOP')),
-       ('negative marker size',lambda x:x['markers'][0].update(widthMeters=-1)),
-       ('invalid SHA256',lambda x:x['files'][0].update(sha256='invalid')),
-       ('HTTP download forbidden',lambda x:x['files'][0].update(url='http://example.invalid/f')),
-       ('missing version ID',lambda x:x.pop('versionId')),
-       ('unexpected manifest field',lambda x:x.update(secret='bad'))]:
-        changed=copy.deepcopy(example);mutate(changed)
-        check('reject '+name,bool(list(validator.iter_errors(changed))))
     module_spec=importlib.util.spec_from_file_location('contract_source',ROOT/'scripts/generate_contracts.py')
     module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
     check('OpenAPI matches authoring source',spec==module.spec)
-    check('manifest schema matches authoring source',schema==module.manifest)
-    check('manifest example matches authoring source',example==module.example)
+    info=spec['info']
+    check('OpenAPI identity is the 4DGS scene resource API',info['title']=='4DGS Scene Resource API' and info['version']=='0.4.0' and spec['openapi']=='3.0.3')
+    check('OpenAPI servers use the relative root',[s['url'] for s in spec['servers']]==['/'])
     descriptor_schema=json.loads((ROOT/'contracts/schemas/resource-descriptor.schema.json').read_text(encoding='utf-8'))
     descriptor=json.loads((ROOT/'contracts/examples/resource-descriptor.json').read_text(encoding='utf-8'))
     Draft202012Validator.check_schema(descriptor_schema)
@@ -71,21 +53,34 @@ def main():
         changed=copy.deepcopy(descriptor);mutate(changed)
         check('reject descriptor '+name,bool(list(descriptor_validator.iter_errors(changed))))
     operations=[]
+    legacy=re.compile(r'/drafts|draft|zip|marker|asset|/client/|/preview|/ready|/revoke|day|night',re.I)
     for path,methods in spec['paths'].items():
         for method,operation in methods.items():
             operations.append(operation['operationId'])
-            check('no worker/project API '+operation['operationId'], not path.startswith('/internal/') and '/projects/' not in path)
-            check('implementation boundary '+operation['operationId'], operation['x-implementation'] in ('implemented','candidate'))
+            check('no legacy or unimplemented route '+operation['operationId'], not legacy.search(path))
+            check('implemented only '+operation['operationId'], operation['x-implementation']=='implemented' and operation['tags'])
             check('no legacy CSRF '+operation['operationId'], 'X-CSRF-TOKEN' not in {p['name'] for p in operation['parameters']})
-            if not path.startswith('/api/v1/client/') and operation['operationId'] not in ('login','captchaConfig'):
+            if operation['operationId'] not in ('login','captchaConfig'):
                 check('admin Bearer '+operation['operationId'], operation['security']==[{'bearerAuth':[]}])
     check('operation IDs unique',len(operations)==len(set(operations)))
-    sql=(ROOT/'database/migrations/V001__platform.sql').read_text(encoding='utf-8')
-    api_states=spec['components']['schemas']['VersionView']['properties']['state']['enum']
-    block=sql.split('CREATE TABLE scene_version (',1)[1].split('ALTER TABLE scene',1)[0]
-    db_states=re.search(r"CHECK\(state IN \(([^)]*)\)\)",block).group(1)
-    check('database and API version states agree',set(re.findall(r"'([^']+)'",db_states))==set(api_states))
-    check('only seven schema tables',set(re.findall(r'CREATE TABLE (\w+)',sql))=={'admin_user','scene','scene_version','asset','version_asset','marker','audit_log'})
+    version_paths={'/api/v1/scene-versions/config':{'get'},'/api/v1/scenes/{sceneId}/versions':{'get','post'},
+        '/api/v1/scene-versions/{versionId}':{'get','put','delete'},'/api/v1/scene-versions/{versionId}/publish':{'post'},
+        '/api/v1/scene-versions/{versionId}/files/{fileId}':{'get'},
+        '/api/v1/scene-versions/{versionId}/files/{fileId}/content':{'get','head','put'}}
+    for path,methods in version_paths.items():
+        check('scene version operations '+path,path in spec['paths'] and methods<=set(spec['paths'][path]))
+    check('version creation documents 201, 200 retry, 409 and 410',
+          {'200','201','409','410'}<=set(spec['paths']['/api/v1/scenes/{sceneId}/versions']['post']['responses']))
+    check('file upload documents 409, 422 and 503',
+          {'200','409','422','503'}<=set(spec['paths']['/api/v1/scene-versions/{versionId}/files/{fileId}/content']['put']['responses']))
+    component=spec['components']['schemas']['ResourceDescriptor']
+    check('OpenAPI descriptor is the OpenAPI 3.0 subset of resource.json v1',component==module.openapi_schema(module.resource_descriptor_schema()) | {'description':component['description']}
+          and '$schema' not in component and '$id' not in component)
+    duration=component['properties']['variants']['items']['properties']['segments']['items']['properties']['durationSeconds']
+    check('OpenAPI segment duration is positive without 2020-12 exclusiveMinimum',duration=={'type':'number','minimum':0,'not':{'enum':[0]}})
+    uploads=spec['components']['schemas']['VersionCreate']['properties']
+    check('version creation carries request key, descriptor and files',set(uploads)=={'requestKey','description','descriptor','files'})
+    check('geography fields absent from scene contracts',not re.search('longitude|latitude|geoCrs|address',json.dumps(spec['components']['schemas']['SceneView'])+json.dumps(spec['components']['schemas']['SceneCreate']),re.I))
     docfiles=[ROOT/'AGENTS.md',ROOT/'README.md',ROOT/'database/README.md',*sorted((ROOT/'docs').rglob('*.md'))]
     for file in docfiles:
         content=file.read_text(encoding='utf-8')
@@ -94,7 +89,7 @@ def main():
             target=(file.parent/dest.split('#')[0]).resolve()
             check('local link '+file.name+' -> '+dest,target.is_file() or target==ROOT/'docs/validation-contracts.json')
     report={'passed':True,'operations':len(operations),'checks':checks,
-            'limitations':['No HTTP server or client runtime executed','No cloud storage or GPU invoked','Mermaid source checked only as Markdown, not rendered']}
+            'limitations':['No HTTP server or client runtime executed; PostgreSQL constraints are verified by isolated real-database acceptance','Mermaid source checked only as Markdown, not rendered']}
     args.report_dir.mkdir(parents=True, exist_ok=True)
     output=args.report_dir/'validation-contracts.json'
     output.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')

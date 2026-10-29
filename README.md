@@ -16,13 +16,13 @@
 
 innovation-ar-resource-platform 是面向第一阶段 AR 场景展示业务建设的场景资源管理中台。
 
-系统服务于完整的创作与分发链路：团队专业人员制作并扫描 3D / 高斯场景内容，管理员通过管理后台完成版本草稿上传、参数对账与审核发布；终端用户通过扫码快速获取对应的场景清单与成品资产并完成本地渲染。
+系统服务于完整的创作与分发链路：团队专业人员制作并扫描 3D / 高斯场景内容，管理员通过管理后台导入带 resource.json 描述的 4DGS 成品目录、逐文件上传校验并发布；终端用户读取已发布成品并在本地渲染（匿名客户端读取尚未实现）。
 
 ---
 
 ## 方案概览与资产模型
 
-平台确立了“**场景（Scene）➔ 内容版本（Version Draft）➔ 成品文件（Artifact Files）**”三层解耦的领域数据模型：
+平台确立了“**场景（Scene）➔ 内容版本（Scene Version）➔ 成品文件（Version Files）**”三层解耦的领域数据模型，一个场景对应一个独立 4DGS 成品，版本创建后描述与文件清单固定：
 
 | 架构维度 | 当前设计与实现选型 |
 | :--- | :--- |
@@ -32,7 +32,7 @@ innovation-ar-resource-platform 是面向第一阶段 AR 场景展示业务建�
 | **版本发布** | 严格支持单场景单激活发布版本；支持发布替换与已发布资源只读冻结，保证客户端访问的强幂等性 |
 | **后台权限** | 团队每人分配独立运维账号，具备平权管理员权限，全生命周期操作精准审计记录到人 |
 
-> **边界说明**：当前阶段支持草稿关联多个独立文件的批量上传与校验，暂不负责在服务端深度解析拆包内部的三维模型、音频轨道或 Catalog 共享依赖。原云存储、昼夜光影切换与 AR 世界坐标系方案已留存为候选历史材料，不作为当前版本的交付基线。
+> **边界说明**：当前阶段支持版本关联多个由 resource.json 声明的文件，逐文件上传与校验，服务端不解码模型。原云存储、昼夜光影切换、AR 世界坐标系和场景地址方案已留存为候选历史材料，不作为当前交付基线。
 
 ---
 
@@ -40,11 +40,11 @@ innovation-ar-resource-platform 是面向第一阶段 AR 场景展示业务建�
 
 资源入库链路遵循严格的工程一致性规范（详见 [资源入库闭环 (docs/12-resource-ingestion.md)](docs/12-resource-ingestion.md)）：
 
-1. **创建版本草稿**：在指定场景下发起新版本草稿（Draft），隔离未完成的增量改动；
-2. **多文件分片上传与登记**：支持多文件并行上传，记录文件 MD5 完整性校验值并自动关联到版本草稿；
-3. **失败重试与断点恢复**：单文件上传中断或异常时支持针对性重试，不迫使全量草稿推倒重来；
-4. **启动对账机制**：服务每次启动初始化时，自动核对数据库元数据与本地磁盘物理文件的存在性与完整性；
-5. **发布冻结与替换**：正式发布时，将当前版本标记为唯一激活状态，旧版本平滑归档，已发布的文件元数据进入只读冻结状态，杜绝运行时篡改。
+1. **导入资源目录**：在指定场景下读取根 `resource.json`，一次登记描述与全部文件清单，创建不可变内容版本；
+2. **逐文件上传与校验**：每个文件接收时一次完成大小与 SHA-256 校验，无覆盖提交后才标记可用，不引入分片协议；
+3. **按文件恢复**：上传中断后只重传失败或未完成的文件，已入库文件跳过；
+4. **启动对账机制**：服务启动时先完成未完成的整版删除，再只恢复有遗留数据的未完成文件，不全量重算已入库文件；
+5. **单一发布指针与整版删除**：同场景只有一个当前发布版本，替换发布后旧版本可整版物理删除，保留审计与最小回执。
 
 ---
 
@@ -79,6 +79,6 @@ innovation-ar-resource-platform 是面向第一阶段 AR 场景展示业务建�
 - [仓库全局知识导航 (docs/index.md)](docs/index.md)
 - [基础 Harness 与自动化验证 (docs/13-harness.md)](docs/13-harness.md)
 - [数据库初始化指南 (database/README.md)](database/README.md)
-- [OpenAPI 接口契约规范 (contracts/openapi.yaml)](contracts/openapi.yaml)（API 契约版本为 `0.3.0`）
-- [运行时清单 JSON Schema (contracts/schemas/runtime-manifest.schema.json)](contracts/schemas/runtime-manifest.schema.json) 与 [示例文件](contracts/examples/runtime-manifest.json)
+- [OpenAPI 接口契约规范 (contracts/openapi.yaml)](contracts/openapi.yaml)（4DGS Scene Resource API，契约版本 `0.4.0`）
+- [resource.json v1 Schema](contracts/schemas/resource-descriptor.schema.json) 与 [示例文件](contracts/examples/resource-descriptor.json)；[历史运行时清单 Schema](contracts/schemas/runtime-manifest.schema.json)（候选资料，不再生成）
 - [仓库开发规范与约束 (AGENTS.md)](AGENTS.md)

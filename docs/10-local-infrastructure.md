@@ -4,11 +4,11 @@
 
 ## 当前实现与交付边界
 
-本阶段已提供四个服务的 Docker Compose 配置：Nginx、Spring Boot、PostgreSQL 17、Redis。业务能力包含账号、场景、草稿、文件入库与审计。管理员可在后台上传文件；客户端加载尚未接入。
+本阶段已提供四个服务的 Docker Compose 配置：Nginx、Spring Boot、PostgreSQL 17、Redis。业务能力包含账号、场景、成品版本、文件入库与审计。管理员可在后台导入资源目录并上传文件；匿名客户端读取尚未接入。
 
-`ArtifactStorage` 和 `LocalArtifactStorage` 已实现本地文件暂存、大小/SHA256 校验、不可覆盖确认、读取、校验及文件盘点。存储组件通过草稿入库服务接入管理员 HTTP 上传和数据库登记，仍没有公开文件目录。文件确认入库不等于业务发布。
+`ArtifactStorage` 和 `LocalArtifactStorage` 已实现本地文件暂存、大小/SHA256 校验、不可覆盖确认、读取、校验及文件盘点。存储组件通过场景版本服务接入管理员 HTTP 上传和数据库登记，仍没有公开文件目录。文件确认入库不等于业务发布。
 
-本轮已实现上传页面、文件登记和草稿关联，详见 [资源入库闭环](12-resource-ingestion.md)。真实成品及加载方式尚未提供，因此仍不实现发布回滚、客户端清单和下载授权。旧候选契约和七表脚本不会参与容器初始化；昼夜、AR 坐标、文件数量和平台格式仍待重新确认。
+成品版本导入、逐文件上传、发布指针和整版删除已实现，详见 [资源入库闭环](12-resource-ingestion.md)；匿名客户端清单与下载授权尚未实现。旧候选契约和七表脚本不会参与容器初始化。
 
 ## 启动
 
@@ -28,7 +28,7 @@ docker compose --env-file config/compose.env ps
 
 内网开放时把 `AR_BIND_ADDRESS` 改成宿主机实际内网地址，再重新执行 `up -d`，并为该端口配置限定来源的 Windows 防火墙规则。客户端使用可配置的服务地址；前端通过同源 `/prod-api/` 代理，不写死机器 IP。当前提供内网 HTTP，未配置公网入口或 HTTPS。
 
-`AR_STORAGE_MAX_BYTES` 是必填的正整数，真实样包测量后再设实际值。产物入口使用原始字节流，由服务端流式检查该上限；Nginx 对精确的草稿文件内容与 ZIP 下载路径关闭请求/响应缓冲和网关字节限制，其他接口继续使用 20m 限制。单服务启动后会对已有文件记录核对本地存储。
+`AR_STORAGE_MAX_BYTES`（单文件上限）是必填的正整数，应按最大模型文件设置；`AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）限制单个版本。产物入口使用原始字节流，由服务端流式检查上限；Nginx 对精确的 `scene-versions/{versionId}/files/{fileId}/content` 路径关闭请求/响应缓冲和网关字节限制，其他接口继续使用 20m 限制。单服务启动后会对已有文件记录核对本地存储。
 
 ## 持久卷与权限
 

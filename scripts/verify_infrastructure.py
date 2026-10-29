@@ -87,6 +87,9 @@ def main():
     wait_ready()
     check('frontend served', request('/')[0] == 200)
     check('scene API requires login', request('/prod-api/api/v1/scenes')[0] == 401)
+    check('scene version API requires login', request('/prod-api/api/v1/scene-versions/config')[0] == 401)
+    check('scene version file content requires login', request(
+        '/prod-api/api/v1/scene-versions/%s/files/%s/content' % (uuid.uuid4(), uuid.uuid4()), 'PUT', {})[0] == 401)
     for path in ('/artifacts/file.bin', '/_artifacts/file.bin', '/staging/file.part', '/committed/file.bin', '/data/artifacts/file.bin', '/.env'):
         check('private path blocked ' + path, request(path)[0] == 404)
     check('framework upload remains disabled', request('/prod-api/common/upload', 'POST', {})[0] in (401, 403))
@@ -124,7 +127,7 @@ def main():
     report = {
         'stage': 'infrastructure', 'project': 'innovation-ar-resource-platform-infra-check',
         'containerRecreationTested': args.recreate, 'checks': checks,
-        'limitations': ['No real artifact/client contract', 'No upload/publication/download APIs',
+        'limitations': ['Container wiring only: no real model upload, publication or download is exercised here',
                         'No real disk-full or power-loss test', 'No physical Linux host migration'],
     }
     (ROOT / 'docs/validation-infrastructure.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

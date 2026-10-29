@@ -57,7 +57,9 @@ services:
       AR_UPLOAD_DIR: /data/framework-uploads
       AR_STORAGE_ENABLED: "true"
       AR_STORAGE_ROOT: /data/artifacts
-      AR_STORAGE_MAX_BYTES: ${AR_STORAGE_MAX_BYTES:?Set a positive infrastructure test limit; validate with real artifacts later}
+      AR_STORAGE_MAX_BYTES: ${AR_STORAGE_MAX_BYTES:?Set a positive single-file limit in bytes}
+      AR_STORAGE_VERSION_MAX_FILES: ${AR_STORAGE_VERSION_MAX_FILES:-1000}
+      AR_STORAGE_VERSION_MAX_BYTES: ${AR_STORAGE_VERSION_MAX_BYTES:-4294967296}
       TZ: UTC
     volumes:
       - artifacts_data:/data/artifacts

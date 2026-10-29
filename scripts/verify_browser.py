@@ -23,14 +23,15 @@ with sync_playwright() as p:
     dialog=page.get_by_role('dialog')
     name='browser-'+str(uuid.uuid4())[:8]
     dialog.locator('input').nth(0).fill(name)
-    dialog.locator('input').nth(1).fill('浏览器验证地点')
+    assert dialog.locator('input').count()==1
     dialog.get_by_role('button',name='保存',exact=True).click()
     dialog.wait_for(state='hidden')
     row=page.get_by_role('row').filter(has_text=name)
     row.get_by_role('button',name='场景信息',exact=True).click()
     assert dialog.get_by_role('button',name='版本与文件',exact=True).count()==0
     assert [item.inner_text().strip() for item in dialog.locator('.el-dialog__footer').get_by_role('button').all()]==['关闭','保存']
-    dialog.locator('input').nth(1).fill('浏览器修改后的地点')
+    assert dialog.locator('input').count()==1
+    dialog.locator('input').nth(0).fill(name+'-renamed')
     dialog.get_by_role('button',name='保存',exact=True).click()
     dialog.wait_for(state='hidden')
     row.get_by_role('button',name='停用',exact=True).click()
