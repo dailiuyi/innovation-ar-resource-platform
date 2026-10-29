@@ -24,10 +24,8 @@ export default defineComponent({
     return {
       iconName: computed(() => `#icon-${props.iconClass}`),
       svgClass: computed(() => {
-        if (props.className) {
-          return `svg-icon ${props.className}`
-        }
-        return 'svg-icon'
+        const line = props.iconClass.startsWith('nav-') ? ' svg-icon-line' : ''
+        return props.className ? `svg-icon ${props.className}${line}` : `svg-icon${line}`
       })
     }
   }
@@ -49,5 +47,13 @@ export default defineComponent({
   position: relative;
   fill: currentColor;
   vertical-align: -2px;
+}
+
+/* nav-* 是线性图标：靠描边绘制，不能被上面的 fill 填实。 */
+.svg-icon.svg-icon-line {
+  fill: none;
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.2em;
 }
 </style>
