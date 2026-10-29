@@ -15,12 +15,13 @@
 - [x] 阶段 1：删除地点模型，新增 `resource.json` v1 描述校验（提交 5f090d6）。隔离 PostgreSQL 17.6 空库与 V013 升级库门禁通过（`.local/stage1-gate/report.json`，40 项）。
 - [x] 阶段 2：存储接口收敛为 `store`/`recover`（提交 530c877）。存储门禁通过（`.local/stage2-gate`/`.local/stage2_gate.py`，44 项）。
 - [x] 阶段 3：成品版本业务、后台与调用方切换（后端 f2b09b1、前端 31ccec3、工具 92786e3，集成修复 f519283、faeafaa、fbe07da）。后端门禁（V015 空库/升级、HTTP 生命周期、删除失败 503 与启动恢复）58 项通过；经隔离网关的集成门禁、真实 Chrome 后台操作见下。`scripts/test_scene_package.mjs` 与 `agent_check.py --profile frontend` 的全量结果由主代理统一运行并记录。
-- [ ] 阶段 4、5。
+- [x] 阶段 4：匿名成品读取、Range 补全与完整下载参考工具（提交 69dc9b0、8ee4725）。`ClientSceneController`/`ClientSceneService`、`SecurityConfig` 逐路由放行、网关 `/api/v1/client/`、后缀 Range 与 `HttpRangeTest`、`scripts/download_scene.py`、`artifact_transfer.py` 控制目录/边写边算/OS 锁。门禁 73 项通过，见下。
+- [ ] 阶段 5。
 
 已确认决定：
 
 - V015 迁移是破坏性清洁切换，只在隔离验收库执行，日常库另需授权。
-- 当前 OpenAPI 只含保留或新增的管理接口；匿名客户端接口到阶段 4 才加入。`runtime-manifest` 作为历史静态资料保留，不再由生成器生成。
+- 当前 OpenAPI 描述保留或新增的管理接口和阶段 4 的三个匿名客户端只读操作（`listClientScenes`、`getClientScene`、`downloadClientFile`/`headClientFile`，无 security）。`runtime-manifest` 作为历史静态资料保留，不再由生成器生成。
 - `scripts/verify_export_path_migration.py` 只验证已完成的 V013 历史行为，保留为独立历史脚本，不再是当前门禁。
 - Linux 真实验收走 `scripts/prepare_4dgs_check.py` 启动的固定隔离 Compose 实例，不使用 Windows 专用 ingestion profile。
 
@@ -36,13 +37,27 @@
 - 门禁发现并修复的缺陷：1024 宽版本列表固定列过宽导致操作列被裁切、发布卡片依赖接口未提供的文件数/大小（f519283）；`prepare_4dgs_check.py` 重复运行时容器 ID 为 bytes 导致所有权检查失败（faeafaa）；验证脚本将 V2 发布审计中的 `fromVersionId` 误计入 V1，并在滚动区外误判按钮遮挡（fbe07da）。
 - 已清理本任务阶段 1/2/3 后端门禁遗留的已退出容器与对应网络（仅 `-stage1-`/`-stage2-`/`-s3be-` 后缀）。
 
-结果：阶段 1-3 门禁通过。阶段 4、5 未开始；浏览器证明不等于 Android/iOS 真机验收。
+阶段 4 门禁（同一隔离实例，新 Jar sha256 `fdd6dc6c…26d9` 由 `check_java.py --module ruoyi-admin --package --offline` 产出：63 项测试，0 失败/错误/跳过；前端未改动，复用阶段 3 构建的 dist；网关配置为含 `/api/v1/client/` 的当前 `deploy/nginx.conf`）。提交 69dc9b0（后端、网关、契约、文档）与 8ee4725（下载工具与 OS 锁）：
+
+- Java：`ruoyi-ar` 57 项（含新增 `HttpRangeTest` 10 项、`ClientSceneServiceTest`、版本创建对 `%`/`;` 文件名的 400 边界）、`ruoyi-framework` 6 项，均 0 失败/错误/跳过。
+- Python（无需服务）：`scripts/test_artifact_transfer.py` 22 项（新增 OS 锁、残留锁文件不阻塞、控制目录、边写边算只哈希一次/续传校验一次、忽略 Range 回 200 截断）与 `scripts/test_download_scene.py` 14 项（假客户端 API：只下选定档位、杀/断后续传、已完成文件无再次 GET、损坏不就绪、409 不混版本、未知档位、非空无状态目录拒绝等）通过。`verify_design.py` 418 项通过（含三条匿名路由恰好只读、无 security、文件路由 200/206/416/409）；`agent_check.py --profile quick` 通过。
+- 隔离实例门禁 `.local/stage4_gate.py` 73 项全部通过（经 Nginx 网关，合成包，无 Authorization；报告 `.local/4dgs-check/evidence/stage4-gate.json`）：
+  - 匿名读写：未发布场景目录/详情/文件 404；发布后目录字段、详情（descriptor、去重文件、contentType、无 storageKey/磁盘路径）、全部文件 GET 精确字节与强 ETag、无 attachment、HEAD 空 body 完整长度；错误 basename/fileId/场景 404；停用/逻辑删除后全部读取 404；匿名 POST/PUT/DELETE、`/client` 其他路径、`HEAD /client/scenes`、全部管理接口均为 401/403（断言接受二者，原管理员登录和权限不变）；`/artifacts` 等内部路径 404。
+  - Range（700 KB 合成模型）：`0-31`、`32-`、`-32` 的 206 与精确字节/Content-Range；越界与超大数字 416（`bytes */size`，不 500）；`-0` 416；If-Range 错回 200、对则 206；多段/无效范围回 200；后缀超长回整个文件 206；HEAD（含带 Range）空 body 且长度完整。
+  - `download_scene.py`（经可注入故障的回环代理）：首个文件传输中途 SIGKILL，状态文件已先于任何字节建立、无 ready，残留空锁文件，同命令继续（OS 锁不卡）并以 `Range: bytes=<part 大小>-` 续传；首个文件完成后切断第二个文件，重跑无已完成文件的再次 GET，仅被切断文件 Range 续传，ready 仅在全部完成后出现；服务端忽略 Range 回 200 时截断重写且字节精确；损坏传输返回校验错误、无 ready、无该文件、`.part` 被删，重跑只重下该文件；中途发布 V2 后旧 V1 请求 409、工具退出码 3 且只有一次被拒请求、V1 目录原样未就绪，新运行取 V2 描述写入新版本目录、无 V1/V2 混合；已开始的 V1 字节流（40 MiB）在 V2 发布后仍完整，其后的 V1 请求 409；standard 与 high 档位下载的请求文件集合正好是各自模型加去重后的共用文件，不含另一档位字节，`ready.json` 总字节等于该集合大小。
+  - 重复读取：10 轮目录+详情+两个 HEAD（共 40 HEAD + 10 目录 + 10 详情）使后端 JVM 的进程 `rchar` 仅增 82 KB，32 字节 Range 仅增 2.4 KB，而一次完整 12 MiB GET 增 12.6 MB，说明该方法可区分。这是进程级粗检，不是计划要求的 JFR 文件读取证据，JFR 留到阶段 5 `verify_4dgs.py`。
+  - 耗时（本机回环，非手机或公网性能）：首次目录 2.4 ms、详情 1.5 ms；杀进程后续传 0.13 s。
+- 门禁与实现中确认的行为：Spring Security 防火墙会拒绝路径中编码的 `%`（`%25`）和 `;`（`%3B`）（实测匿名得 401，`#`、`[`、`]` 可达控制器），因此版本创建对这类文件名直接返回 400，避免已入库文件客户端无法读取。
+- 未执行：`ar.storage.enabled=false` 时路由不注册（只有一个启用存储的实例，由 `@ConditionalOnProperty` 保证，未单独实例验证）；Windows `msvcrt` 锁分支未在 Windows 运行（仅 Linux `fcntl` 实测）；JFR 与真实样包（阶段 5）。
+- 门禁驱动自身的修正（非产品缺陷）：Range 行的“后缀超长”原用例误取小于文件的后缀；`urllib` 的 `read(64 KiB)` 会凑满整块才写 `.part`，因此首个文件改为 300 KB 并在 200 KB 处停顿。门禁没有发现后端或工具缺陷。
+
+结果：阶段 1-4 门禁通过。阶段 5 未开始；浏览器证明不等于 Android/iOS 真机验收。
 
 ## 交接与恢复
 
-工作模式与当前阶段：普通本地开发，阶段 3 门禁完成，待进入阶段 4。用户已授权：本地独立分支与隔离验收；不推送、不合并、不更新日常实例。
+工作模式与当前阶段：普通本地开发，阶段 4 门禁完成，待进入阶段 5。用户已授权：本地独立分支与隔离验收；不推送、不合并、不更新日常实例。
 
-下一步：阶段 4 匿名读取、Range 补全与 `scripts/download_scene.py`。隔离实例 `.local/4dgs-check` 仍在运行，阶段 4 以新 Jar 重新 `prepare`（`prepare` 可重入，复用卷与凭据）。
+下一步：阶段 5 真实样包与 4DV 参考客户端（`prepare_4dgs_samples.py`、`import_scene_package.py`、`prepare_reference_viewer.py`、`verify_4dgs.py`），含计划要求的 JFR 读取证据。隔离实例由 `prepare_4dgs_check.py stop` 停止后，阶段 5 以 `prepare` 重入（复用卷与凭据；注意库中保留阶段 3/4 门禁留下的合成场景，阶段 5 验证应按名称筛选）。
 
 本任务可能保留的运行资源：固定项目 `innovation-ar-resource-platform-infra-check` 的容器和卷；用 `scripts/prepare_4dgs_check.py stop --report-dir <目录>` 停止，不执行 `down -v`。
 
