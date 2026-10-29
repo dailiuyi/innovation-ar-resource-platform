@@ -389,6 +389,10 @@ public class DraftService implements InitializingBean {
     private ArtifactStorage.Descriptor descriptor(Map<String,Object> row) {
         return new ArtifactStorage.Descriptor(UUID.fromString((String)row.get("id")),((Number)row.get("bytes")).longValue(),(String)row.get("sha256"));
     }
+    /** Metadata-only check for files already confirmed AVAILABLE; content digests are checked once at ingestion or recovery. */
+    private void requireStored(ArtifactStorage.Descriptor expected) throws IOException {
+        if(storage.size(expected.id())!=expected.bytes()) throw new IOException("Artifact missing or size mismatch");
+    }
     private ReentrantLock lock(UUID id) { return locks[(id.hashCode() & Integer.MAX_VALUE)%locks.length]; }
     public Map<String,Object> upload(UUID draftId,UUID id,InputStream input) {
         ReentrantLock lock=lock(id);
@@ -410,11 +414,8 @@ public class DraftService implements InitializingBean {
             });
             try {
                 var expected=descriptor(row);
-                if(!"AVAILABLE".equals(row.get("status"))) {
-                    storage.stage(expected,input);
-                    storage.commit(expected);
-                }
-                storage.verify(expected);
+                if("AVAILABLE".equals(row.get("status"))) requireStored(expected);
+                else storage.store(expected,input);
             } catch(IOException e) {
                 String reason=switch(String.valueOf(e.getMessage())) {
                     case "Artifact size mismatch" -> "实际文件大小与登记值不一致，请核对原文件";
@@ -613,7 +614,6 @@ public class DraftService implements InitializingBean {
     public void downloadZip(UUID draftId,UUID exportId,HttpServletRequest request,HttpServletResponse response) throws IOException {
         lockRead(draftId);
         try {
-            completeFiles(draftId);
             var files=completeFiles(draftId);
             var row=one("select e.id::text as id, e.collection_id as \"collectionId\", e.generation, e.bytes, e.sha256, e.status, (e.expires_at is not null and e.expires_at<now()) as expired from ar_zip_export e join ar_draft_collection c on c.id=e.collection_id where e.id=? and c.draft_id=?",exportId,draftId);
             if(!"AVAILABLE".equals(row.get("status")) || Boolean.TRUE.equals(row.get("expired")))
@@ -702,7 +702,7 @@ public class DraftService implements InitializingBean {
         UUID cid=currentCollection(draftId).id();
         var files=db.queryForList("select "+FILE_COLUMNS+" from ar_draft_file where collection_id=? and removed_at is null and not exists(select 1 from ar_file_deletion d where d.file_id=ar_draft_file.id) order by relative_path,id",cid);
         for(var row:files) {
-            try { storage.verify(descriptor(row)); }
+            try { requireStored(descriptor(row)); }
             catch(IOException e) { throw error(HttpStatus.CONFLICT,"文件集合不完整或存储校验失败，请刷新后重试"); }
         }
         return files;
@@ -830,24 +830,27 @@ public class DraftService implements InitializingBean {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch(NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
-    /** Runs after Flyway and before application startup completes. Rechecks available files too. */
+    /** Runs after Flyway and before application startup completes. Only unfinished files are examined; AVAILABLE files are not re-read. */
     @Override public void afterPropertiesSet() {
         reconcileDeletions();
+        Set<UUID> leftovers=new HashSet<>();
+        try { for(var entry:storage.inventory()) leftovers.add(entry.id()); }
+        catch(IOException e) { throw new IllegalStateException("存储目录无法盘点，拒绝启动对账",e); }
         UUID cursor=new UUID(0,0);
         while(true) {
-            var rows=db.queryForList("select "+FILE_COLUMNS+" from ar_draft_file where id>? and removed_at is null and not exists(select 1 from ar_file_deletion d where d.file_id=ar_draft_file.id) order by id limit 100",cursor);
+            var rows=db.queryForList("select "+FILE_COLUMNS+" from ar_draft_file where id>? and status in ('PENDING','UPLOADING','FAILED') and removed_at is null and not exists(select 1 from ar_file_deletion d where d.file_id=ar_draft_file.id) order by id limit 100",cursor);
             if(rows.isEmpty()) break;
             for(var row:rows) {
                 UUID id=UUID.fromString((String)row.get("id")); cursor=id;
                 UUID draftId=UUID.fromString((String)row.get("draftId"));
+                String status=(String)row.get("status");
                 ReentrantLock lock=lock(id); lock.lock();
                 try {
                     try {
-                        storage.commit(descriptor(row));
-                        storage.verify(descriptor(row));
-                        if(!"AVAILABLE".equals(row.get("status"))) finish(draftId,id,true,null,true);
+                        if(leftovers.contains(id) && storage.recover(descriptor(row))) finish(draftId,id,true,null,true);
+                        else if("UPLOADING".equals(status)) finish(draftId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
                     } catch(IOException e) {
-                        if(!"FAILED".equals(row.get("status"))) finish(draftId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
+                        if(!"FAILED".equals(status)) finish(draftId,id,false,"重启对账未找到完整且校验通过的正式文件，请重新上传",true);
                     }
                 } finally { lock.unlock(); }
             }

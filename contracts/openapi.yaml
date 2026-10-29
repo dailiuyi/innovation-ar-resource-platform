@@ -3961,7 +3961,7 @@ paths:
     put:
       operationId: uploadDraftFile
       summary: 流式上传并校验文件
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。原始字节流。校验实际大小、SHA256，正式存储重新校验后才AVAILABLE。重复可用文件请求核验已存文件并返回原记录；不覆盖正式文件。中断后全量重传，无分片续传。同文件处理中409，校验/存储失败422；失败记录可查。
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。原始字节流。接收时一次校验实际大小与SHA256，通过后无覆盖提交并直接AVAILABLE。重复可用文件请求只核对记录、文件存在和长度并返回原记录；不覆盖正式文件。中断后全量重传，无分片续传。同文件处理中409，校验/存储失败422；失败记录可查。
       security:
       - bearerAuth: []
       parameters:

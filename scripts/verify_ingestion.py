@@ -277,7 +277,7 @@ def main():
         check('restart completes interrupted physical deletions',all(not sql('select id from ar_draft_file where id=%s',(x['id'],)) and not (run/'artifacts/committed'/x['storageKey']).exists() and sql('select completed_at is not null from ar_file_deletion where file_id=%s',(x['id'],))[0][0] for x in recovery_ids))
         check('legacy removals not purged automatically',(run/'artifacts/committed'/legacy['storageKey']).exists() and bool(sql('select id from ar_draft_file where id=%s',(legacy['id'],))))
         check('completed files remain available after restart',current(first)=='AVAILABLE' and current(second)=='AVAILABLE')
-        check('restart identifies incomplete upload',current(crash)=='FAILED' and current(pending)=='FAILED')
+        check('restart identifies interrupted upload and leaves untouched pending',current(crash)=='FAILED' and current(pending)=='PENDING')
         check('restart reconciles ready and committed files',current(staged)=='AVAILABLE' and current(ack)=='AVAILABLE')
         check('explicit legacy deletion clears bytes and row',api(dp+'/files/'+legacy['id'],'DELETE')[0]==204 and not (run/'artifacts/committed'/legacy['storageKey']).exists() and not sql('select id from ar_draft_file where id=%s',(legacy['id'],)))
         check('retry after service restart succeeds',upload(crash,a*6000)[1]['status']=='AVAILABLE')

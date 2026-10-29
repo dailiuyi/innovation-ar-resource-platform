@@ -246,7 +246,7 @@ add('/api/v1/drafts/{draftId}/files','post','registerDraftFile','登记待上传
     description='追加到当前文件集合。requestKey 在草稿内唯一；重复同元数据返回原记录，不同元数据409。相对路径默认等于文件名。大小超限413。AAR必须为CLIENT_LIBRARY。登记本身不代表文件可用。替换进行中禁止追加。')
 add('/api/v1/drafts/{draftId}/files/{fileId}','delete','removeDraftFile','永久删除草稿文件',status='204',description='删除实际文件和草稿文件行，保留审计及最小幂等回执。成功/重复删除204，处理中409；存储删除失败503，列表显示DELETE_FAILED可重试。启动恢复未完成删除。旧登记请求键410，重新添加须用新键。')
 add('/api/v1/drafts/{draftId}/files/{fileId}/content','put','uploadDraftFile','流式上传并校验文件',response='DraftFileView',
-    description='原始字节流。校验实际大小、SHA256，正式存储重新校验后才AVAILABLE。重复可用文件请求核验已存文件并返回原记录；不覆盖正式文件。中断后全量重传，无分片续传。同文件处理中409，校验/存储失败422；失败记录可查。')
+    description='原始字节流。接收时一次校验实际大小与SHA256，通过后无覆盖提交并直接AVAILABLE。重复可用文件请求只核对记录、文件存在和长度并返回原记录；不覆盖正式文件。中断后全量重传，无分片续传。同文件处理中409，校验/存储失败422；失败记录可查。')
 paths['/api/v1/drafts/{draftId}/files/{fileId}/content']['put']['requestBody'] = {
     'required':True,'content':{'application/octet-stream':{'schema':{'type':'string','format':'binary'}}}}
 add('/api/v1/drafts/{draftId}/replacements','post','startDraftReplacement','开始用文件夹清单替换当前草稿全部文件','ReplacementCreate','ReplacementView',

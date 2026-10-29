@@ -21,14 +21,20 @@ public interface ArtifactStorage {
     enum Phase { PARTIAL, STAGED, COMMITTED }
     record Entry(UUID id, Phase phase, long bytes, Instant modifiedAt) { }
 
-    /** Streams and verifies input. Caller owns the input stream. Retry uses the same descriptor. */
-    void stage(Descriptor expected, InputStream input) throws IOException;
+    /**
+     * Receives, digests once, and atomically publishes the bytes under the per-file lock. A mismatch or
+     * transport failure leaves no readable formal file. If complete bytes from an earlier attempt already
+     * exist, they are validated once, never overwritten, and {@code input} is not consumed.
+     * Caller owns the input stream. Retry uses the same descriptor.
+     */
+    void store(Descriptor expected, InputStream input) throws IOException;
 
-    /** No overwrite. Repeating a successful commit with identical metadata is safe. */
-    void commit(Descriptor expected) throws IOException;
-
-    /** Recomputes size and digest; absence or corruption fails closed. */
-    void verify(Descriptor expected) throws IOException;
+    /**
+     * Finishes an interrupted write from existing ready/committed bytes, validating the retained bytes at
+     * most once. Returns false when no complete bytes exist (nothing or only a partial). Throws when the
+     * retained bytes do not match {@code expected}.
+     */
+    boolean recover(Descriptor expected) throws IOException;
 
     /** Caller must authorize access and close the returned stream. No HTTP exposure here. */
     InputStream open(UUID id) throws IOException;

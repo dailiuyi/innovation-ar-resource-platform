@@ -61,69 +61,82 @@ public final class LocalArtifactStorage implements ArtifactStorage {
     }
 
     @Override
-    public void stage(Descriptor expected, InputStream input) throws IOException {
+    public void store(Descriptor expected, InputStream input) throws IOException {
         Objects.requireNonNull(input);
         if (expected.bytes() > maxBytes) throw new IOException("Artifact exceeds configured storage limit");
         locked(expected.id(), () -> {
             Path target = file(committed, expected.id(), ".bin");
-            if (Files.exists(target)) { verifyFile(target, expected); return; }
             Path ready = file(staging, expected.id(), ".ready");
-            if (Files.exists(ready)) { verifyFile(ready, expected); return; }
+            // Complete bytes from an earlier attempt: validate them once and never overwrite.
+            if (Files.exists(target) || Files.exists(ready)) { recoverLocked(expected, target, ready); return null; }
             Path partial = file(staging, expected.id(), ".part");
-            // A lock proves no active writer owns the previous interrupted attempt.
+            // The lock proves no active writer owns a previous interrupted attempt.
             Files.deleteIfExists(partial);
             try {
-                MessageDigest digest = sha256();
-                long count = 0;
-                try (FileChannel output = FileChannel.open(partial, StandardOpenOption.CREATE_NEW,
-                        StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
-                    byte[] buffer = new byte[64 * 1024];
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        if (read == 0) continue;
-                        if (read > expected.bytes() - count) throw new IOException("Artifact size mismatch");
-                        count += read;
-                        digest.update(buffer, 0, read);
-                        ByteBuffer bytes = ByteBuffer.wrap(buffer, 0, read);
-                        while (bytes.hasRemaining()) output.write(bytes);
-                    }
-                    if (count != expected.bytes()) throw new IOException("Artifact size mismatch");
-                    if (!HexFormat.of().formatHex(digest.digest()).equals(expected.sha256())) {
-                        throw new IOException("Artifact SHA256 mismatch");
-                    }
-                    output.force(true);
-                }
+                receive(expected, input, partial);
                 // Staging and committed directories live on the same volume.
                 Files.move(partial, ready, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException | RuntimeException error) {
                 try { Files.deleteIfExists(partial); } catch (IOException cleanup) { error.addSuppressed(cleanup); }
                 throw error;
             }
+            publish(target, ready);
+            return null;
         });
     }
 
     @Override
-    public void commit(Descriptor expected) throws IOException {
-        locked(expected.id(), () -> {
-            Path target = file(committed, expected.id(), ".bin");
-            Path ready = file(staging, expected.id(), ".ready");
-            if (Files.exists(target)) {
-                verifyFile(target, expected);
-                // Recover a crash after link creation and before staging cleanup.
-                if (Files.exists(ready)) { verifyFile(ready, expected); Files.delete(ready); }
-                return;
+    public boolean recover(Descriptor expected) throws IOException {
+        return locked(expected.id(), () -> recoverLocked(expected,
+                file(committed, expected.id(), ".bin"), file(staging, expected.id(), ".ready")));
+    }
+
+    /** One digest at most, over the bytes actually retained. Caller holds the file lock. */
+    private static boolean recoverLocked(Descriptor expected, Path target, Path ready) throws IOException {
+        if (Files.exists(target)) {
+            // A ready entry beside a validated target is only a leftover link (or copy); drop it unread.
+            verifyFile(target, expected);
+            Files.deleteIfExists(ready);
+            return true;
+        }
+        if (!Files.exists(ready)) return false;
+        verifyFile(ready, expected);
+        publish(target, ready);
+        return true;
+    }
+
+    /** Receives exactly expected.bytes() into a new part file, hashing in the same pass. */
+    private static void receive(Descriptor expected, InputStream input, Path partial) throws IOException {
+        MessageDigest digest = sha256();
+        long count = 0;
+        try (FileChannel output = FileChannel.open(partial, StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] buffer = new byte[64 * 1024];
+            ByteBuffer window = ByteBuffer.wrap(buffer);
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                if (read == 0) continue;
+                if (read > expected.bytes() - count) throw new IOException("Artifact size mismatch");
+                count += read;
+                digest.update(buffer, 0, read);
+                window.clear().limit(read);
+                while (window.hasRemaining()) output.write(window);
             }
-            verifyFile(ready, expected);
-            // Atomic visibility AND no overwrite. ATOMIC_MOVE alone may replace an existing target.
-            // Unsupported filesystems fail closed; never fall back to a visible partial copy.
-            Files.createLink(target, ready);
-            Files.delete(ready);
-        });
+            if (count != expected.bytes()) throw new IOException("Artifact size mismatch");
+            if (!HexFormat.of().formatHex(digest.digest()).equals(expected.sha256())) {
+                throw new IOException("Artifact SHA256 mismatch");
+            }
+            output.force(true);
+        }
     }
 
-    @Override
-    public void verify(Descriptor expected) throws IOException {
-        verifyFile(file(committed, expected.id(), ".bin"), expected);
+    /**
+     * Atomic visibility AND no overwrite: a hard link fails if the target exists, unlike ATOMIC_MOVE which
+     * may replace it. Unsupported filesystems fail closed; never fall back to a visible partial copy.
+     */
+    private static void publish(Path target, Path ready) throws IOException {
+        Files.createLink(target, ready);
+        Files.delete(ready);
     }
 
     private static void verifyFile(Path path, Descriptor expected) throws IOException {
@@ -175,6 +188,7 @@ public final class LocalArtifactStorage implements ArtifactStorage {
             Files.deleteIfExists(ready);
             Files.deleteIfExists(target);
             // Keep the zero-byte lock inode; deleting it could split mutual exclusion.
+            return null;
         });
     }
 
@@ -203,13 +217,13 @@ public final class LocalArtifactStorage implements ArtifactStorage {
         }
     }
 
-    private void locked(UUID id, IoOperation action) throws IOException {
+    private <T> T locked(UUID id, IoAction<T> action) throws IOException {
         // Keep lock files: unlinking them can allow different processes to lock different inodes.
         try (FileChannel channel = FileChannel.open(file(locks, id, ".lock"), StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
             try (FileLock lock = channel.tryLock()) {
                 if (lock == null) throw new IOException("Artifact operation already in progress; retry later");
-                action.run();
+                return action.run();
             } catch (OverlappingFileLockException error) {
                 throw new IOException("Artifact operation already in progress; retry later", error);
             }
@@ -222,7 +236,7 @@ public final class LocalArtifactStorage implements ArtifactStorage {
     }
 
     @FunctionalInterface
-    private interface IoOperation { void run() throws IOException; }
+    private interface IoAction<T> { T run() throws IOException; }
 
     static final class BoundedInputStream extends InputStream {
         private final InputStream in;
