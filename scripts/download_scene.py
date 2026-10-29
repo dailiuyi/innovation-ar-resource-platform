@@ -119,7 +119,13 @@ def open_task(version_dir, variant_id, identity, manifest):
         directory.rmdir()
     staging = version_dir / (variant_id + ".tmp")
     if staging.exists():
-        shutil.rmtree(staging)
+        completed = load_state(staging, identity, manifest)
+        if completed is not None:
+            os.rename(staging, directory)
+            return directory, completed
+        if any(staging.iterdir()):
+            raise SceneError(f"{staging} is not empty and has no download state of this task")
+        staging.rmdir()
     staging.mkdir()
     (staging / "payload").mkdir()
     (staging / ".transfer").mkdir()

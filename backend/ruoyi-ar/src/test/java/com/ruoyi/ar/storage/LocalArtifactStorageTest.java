@@ -182,6 +182,28 @@ class LocalArtifactStorageTest {
         assertFalse(Files.exists(formal(expected)));
     }
 
+    @Test void discardingUnverifiedLeftoverLetsRegisteredBytesBeStored() throws Exception {
+        var storage = new LocalArtifactStorage(root, 1024);
+        var readyLeftover = descriptor(UUID.randomUUID(), DATA);
+        Files.write(ready(readyLeftover), sameLengthOther());
+        assertThrows(ArtifactStorage.UnverifiedLeftoverException.class,
+            () -> storage.store(readyLeftover, new ByteArrayInputStream(DATA)));
+        storage.delete(readyLeftover.id());
+        storage.store(readyLeftover, new ByteArrayInputStream(DATA));
+        assertArrayEquals(DATA, read(storage, readyLeftover.id()));
+        assertFalse(Files.exists(ready(readyLeftover)));
+
+        var committedLeftover = descriptor(UUID.randomUUID(), DATA);
+        storage.store(committedLeftover, new ByteArrayInputStream(DATA));
+        Files.write(formal(committedLeftover), sameLengthOther());
+        assertThrows(ArtifactStorage.UnverifiedLeftoverException.class,
+            () -> storage.store(committedLeftover, unread()));
+        assertArrayEquals(sameLengthOther(), Files.readAllBytes(formal(committedLeftover)));
+        storage.delete(committedLeftover.id());
+        storage.store(committedLeftover, new ByteArrayInputStream(DATA));
+        assertArrayEquals(DATA, read(storage, committedLeftover.id()));
+    }
+
     @Test void recoverCompletesReadyBytesWithoutDuplicateWrite() throws Exception {
         var storage = new LocalArtifactStorage(root, 1024);
         var expected = descriptor(UUID.randomUUID(), DATA);

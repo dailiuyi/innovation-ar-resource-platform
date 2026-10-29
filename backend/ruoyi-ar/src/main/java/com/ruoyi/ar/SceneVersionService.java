@@ -262,7 +262,7 @@ public class SceneVersionService implements InitializingBean {
             // An AVAILABLE file is not overwritten or re-read; only its presence and length are checked.
             if(wasAvailable) {
                 if(storage.size(expected.id())!=expected.bytes()) throw new IOException("Artifact missing or size mismatch");
-            } else storage.store(expected,input);
+            } else storeReplacingUnverified(expected,input);
         } catch(IOException e) {
             String message=String.valueOf(e.getMessage());
             boolean mismatch=message.contains("size mismatch") || message.contains("SHA256 mismatch") || message.contains("exceeds configured storage limit");
@@ -275,6 +275,15 @@ public class SceneVersionService implements InitializingBean {
         }
         if(!wasAvailable) finish(versionId,id,true,null,false);
         return file(versionId,id);
+    }
+    /** store never replaces retained bytes. A not-yet-available upload may discard that unverified leftover and receive the new body. */
+    private void storeReplacingUnverified(ArtifactStorage.Descriptor expected, InputStream input) throws IOException {
+        try {
+            storage.store(expected, input);
+        } catch (ArtifactStorage.UnverifiedLeftoverException leftover) {
+            storage.delete(expected.id());
+            storage.store(expected, input);
+        }
     }
     private void finish(UUID versionId,UUID id,boolean available,String reason,boolean recovery) {
         tx.executeWithoutResult(s -> {

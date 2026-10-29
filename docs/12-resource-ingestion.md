@@ -27,7 +27,7 @@
 
 - 固定 `formatVersion=1`；`defaultVariant` 指向真实档位；必须显式给出 `transform`；`settings` 必填，`poster`/`audio`/`preview` 可选，缺少就省略。
 - 每个档位有 `id`、`name`、`format`（当前唯一值 `4dv-compressed-ply`）和非空有序 `segments`（`path`、`startSeconds`、`durationSeconds`）。时间不猜测，不按文件名推断顺序，不要求各档位段数一致。
-- 引用路径去重后的集合必须与请求 `files` 的路径集合完全相等；重复路径、路径穿越、缺失引用、重复档位、未知默认档位、时间重叠返回 400 并指出字段或路径。文件大小或数量超配置返回 413。后端不解码模型。
+- 引用路径去重后的集合必须与请求 `files` 的路径集合完全相等；路径必须已是 NFC 规范形式，服务端不改写描述。重复路径、路径穿越、缺失引用、重复档位、未知默认档位、时间重叠、非规范路径返回 400 并指出字段或路径。文件大小或数量超配置返回 413。后端不解码模型。
 
 ## 接口
 
@@ -52,8 +52,8 @@
 2. 版本创建后描述和文件清单固定，需要改变模型、配置、路径或档位时创建新版本。只有说明可编辑。
 3. 服务端逐段读取文件，同一次读取中校验实际字节数与 SHA256，超过声明大小立即拒绝；只有校验通过才能无覆盖提交为正式 `.bin`，提交后直接标记 `AVAILABLE`，不再重读。
 4. 同一文件并发处理返回 409。已 `AVAILABLE` 的文件重复上传只核对记录、文件存在和长度后返回原记录。大小或摘要不符返回 422，存储 IO 失败返回 503，均保存 `FAILED` 与原因，新尝试递增 `attempts`。
-5. 上传按文件恢复：先查询状态，`AVAILABLE` 跳过，`UPLOADING` 显示处理中，`FAILED`/`PENDING` 重新完整上传该文件。传输超时只表示结果未确认，不自动改成失败；没有自动重试、全量轮询或分片协议。
-6. 启动先恢复未完成整版删除，再只对 `PENDING`/`UPLOADING`/`FAILED` 且有遗留数据的记录恢复：完整 `.ready` 或已落盘未确认的文件至多验证一次后补记可用，中断的 `UPLOADING` 变 `FAILED`，没有遗留数据的 `PENDING` 保持不变。`AVAILABLE` 不全量重算摘要。恢复审计标明 `performedBy=SYSTEM_RECONCILIATION`。
+5. 上传按文件恢复：先查询状态，`AVAILABLE` 跳过，`UPLOADING` 显示处理中，`FAILED`/`PENDING` 重新完整上传该文件。该文件若留有校验不符的 `.ready` 或未确认 `.bin`，重新上传会先删除这份未确认遗留，再接收新正文；已确认可用的正式文件不覆盖。传输超时只表示结果未确认，不自动改成失败；没有自动重试、全量轮询或分片协议。
+6. 启动先恢复未完成整版删除，再只对 `PENDING`/`UPLOADING`/`FAILED` 且有遗留数据的记录恢复：完整且校验通过的 `.ready` 或已落盘未确认的文件至多验证一次后补记可用。校验不符的遗留保持失败，不在启动时删除。中断的 `UPLOADING` 变 `FAILED`，没有遗留数据的 `PENDING` 保持不变。`AVAILABLE` 不全量重算摘要。恢复审计标明 `performedBy=SYSTEM_RECONCILIATION`。
 
 文件列表、版本详情、发布和管理员 GET/HEAD 不读取其他文件内容，也不计算内容摘要。已可用文件的同长度磁盘损坏不会被服务端发现，由下载端校验 SHA256 发现。当前支持一个 Spring Boot 实例和一个私有本地存储卷。
 
@@ -79,7 +79,7 @@
 - 响应读锁持有到流结束，整版删除取写锁，不会截断正在读取的文件。`Content-Type` 按声明角色与扩展名：模型 `application/octet-stream`、settings `application/json`、jpg/png/webp、wav、webm 对应 MIME，未知为 `application/octet-stream`，不嗅探内容。客户端响应不带 `attachment` 文件名，`Cache-Control: no-store, no-transform`；管理员下载保留 `attachment`。
 - Range：合法但越界返回 416 与 `Content-Range: bytes */size`（超大数字不抛 500）；无效、`end<start` 或多段 Range 忽略并返回完整 200；If-Range 不匹配返回完整 200；HEAD 不发送正文，长度为完整长度。永久回归为 `HttpRangeTest`。
 
-完整下载参考工具 `scripts/download_scene.py --base-url URL --scene-id UUID --variant ID --output DIR`（Python 标准库，匿名）只下载选定档位的分段加公共文件，目录为 `<DIR>/<sceneId>/<versionId>/<variantId>/`：`payload/` 是描述路径的根，`.download-state.json` 在写任何字节之前原子建立并记录固定清单与已完成集合，`.transfer/` 存放 `.part`、验证器和锁，`ready.json` 在全部文件校验后才原子写入。同命令可在被杀或断网后继续：已完成且长度匹配的文件不再请求、不重哈希；其余沿用 `artifact_transfer.download` 的 Range + If-Range，206 校验起点后追加，200 截断重写，摘要不符删除该 `.part`、不就绪、下次只重下该文件。锁为操作系统文件锁（`fcntl`/`msvcrt`），残留的空锁文件不会阻塞。409 表示发布版本已变化：工具停止（退出码 3）、不自动重试、保留旧目录，重新运行才会把新描述取到新的版本目录。没有该档位退出码 2，不自动换档。它是联调参考，不是 Android/iOS 下载 SDK。
+完整下载参考工具 `scripts/download_scene.py --base-url URL --scene-id UUID --variant ID --output DIR`（Python 标准库，匿名）只下载选定档位的分段加公共文件，目录为 `<DIR>/<sceneId>/<versionId>/<variantId>/`：`payload/` 是描述路径的根，`.download-state.json` 在写任何字节之前原子建立并记录固定清单与已完成集合，`.transfer/` 存放 `.part`、验证器和锁，`ready.json` 在全部文件校验后才原子写入。同名 `.tmp` 只有带本次任务状态时才接管；非空且无法确认归属的临时目录直接拒绝，不删除。同命令可在被杀或断网后继续：已完成且长度匹配的文件不再请求、不重哈希；其余沿用 `artifact_transfer.download` 的 Range + If-Range，206 校验起点后追加，200 截断重写，摘要不符删除该 `.part`、不就绪、下次只重下该文件。锁为操作系统文件锁（`fcntl`/`msvcrt`），残留的空锁文件不会阻塞。409 表示发布版本已变化：工具停止（退出码 3）、不自动重试、保留旧目录，重新运行才会把新描述取到新的版本目录。没有该档位退出码 2，不自动换档。它是联调参考，不是 Android/iOS 下载 SDK。
 
 ## 后台
 

@@ -142,6 +142,8 @@ def import_package(api, scene_id, package_root, descriptor_path, version_id=None
     status, version = api.request('GET', f'/api/v1/scene-versions/{version_id}')
     if status != 200:
         raise ImportError_(f'version {version_id} not readable: HTTP {status}')
+    if str(version.get('sceneId')) != str(scene_id):
+        raise ImportError_(f'version {version_id} belongs to scene {version.get("sceneId")}, not {scene_id}')
     if version['descriptor'] != descriptor:
         raise ImportError_('stored descriptor differs from --descriptor; import a new version instead')
     stored = {f['relativePath']: f for f in version['files']}

@@ -108,6 +108,15 @@ class ResourceDescriptorValidatorTest {
         assertTrue(rejected(s -> s.replace("media_and_settings/wedding.wav", "/etc/passwd")).getReason().startsWith("audio "));
     }
 
+    @Test void rejectsDescriptorPathThatIsNotAlreadyCanonical() {
+        String nfd = "cafe\u0301.json";
+        String json = WEDDING.replace("media_and_settings/wedding_settings.json", nfd);
+        List<String> files = new ArrayList<>(WEDDING_FILES);
+        files.set(files.indexOf("media_and_settings/wedding_settings.json"), nfd);
+        assertTrue(rejected(json, files).getReason().contains("必须已是规范形式"));
+        assertFalse(files.contains(java.text.Normalizer.normalize(nfd, java.text.Normalizer.Form.NFC)));
+    }
+
     @Test void rejectsOverlapDescendingAndNonPositiveDuration() {
         assertTrue(rejected(s -> s.replaceFirst(literal("standard_quality/01.c.ply\",\"startSeconds\":5,"),
             "standard_quality/01.c.ply\",\"startSeconds\":4.9,")).getReason()

@@ -141,7 +141,7 @@ public final class LocalArtifactStorage implements ArtifactStorage {
 
     private static void verifyFile(Path path, Descriptor expected) throws IOException {
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) != expected.bytes()) {
-            throw new IOException("Artifact missing or size mismatch");
+            throw new ArtifactStorage.UnverifiedLeftoverException("Artifact missing or size mismatch");
         }
         MessageDigest digest = sha256();
         try (InputStream input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
@@ -150,7 +150,7 @@ public final class LocalArtifactStorage implements ArtifactStorage {
             while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
         }
         if (!HexFormat.of().formatHex(digest.digest()).equals(expected.sha256())) {
-            throw new IOException("Artifact SHA256 mismatch");
+            throw new ArtifactStorage.UnverifiedLeftoverException("Artifact SHA256 mismatch");
         }
     }
 

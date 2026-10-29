@@ -102,6 +102,7 @@ public final class ResourceDescriptorValidator {
         } catch (IllegalArgumentException e) {
             throw invalid(field, e.getMessage() + "：" + path);
         }
+        if (!path.equals(normalized)) throw invalid(field, "必须已是规范形式：" + path);
         references.putIfAbsent(normalized, field);
     }
 

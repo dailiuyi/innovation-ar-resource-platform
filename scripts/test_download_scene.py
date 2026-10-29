@@ -283,6 +283,16 @@ class DownloadSceneTest(unittest.TestCase):
             self.run_tool()
         self.assertEqual((task / "keep.txt").read_text(), "mine")
 
+    def test_unowned_staging_directory_is_kept(self):
+        version_dir = self.out / SCENE / self.api.version
+        staging = version_dir / "standard.tmp"
+        staging.mkdir(parents=True)
+        (staging / "keep.txt").write_text("mine")
+        with self.assertRaisesRegex(SceneError, "not empty"):
+            self.run_tool()
+        self.assertEqual((staging / "keep.txt").read_text(), "mine")
+        self.assertFalse((version_dir / "standard").exists())
+
     def test_completed_file_that_vanished_is_downloaded_again(self):
         payload = self.run_tool()
         (payload / "common" / "settings.json").unlink()

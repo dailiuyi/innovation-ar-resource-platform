@@ -21,6 +21,11 @@ public interface ArtifactStorage {
     enum Phase { PARTIAL, STAGED, COMMITTED }
     record Entry(UUID id, Phase phase, long bytes, Instant modifiedAt) { }
 
+    /** Retained ready/committed bytes exist but do not match the registered descriptor. The input was not read. */
+    class UnverifiedLeftoverException extends IOException {
+        public UnverifiedLeftoverException(String message) { super(message); }
+    }
+
     /**
      * Receives, digests once, and atomically publishes the bytes under the per-file lock. A mismatch or
      * transport failure leaves no readable formal file. If complete bytes from an earlier attempt already
