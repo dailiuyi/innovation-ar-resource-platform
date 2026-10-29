@@ -40,6 +40,15 @@ ADMIN_USER = 'check_admin'
 SERVICES = ('postgres', 'redis', 'backend', 'gateway')
 NGINX_ANCHOR = '    location / {\n'
 REFERENCE_MOUNT = '/srv/reference'
+JFR_MOUNT = '/opt/jfr/file-io.jfc'
+JFR_OPTIONS = ('-XX:StartFlightRecording=settings=' + JFR_MOUNT + ',filename=/app/.local/logs/backend-%p-%t.jfr,'
+               'dumponexit=true,disk=true,maxsize=1g')
+JFR_JFC = """<?xml version="1.0" encoding="UTF-8"?>
+<configuration version="2.0" label="4dgs-file-io" description="File reads and writes only, no environment or property events">
+  <event name="jdk.FileRead"><setting name="enabled">true</setting><setting name="stackTrace">true</setting><setting name="threshold">0 ms</setting></event>
+  <event name="jdk.FileWrite"><setting name="enabled">true</setting><setting name="stackTrace">true</setting><setting name="threshold">0 ms</setting></event>
+</configuration>
+"""
 
 
 class Blocked(Exception):
@@ -76,6 +85,8 @@ class Instance:
         self.runtime = report_dir / 'runtime.json'
         self.nginx = report_dir / 'nginx.4dgs-check.conf'
         self.log = report_dir / 'prepare.log'
+        self.jfr_dir = report_dir / 'jfr'
+        self.jfc = self.jfr_dir / 'file-io.jfc'
 
     @property
     def compose(self):
@@ -167,11 +178,16 @@ def gateway_config(reference):
         return source
     if source.count(NGINX_ANCHOR) != 1:
         raise Blocked('deploy/nginx.conf no longer has the single catch-all location this overlay anchors on')
+    isolation = ("        add_header X-Content-Type-Options nosniff always;\n"
+                 "        add_header Cross-Origin-Opener-Policy same-origin always;\n"
+                 "        add_header Cross-Origin-Embedder-Policy require-corp always;\n"
+                 "        add_header Cross-Origin-Resource-Policy same-origin always;\n")
     locations = (
         '    # Reference viewer overlay for isolated acceptance only; never part of the production gateway.\n'
-        f'    location ~ ^/viewer/[0-9a-fA-F-]{{36}}$ {{ root {REFERENCE_MOUNT}; rewrite ^ /viewer/index.html break; }}\n'
-        f'    location ^~ /viewer/ {{ root {REFERENCE_MOUNT}; }}\n'
-        f'    location ^~ /viewer-static/ {{ root {REFERENCE_MOUNT}; }}\n\n')
+        '    # Cross-origin isolation headers are what the player\'s shared-memory WASM needs (same as the reference server).\n'
+        f'    location ~ "^/viewer/[0-9a-fA-F-]{{36}}$" {{\n        root {REFERENCE_MOUNT};\n        rewrite ^ /viewer/index.html break;\n{isolation}    }}\n'
+        f'    location /viewer/ {{\n        root {REFERENCE_MOUNT};\n{isolation}    }}\n'
+        f'    location ^~ /viewer-static/ {{\n        root {REFERENCE_MOUNT};\n{isolation}    }}\n\n')
     return source.replace(NGINX_ANCHOR, locations + NGINX_ANCHOR)
 
 
@@ -181,13 +197,22 @@ def bind(source, target):
 
 def write_override(instance, images, jar, dist, reference, token):
     write_private(instance.nginx, gateway_config(reference))
+    instance.jfr_dir.mkdir(exist_ok=True)
+    instance.jfc.write_text(JFR_JFC, encoding='utf-8')
+    instance.jfr_dir.chmod(0o755)
+    instance.jfc.chmod(0o644)
     gateway_volumes = [bind(dist, '/usr/share/nginx/html'), bind(instance.nginx, '/etc/nginx/conf.d/default.conf')]
     if reference:
         gateway_volumes.append(bind(reference, REFERENCE_MOUNT))
+    # Short file-I/O flight recording in the TEST backend only (JAVA_TOOL_OPTIONS), written to the backend_logs volume and
+    # dumped on a normal stop. The healthcheck JVM must not inherit it or it would start a recording every probe.
+    backend = {'image': images['backend'], 'labels': {LABEL: token}, 'volumes': [bind(jar, '/app/app.jar'), bind(instance.jfc, JFR_MOUNT)],
+               'environment': {'JAVA_TOOL_OPTIONS': JFR_OPTIONS}, 'stop_grace_period': '90s',
+               'healthcheck': {'test': ['CMD', 'env', '-u', 'JAVA_TOOL_OPTIONS', 'java', '-cp', '/opt/healthcheck', 'Healthcheck']}}
     override = {'services': {
         'postgres': {'labels': {LABEL: token}},
         'redis': {'labels': {LABEL: token}},
-        'backend': {'image': images['backend'], 'labels': {LABEL: token}, 'volumes': [bind(jar, '/app/app.jar')]},
+        'backend': backend,
         'gateway': {'image': images['gateway'], 'labels': {LABEL: token}, 'volumes': gateway_volumes}}}
     write_private(instance.override, json.dumps(override, indent=2) + '\n')
 
@@ -325,6 +350,8 @@ def prepare(args):
         'jar': str(jar), 'jarSha256': jar_sha256, 'frontendDist': {'path': str(dist), **handoff},
         'referenceViewer': str(reference) if reference else None, 'imageIds': images, 'postgres': version,
         'source': harness.source_identity(ROOT), 'runDirectory': str(instance.dir),
+        'jfr': {'jfc': str(instance.jfc), 'containerDirectory': '/app/.local/logs', 'filePattern': 'backend-<pid>-<timestamp>.jfr',
+                'events': ['jdk.FileRead', 'jdk.FileWrite']},
         'limits': {key: int(env[key]) for key in ('AR_STORAGE_MAX_BYTES', 'AR_STORAGE_VERSION_MAX_FILES', 'AR_STORAGE_VERSION_MAX_BYTES')},
         'stopCommand': [sys.executable, str(Path(__file__).resolve()), 'stop', '--report-dir', str(instance.dir)]}
     write_private(instance.runtime, json.dumps(runtime, ensure_ascii=False, indent=2) + '\n')

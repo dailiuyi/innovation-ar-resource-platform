@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="__PLATFORM_CSP__">
+<title>4DGS 平台联调入口</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 0; padding: 24px; background: #111; color: #eee; }
+  main { max-width: 560px; margin: 0 auto; }
+  label { display: block; margin: 16px 0 6px; }
+  select, button { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
+  button { margin-top: 20px; }
+  #status { margin-top: 16px; min-height: 1.4em; color: #fbb; }
+</style>
+</head>
+<body>
+<main>
+  <h1>4DGS 平台联调入口</h1>
+  <p>场景与档位均来自本平台已发布的成品；选择后整页跳转到播放器。</p>
+  <label for="scene">场景</label>
+  <select id="scene" disabled></select>
+  <label for="variant">档位</label>
+  <select id="variant" disabled></select>
+  <button id="open" type="button" disabled>打开播放器</button>
+  <div id="status" role="status"></div>
+</main>
+<script src="platform.js"></script>
+</body>
+</html>
