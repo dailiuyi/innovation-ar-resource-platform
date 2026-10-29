@@ -88,6 +88,13 @@
 
 已知收尾限制：结果未确认的文件后来全部入库时，先点“刷新状态”会使版本成为 READY，并隐藏“继续上传”；客户端历史异常清单仍保留。当前浏览器检查直接点击继续，没有覆盖这一步刷新。此 P2 问题未随三路并发改动修复，不把现有检查解释为该路径已通过。
 
+2026-10-29 日常发布（用户授权提交、合并、部署和推送）：代码提交 `69f8904` 已快进合并到 `main`。使用已验收的 Jar 与 dist 打包 runtime 镜像，只重建 backend/gateway，保留 PostgreSQL、Redis 和现有参考播放器挂载；未改变公网中继或执行新迁移。
+
+- 部署前 `pg_dump -Fc` 备份到 `.local/releases/parallel-upload-20261029/daily-before-parallel-upload.dump`（0600，`pg_restore --list` 可读取 129 项）；旧镜像保留 `before-parallel-upload-20261029` 标签。容器版本、备份摘要和逐项结果在同目录 `release.json`。
+- 部署后 backend/gateway 均 healthy，Jar SHA256 为 `03ccb4e3cbdf095eb4636aae7ecfdc8c4c4269b3d7c328ecfa3fa49ef58de6d9`，网关全部 320 个文件与已测试 dist 一致。库中场景 4、版本 3、文件 134、发布指针 3、审计 282、账号 3，与部署前相同，Flyway 仍为 017。
+- LAN `http://192.168.0.12:18081` 和公网 `https://4dgs.elma-gohan.xyz` 的 healthz、captchaImage、匿名目录/详情均返回 200，Range 返回 206 和 16 字节；下发的 `VersionPanel-CfGxw4dG.js` 与本地构建逐字节一致。
+- 真实 Chrome 访问后台会跳到登录页；当前没有可用的已登录浏览器，未在日常库执行登录上传，没有启用 bootstrap 或生成会话。隔离实例的上传证据不能替代日常账号点击验收。
+
 ## 配置与运行
 
 - `AR_STORAGE_ENABLED=true` 开启入库接口；关闭时路由不注册。`AR_STORAGE_ROOT` 指向私有目录或容器持久卷。
