@@ -13,17 +13,15 @@ ruoyi:
   # 验证码类型 math 数字计算 char 字符验证
   captchaType: math
 
-# Draft ingestion endpoints are registered when local storage is enabled.
+# Product version endpoints are registered when local storage is enabled.
 ar:
   storage:
     enabled: ${AR_STORAGE_ENABLED:false}
     root: ${AR_STORAGE_ROOT:./.local/artifacts}
     # Zero is deliberately invalid when enabled. Choose a test limit explicitly.
     max-bytes: ${AR_STORAGE_MAX_BYTES:0}
-    collection-max-files: ${AR_STORAGE_COLLECTION_MAX_FILES:200}
-    collection-max-bytes: ${AR_STORAGE_COLLECTION_MAX_BYTES:524288000}
-    zip-ttl-hours: ${AR_STORAGE_ZIP_TTL_HOURS:24}
-    zip-cache-max-bytes: ${AR_STORAGE_ZIP_CACHE_MAX_BYTES:2147483648}
+    version-max-files: ${AR_STORAGE_VERSION_MAX_FILES:1000}
+    version-max-bytes: ${AR_STORAGE_VERSION_MAX_BYTES:4294967296}
 
 # 开发环境配置
 server:

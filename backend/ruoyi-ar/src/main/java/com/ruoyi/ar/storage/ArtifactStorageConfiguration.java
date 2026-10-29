@@ -15,9 +15,4 @@ public class ArtifactStorageConfiguration {
             @Value("${ar.storage.max-bytes}") long maxBytes) throws IOException {
         return new LocalArtifactStorage(Path.of(root), maxBytes);
     }
-
-    @Bean
-    public LocalZipExportStore localZipExportStore(@Value("${ar.storage.root}") String root) throws IOException {
-        return new LocalZipExportStore(Path.of(root));
-    }
 }
