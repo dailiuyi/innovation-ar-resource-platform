@@ -1,4 +1,4 @@
-"""Authoring source for the 4DGS Scene Resource API (administrator side) and resource.json v1."""
+"""Authoring source for the 4DGS Scene Resource API (administrator and anonymous client sides) and resource.json v1."""
 from pathlib import Path
 import copy
 import json
@@ -129,12 +129,27 @@ schemas['VersionFile'] = obj({
 schemas['VersionDetail'] = obj(dict(version_summary, descriptor=ref('ResourceDescriptor'),
                                     files=array(ref('VersionFile'))))
 
+schemas['ClientVariant'] = obj({'id': string(pattern='^[a-z][a-z0-9_-]{0,63}$'), 'name': string(minLength=1),
+                                'segmentCount': integer(minimum=1), 'durationSeconds': {'type': 'number', 'minimum': 0}})
+schemas['ClientSceneItem'] = obj({'id': uuid, 'name': string(minLength=1), 'versionId': uuid, 'versionNo': integer(minimum=1),
+                                  'defaultVariant': string(), 'variants': array(ref('ClientVariant'), minItems=1),
+                                  'posterUrl': string()},
+                                 ['id', 'name', 'versionId', 'versionNo', 'defaultVariant', 'variants'])
+schemas['ClientSceneList'] = obj({'items': array(ref('ClientSceneItem')), 'total': integer(minimum=0)})
+schemas['ClientFile'] = obj({'fileId': uuid, 'relativePath': string(minLength=1, maxLength=1024),
+                             'bytes': integer(format='int64', minimum=1), 'sha256': sha, 'contentType': string(),
+                             'downloadPath': string()})
+schemas['ClientSceneDetail'] = obj({'sceneId': uuid, 'name': string(minLength=1), 'versionId': uuid,
+                                    'versionNo': integer(minimum=1), 'descriptor': ref('ResourceDescriptor'),
+                                    'files': array(ref('ClientFile'), minItems=1), 'fileCount': integer(minimum=1),
+                                    'totalBytes': int64})
+
 paths = {}
 
 def add(path, method, operation, summary, request=None, response=None, status='200', public=False, description='',
         query=None, tag='场景版本'):
     params = [{'name': n, 'in': 'path', 'required': True,
-               'schema': integer(format='int64') if n == 'operId' else string() if n in ('code', 'dictType') else uuid}
+               'schema': integer(format='int64') if n == 'operId' else string() if n in ('code', 'dictType', 'fileName') else uuid}
               for n in re.findall(r'\{([^}]+)\}', path)]
     params.extend(query or [])
     responses = {status: {'description': 'Success'}}
@@ -217,6 +232,33 @@ for operation in (download, head):
     operation['responses']['416'] = {'description': 'Range 越界；Content-Range 为 bytes */size'}
 paths['/api/v1/scene-versions/{versionId}/files/{fileId}/content']['head'] = head
 
+client_note = '匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则 404。'
+add('/api/v1/client/scenes', 'get', 'listClientScenes', '匿名列出已发布场景', response='ClientSceneList', public=True,
+    query=paging + [query('name', string(maxLength=200), False)], tag='客户端',
+    description=client_note + '每项含默认档位、各档位段数与总时长和封面地址；只读数据库与描述，不打开任何模型文件。空目录返回 200 与空数组。')
+add('/api/v1/client/scenes/{sceneId}', 'get', 'getClientScene', '匿名读取已发布场景的描述与完整文件清单', response='ClientSceneDetail',
+    public=True, tag='客户端',
+    description=client_note + 'descriptor 是已验证的单场景描述；files 是该版本去重后的完整文件集合，客户端按选定档位与公共 settings/poster/audio/preview 自行过滤。'
+                '不返回 storageKey 或磁盘路径。不读取文件内容。')
+client_content = '/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}'
+client_download = add(client_content, 'get', 'downloadClientFile', '匿名读取已发布版本的单个文件', public=True, tag='客户端',
+    query=[header('Range', '单个 bytes Range，含 bytes=a-b、bytes=a- 与后缀 bytes=-n；无效或多段 Range 忽略并返回完整文件'),
+           header('If-Range', '强 ETag，不匹配返回完整文件')],
+    description=client_note + 'fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符 404。'
+                '版本须仍是当前发布版本，否则 409（已开始的字节流可完成，下一请求 409）；文件记录存在但存储缺失或长度不符 409。'
+                '下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带 attachment 文件名，Cache-Control 为 no-store, no-transform。'
+                'Content-Type 按声明角色和扩展名：模型 application/octet-stream，settings application/json，jpg/png/webp、wav、webm 对应 MIME，未知为 application/octet-stream。')
+client_head = copy.deepcopy(client_download)
+client_head.update(operationId='headClientFile', summary='匿名查询单个文件下载头')
+client_binary = {mime: {'schema': {'type': 'string', 'format': 'binary'}}
+                 for mime in ('application/octet-stream', 'application/json', 'image/jpeg', 'image/png', 'image/webp',
+                              'audio/wav', 'video/webm')}
+for operation in (client_download, client_head):
+    operation['responses']['200'] = {'description': '完整文件；HEAD 无正文但带完整 Content-Length', 'content': client_binary}
+    operation['responses']['206'] = {'description': '单段 Range', 'content': client_binary}
+    operation['responses']['416'] = {'description': 'Range 合法但越界；Content-Range 为 bytes */size'}
+paths[client_content]['head'] = client_head
+
 for path, method, operation, summary, request in [
     ('/login', 'post', 'login', '登录；成功返回 token', 'Login'),
     ('/logout', 'post', 'logout', '退出登录', None),
@@ -243,8 +285,8 @@ for path, method, operation, summary, request in [
         op['parameters'] += [query('pageNum', integer(minimum=1, default=1), False), query('pageSize', integer(minimum=1, default=20), False)]
 
 spec = {'openapi': '3.0.3', 'info': {'title': '4DGS Scene Resource API', 'version': '0.4.0',
-         'description': '管理员侧 4DGS 场景成品管理：场景、带 resource.json 描述的内容版本、按文件上传与恢复、单一发布指针、整版删除，'
-                        '以及保留的若依登录与账号接口。匿名客户端读取接口尚未实现，不在本契约内。'},
+         'description': '4DGS 场景成品：管理员侧的场景、带 resource.json 描述的内容版本、按文件上传与恢复、单一发布指针、整版删除，'
+                        '以及保留的若依登录与账号接口；匿名客户端只读目录、场景描述与带 Range 的文件流（/api/v1/client/，经同源网关直接访问，无需 /prod-api）。'},
         'servers': [{'url': '/', 'description': '同源网关；管理接口经 /prod-api 前缀代理到后端'}], 'paths': paths,
         'components': {'securitySchemes': {'bearerAuth': {'type': 'http', 'scheme': 'bearer', 'bearerFormat': 'JWT'}}, 'schemas': schemas}}
 

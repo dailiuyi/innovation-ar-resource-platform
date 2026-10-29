@@ -1,6 +1,6 @@
 # 资源入库闭环
 
-一个场景对应一个独立的 4DGS 重建成品。管理员私有入库流程：选择场景 → 导入带 `resource.json` 的资源目录创建内容版本 → 逐文件上传并校验 → 正式存储确认 → 发布为场景当前版本 → 需要时整版删除。文件“可用”仅表示已可靠入库；匿名客户端读取和完整下载工具另见任务记录，当前契约只描述管理员侧。
+一个场景对应一个独立的 4DGS 重建成品。管理员私有入库流程：选择场景 → 导入带 `resource.json` 的资源目录创建内容版本 → 逐文件上传并校验 → 正式存储确认 → 发布为场景当前版本 → 需要时整版删除。文件“可用”仅表示已可靠入库；匿名客户端只读取当前发布版本（见下文“匿名客户端读取与完整下载”）。
 
 ## 数据与状态
 
@@ -64,6 +64,23 @@
 3. 替换发布后旧版本可查看或整版删除；当前发布版本禁止删除，不保留历史分发快照。场景停用或逻辑删除后不递归删除模型。
 4. 整版删除先持久化删除意图和 `VERSION_DELETE_REQUEST` 审计，再逐 UUID 删除存储内容；全部成功才在事务内删除文件行、版本行、完成回执并写 `VERSION_DELETE` 审计。IO 失败返回 503，版本保留并显示 `DELETE_FAILED`，再次 DELETE 重试；完成后重复 DELETE 为 204。文件处理中 409。
 
+## 匿名客户端读取与完整下载
+
+内部 Demo 客户端不登录，只读当前已发布版本。`ClientSceneController`/`ClientSceneService` 仅在 `ar.storage.enabled=true` 时注册，没有类级角色；`SecurityConfig` 对下面三个路由的 GET 和文件 HEAD 逐条放行，其余 `/api/v1/client/**` 路径及任何写方法仍要求登录或被拒绝（匿名得 401/403），不存在 `/access` 之类返回成功的占位接口。客户端路径直接访问网关，不带 `/prod-api` 前缀。
+
+| 方法与路径 | 用途 |
+|---|---|
+| GET `/api/v1/client/scenes?name=&limit=20&offset=0` | `{items,total}`；每项 `id,name,versionId,versionNo,defaultVariant,variants[{id,name,segmentCount,durationSeconds}],posterUrl?`。只含启用、未删除且有完整当前发布版本的场景；limit 1–100；空目录返回 200 与空数组 |
+| GET `/api/v1/client/scenes/{sceneId}` | `{sceneId,name,versionId,versionNo,descriptor,files[{fileId,relativePath,bytes,sha256,contentType,downloadPath}],fileCount,totalBytes}`；`files` 是该版本去重后的完整集合，客户端按选定档位和公共 `settings/poster/audio/preview` 过滤。无发布、停用、删除均 404；不返回 `storageKey` 或磁盘路径 |
+| GET / HEAD `/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}` | 文件字节，支持强 ETag、单段 Range（`a-b`、`a-`、后缀 `-n`）、If-Range |
+
+- 目录和详情只读数据库与已保存的描述，不打开模型文件，不计算摘要。`fileName` 是实际 basename 的 URI 编码，只用于保留 `.ply/.4dv/.json/.wav` 后缀（播放器按 URL 后缀选加载器）并与记录比对，不参与磁盘路径；不符 404。含 `%` 或 `;` 的文件名无法进入 URL，创建版本时直接返回 400。
+- 判定顺序：场景可见、版本归属、文件 `AVAILABLE` 且无删除意图；`versionId` 不再等于当前发布指针返回 **409**，客户端须重新获取描述，不能混用新旧版本；错误归属或不存在 404；记录存在但存储缺失或长度不符 409。下载前不重算 SHA256，强 ETag 为登记摘要。已开始的旧版本字节流允许完成，其后的旧版本请求 409。
+- 响应读锁持有到流结束，整版删除取写锁，不会截断正在读取的文件。`Content-Type` 按声明角色与扩展名：模型 `application/octet-stream`、settings `application/json`、jpg/png/webp、wav、webm 对应 MIME，未知为 `application/octet-stream`，不嗅探内容。客户端响应不带 `attachment` 文件名，`Cache-Control: no-store, no-transform`；管理员下载保留 `attachment`。
+- Range：合法但越界返回 416 与 `Content-Range: bytes */size`（超大数字不抛 500）；无效、`end<start` 或多段 Range 忽略并返回完整 200；If-Range 不匹配返回完整 200；HEAD 不发送正文，长度为完整长度。永久回归为 `HttpRangeTest`。
+
+完整下载参考工具 `scripts/download_scene.py --base-url URL --scene-id UUID --variant ID --output DIR`（Python 标准库，匿名）只下载选定档位的分段加公共文件，目录为 `<DIR>/<sceneId>/<versionId>/<variantId>/`：`payload/` 是描述路径的根，`.download-state.json` 在写任何字节之前原子建立并记录固定清单与已完成集合，`.transfer/` 存放 `.part`、验证器和锁，`ready.json` 在全部文件校验后才原子写入。同命令可在被杀或断网后继续：已完成且长度匹配的文件不再请求、不重哈希；其余沿用 `artifact_transfer.download` 的 Range + If-Range，206 校验起点后追加，200 截断重写，摘要不符删除该 `.part`、不就绪、下次只重下该文件。锁为操作系统文件锁（`fcntl`/`msvcrt`），残留的空锁文件不会阻塞。409 表示发布版本已变化：工具停止（退出码 3）、不自动重试、保留旧目录，重新运行才会把新描述取到新的版本目录。没有该档位退出码 2，不自动换档。它是联调参考，不是 Android/iOS 下载 SDK。
+
 ## 后台
 
 入口：场景列表每行的 **版本与文件**，地址栏参数为 `sceneId`、`versionId`。面板顶部固定当前发布卡片，下方是版本列表和所选版本详情；唯一新增动作是“导入资源目录”：读取根 `resource.json` → 展示档位、段数和文件总量 → 每个引用文件用 `hash.worker.js` 按 2 MiB 块计算一次 SHA256 → 创建版本 → 顺序上传缺失文件。已存在版本可重新选择同一目录“继续上传”，已入库文件不重传。
@@ -73,16 +90,17 @@
 - `AR_STORAGE_ENABLED=true` 开启入库接口；关闭时路由不注册。`AR_STORAGE_ROOT` 指向私有目录或容器持久卷。
 - `AR_STORAGE_MAX_BYTES`：单文件上限，必填正整数，后端登记和实际流式写入共同检查。本机 `scripts/local_demo.py` 默认 256 MiB；真实样包验收设 1073741824。
 - `AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）：单版本文件数与总字节上限，Compose 与 `config/compose.env.example` 提供。旧 `AR_STORAGE_COLLECTION_*`、ZIP 缓存配置已删除。
-- Nginx 对 `/prod-api/api/v1/scene-versions/{versionId}/files/{fileId}/content` 关闭请求/响应缓冲和网关字节限制，超时 300s；其余业务接口保持 20m 限制。不开放匿名文件目录，下载必须携带登录身份，令牌不放进 URL。
+- Nginx 对 `/prod-api/api/v1/scene-versions/{versionId}/files/{fileId}/content` 关闭请求/响应缓冲和网关字节限制，超时 300s；其余业务接口保持 20m 限制。管理员下载必须携带登录身份，令牌不放进 URL。`/api/v1/client/` 以同源、路径不改写、关闭响应缓冲、超时 300s 代理到后端；不开放任何磁盘目录，不增加 CORS 配置。
 
 ## 验收
 
 - 契约与链接：`python scripts/generate_contracts.py` 后 `python scripts/harness.py check --profile quick`。
 - 隔离实例：`scripts/prepare_4dgs_check.py prepare` 启动固定 `innovation-ar-resource-platform-infra-check` 项目的 `127.0.0.1:18082`，再以 `scripts/verify_ingestion.py --base-url ... --admin-base-url ... --credentials-file ...` 运行 HTTP（可选浏览器）检查；用法和限制见 [Harness](13-harness.md)。Windows 原生运行时（`review.py`、harness ingestion）继续提供数据库和私有存储故障注入。
+- 阶段 4 隔离实例门禁：`.local/stage4_gate.py`（匿名读写边界、Range、`download_scene.py` 的中断/续传/409 行，不入库）；`scripts/test_download_scene.py`、`scripts/test_artifact_transfer.py` 是无需服务的永久回归，`HttpRangeTest`、`ClientSceneServiceTest` 在 `ruoyi-ar` 中。
 - 合成模型字节不是可渲染 4DGS 内容，只验证管理与传输契约；浏览器播放、Android/iOS 真机、手机网络和音画主观效果不在这些检查内。
 
 阶段与证据见 [任务记录](tasks/active/2026-10-29-4dgs-resource-refactor.md)。[保留证据索引](evidence/README.md)中的旧入库 JSON 是历史快照，不代表当前代码。
 
 ## 明确未实现
 
-匿名客户端目录/详情/文件读取、客户端完整下载工具、场景预览、单独下线、对象存储、CDN、共享依赖与 catalog 解析。客户端加载规则以真实播放验收后的结论为准。空目录不保留。
+场景预览、单独下线、对象存储、CDN、共享依赖与 catalog 解析；Android/iOS 下载 SDK（`scripts/download_scene.py` 只是联调参考）；4DV 参考播放器接入与真实样包验收（阶段 5）。客户端加载规则以真实播放验收后的结论为准。空目录不保留。

@@ -2,7 +2,8 @@ openapi: 3.0.3
 info:
   title: 4DGS Scene Resource API
   version: 0.4.0
-  description: 管理员侧 4DGS 场景成品管理：场景、带 resource.json 描述的内容版本、按文件上传与恢复、单一发布指针、整版删除，以及保留的若依登录与账号接口。匿名客户端读取接口尚未实现，不在本契约内。
+  description: 4DGS 场景成品：管理员侧的场景、带 resource.json 描述的内容版本、按文件上传与恢复、单一发布指针、整版删除，以及保留的若依登录与账号接口；匿名客户端只读目录、场景描述与带
+    Range 的文件流（/api/v1/client/，经同源网关直接访问，无需 /prod-api）。
 servers:
 - url: /
   description: 同源网关；管理接口经 /prod-api 前缀代理到后端
@@ -1393,6 +1394,384 @@ paths:
       x-implementation: implemented
       tags:
       - 场景版本
+  /api/v1/client/scenes:
+    get:
+      operationId: listClientScenes
+      summary: 匿名列出已发布场景
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
+        404。每项含默认档位、各档位段数与总时长和封面地址；只读数据库与描述，不打开任何模型文件。空目录返回 200 与空数组。
+      security: []
+      parameters:
+      - *id002
+      - *id003
+      - name: name
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 200
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientSceneList'
+        '400':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-implementation: implemented
+      tags:
+      - 客户端
+  /api/v1/client/scenes/{sceneId}:
+    get:
+      operationId: getClientScene
+      summary: 匿名读取已发布场景的描述与完整文件清单
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
+        404。descriptor 是已验证的单场景描述；files 是该版本去重后的完整文件集合，客户端按选定档位与公共 settings/poster/audio/preview
+        自行过滤。不返回 storageKey 或磁盘路径。不读取文件内容。
+      security: []
+      parameters:
+      - name: sceneId
+        in: path
+        required: true
+        schema: *id001
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientSceneDetail'
+        '400':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-implementation: implemented
+      tags:
+      - 客户端
+  /api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}:
+    get:
+      operationId: downloadClientFile
+      summary: 匿名读取已发布版本的单个文件
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
+        404。fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符 404。版本须仍是当前发布版本，否则
+        409（已开始的字节流可完成，下一请求 409）；文件记录存在但存储缺失或长度不符 409。下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带
+        attachment 文件名，Cache-Control 为 no-store, no-transform。Content-Type 按声明角色和扩展名：模型
+        application/octet-stream，settings application/json，jpg/png/webp、wav、webm 对应
+        MIME，未知为 application/octet-stream。
+      security: []
+      parameters:
+      - name: sceneId
+        in: path
+        required: true
+        schema: *id001
+      - name: versionId
+        in: path
+        required: true
+        schema: *id001
+      - name: fileId
+        in: path
+        required: true
+        schema: *id001
+      - name: fileName
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 单个 bytes Range，含 bytes=a-b、bytes=a- 与后缀 bytes=-n；无效或多段 Range
+          忽略并返回完整文件
+      - name: If-Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 强 ETag，不匹配返回完整文件
+      responses:
+        '200':
+          description: 完整文件；HEAD 无正文但带完整 Content-Length
+          content: &id006
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            video/webm:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '206':
+          description: 单段 Range
+          content: *id006
+        '416':
+          description: Range 合法但越界；Content-Range 为 bytes */size
+      x-implementation: implemented
+      tags:
+      - 客户端
+    head:
+      operationId: headClientFile
+      summary: 匿名查询单个文件下载头
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
+        404。fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符 404。版本须仍是当前发布版本，否则
+        409（已开始的字节流可完成，下一请求 409）；文件记录存在但存储缺失或长度不符 409。下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带
+        attachment 文件名，Cache-Control 为 no-store, no-transform。Content-Type 按声明角色和扩展名：模型
+        application/octet-stream，settings application/json，jpg/png/webp、wav、webm 对应
+        MIME，未知为 application/octet-stream。
+      security: []
+      parameters:
+      - name: sceneId
+        in: path
+        required: true
+        schema: &id007
+          type: string
+          format: uuid
+      - name: versionId
+        in: path
+        required: true
+        schema: *id007
+      - name: fileId
+        in: path
+        required: true
+        schema: *id007
+      - name: fileName
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 单个 bytes Range，含 bytes=a-b、bytes=a- 与后缀 bytes=-n；无效或多段 Range
+          忽略并返回完整文件
+      - name: If-Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 强 ETag，不匹配返回完整文件
+      responses:
+        '200':
+          description: 完整文件；HEAD 无正文但带完整 Content-Length
+          content: *id006
+        '400':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Request failed; 409 covers state/version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '206':
+          description: 单段 Range
+          content: *id006
+        '416':
+          description: Range 合法但越界；Content-Range 为 bytes */size
+      x-implementation: implemented
+      tags:
+      - 客户端
   /login:
     post:
       operationId: login
@@ -2662,7 +3041,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        name: &id006
+        name: &id008
           type: string
           minLength: 1
           maxLength: 200
@@ -2703,7 +3082,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        name: *id006
+        name: *id008
         expectedVersion:
           type: integer
           minimum: 0
@@ -2714,17 +3093,17 @@ components:
       type: object
       additionalProperties: false
       properties:
-        name: *id006
+        name: *id008
         id: *id001
         enabled:
           type: boolean
         lockVersion:
           type: integer
           minimum: 0
-        createdAt: &id007
+        createdAt: &id009
           type: string
           format: date-time
-        updatedAt: *id007
+        updatedAt: *id009
       required:
       - id
       - name
@@ -2891,7 +3270,7 @@ components:
           type: integer
           format: int64
           minimum: 1
-        sha256: &id008
+        sha256: &id010
           type: string
           pattern: ^[0-9a-f]{64}$
       required:
@@ -2947,18 +3326,18 @@ components:
       properties:
         id: *id001
         sceneId: *id001
-        versionNo: &id009
+        versionNo: &id011
           type: integer
           minimum: 1
-        description: &id010
+        description: &id012
           type: string
           maxLength: 2000
-        lockVersion: &id011
+        lockVersion: &id013
           type: integer
           minimum: 0
-        published: &id012
+        published: &id014
           type: boolean
-        uploadStatus: &id013
+        uploadStatus: &id015
           type: string
           enum:
           - DELETING
@@ -2967,26 +3346,26 @@ components:
           - FAILED
           - READY
           - PENDING
-        fileCount: &id014
+        fileCount: &id016
           type: integer
           minimum: 0
-        availableCount: &id015
+        availableCount: &id017
           type: integer
           minimum: 0
-        failedCount: &id016
+        failedCount: &id018
           type: integer
           minimum: 0
-        totalBytes: &id017
+        totalBytes: &id019
           type: integer
           format: int64
           minimum: 0
-        creatorId: &id018
+        creatorId: &id020
           type: integer
           format: int64
-        creatorName: &id019
+        creatorName: &id021
           type: string
-        createdAt: *id007
-        updatedAt: *id007
+        createdAt: *id009
+        updatedAt: *id009
       required:
       - id
       - sceneId
@@ -3014,7 +3393,7 @@ components:
         description:
           type: string
           maxLength: 2000
-        publishedAt: *id007
+        publishedAt: *id009
         publishedByName:
           type: string
       required:
@@ -3056,7 +3435,7 @@ components:
           type: integer
           format: int64
           minimum: 1
-        sha256: *id008
+        sha256: *id010
         status:
           type: string
           enum:
@@ -3084,19 +3463,19 @@ components:
       properties:
         id: *id001
         sceneId: *id001
-        versionNo: *id009
-        description: *id010
-        lockVersion: *id011
-        published: *id012
-        uploadStatus: *id013
-        fileCount: *id014
-        availableCount: *id015
-        failedCount: *id016
-        totalBytes: *id017
-        creatorId: *id018
-        creatorName: *id019
-        createdAt: *id007
-        updatedAt: *id007
+        versionNo: *id011
+        description: *id012
+        lockVersion: *id013
+        published: *id014
+        uploadStatus: *id015
+        fileCount: *id016
+        availableCount: *id017
+        failedCount: *id018
+        totalBytes: *id019
+        creatorId: *id020
+        creatorName: *id021
+        createdAt: *id009
+        updatedAt: *id009
         descriptor:
           $ref: '#/components/schemas/ResourceDescriptor'
         files:
@@ -3121,3 +3500,123 @@ components:
       - updatedAt
       - descriptor
       - files
+    ClientVariant:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]{0,63}$
+        name:
+          type: string
+          minLength: 1
+        segmentCount:
+          type: integer
+          minimum: 1
+        durationSeconds:
+          type: number
+          minimum: 0
+      required:
+      - id
+      - name
+      - segmentCount
+      - durationSeconds
+    ClientSceneItem:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id001
+        name:
+          type: string
+          minLength: 1
+        versionId: *id001
+        versionNo:
+          type: integer
+          minimum: 1
+        defaultVariant:
+          type: string
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientVariant'
+          minItems: 1
+        posterUrl:
+          type: string
+      required:
+      - id
+      - name
+      - versionId
+      - versionNo
+      - defaultVariant
+      - variants
+    ClientSceneList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientSceneItem'
+        total:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
+    ClientFile:
+      type: object
+      additionalProperties: false
+      properties:
+        fileId: *id001
+        relativePath:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        bytes:
+          type: integer
+          format: int64
+          minimum: 1
+        sha256: *id010
+        contentType:
+          type: string
+        downloadPath:
+          type: string
+      required:
+      - fileId
+      - relativePath
+      - bytes
+      - sha256
+      - contentType
+      - downloadPath
+    ClientSceneDetail:
+      type: object
+      additionalProperties: false
+      properties:
+        sceneId: *id001
+        name:
+          type: string
+          minLength: 1
+        versionId: *id001
+        versionNo:
+          type: integer
+          minimum: 1
+        descriptor:
+          $ref: '#/components/schemas/ResourceDescriptor'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientFile'
+          minItems: 1
+        fileCount:
+          type: integer
+          minimum: 1
+        totalBytes: *id019
+      required:
+      - sceneId
+      - name
+      - versionId
+      - versionNo
+      - descriptor
+      - files
+      - fileCount
+      - totalBytes

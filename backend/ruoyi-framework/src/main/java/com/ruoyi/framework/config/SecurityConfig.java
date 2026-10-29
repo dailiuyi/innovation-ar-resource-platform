@@ -122,6 +122,10 @@ public class SecurityConfig
                     .requestMatchers(HttpMethod.POST, "/api/v1/scenes/{id}/versions", "/api/v1/scene-versions/{versionId}/publish").authenticated()
                     .requestMatchers(HttpMethod.PUT, "/api/v1/scene-versions/{versionId}", "/api/v1/scene-versions/{versionId}/files/{fileId}/content").authenticated()
                     .requestMatchers(HttpMethod.DELETE, "/api/v1/scene-versions/{versionId}").authenticated()
+                    // Anonymous demo client: exactly these read routes, nothing else under /api/v1/client.
+                    .requestMatchers(HttpMethod.GET, "/api/v1/client/scenes", "/api/v1/client/scenes/{sceneId}",
+                        "/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}").permitAll()
+                    .requestMatchers(HttpMethod.HEAD, "/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}").permitAll()
                     .anyRequest().denyAll();
             })
             // 添加Logout filter

@@ -167,6 +167,11 @@ public class SceneVersionService implements InitializingBean {
         List<String> paths;
         try { paths=RelativePath.normalizeAll(files.stream().map(SceneVersionController.FileInput::relativePath).toList()); }
         catch(IllegalArgumentException e) { throw error(HttpStatus.BAD_REQUEST,"files "+e.getMessage()); }
+        for(String path:paths) {
+            String name=RelativePath.fileName(path);
+            if(name.indexOf('%')>=0 || name.indexOf(';')>=0)
+                throw error(HttpStatus.BAD_REQUEST,"files 文件名不能包含 % 或 ;，客户端下载地址无法承载："+path);
+        }
         String descriptorText=writeJson(input.descriptor());
         ResourceDescriptorValidator.validate(SceneResourceDescriptor.parse(descriptorText),paths);
         var specs=new ArrayList<FileSpec>(files.size());
@@ -401,6 +406,35 @@ public class SceneVersionService implements InitializingBean {
             if(!"AVAILABLE".equals(file.get("status"))) throw error(HttpStatus.CONFLICT,"文件尚未上传完成");
             stream(file,"application/octet-stream",(String)file.get("relativePath"),request,response);
         } finally { versionLock(versionId).readLock().unlock(); }
+    }
+
+    /**
+     * Anonymous read of one file of the CURRENT published version. The URL names the version it was issued for:
+     * once the scene points elsewhere the answer is 409, so an in-flight download never mixes versions. The
+     * existence check runs before the lock so arbitrary ids never allocate one; it is repeated under the read
+     * lock, which stays held until the stream closes. The file name is only compared, never used as a path.
+     */
+    public void clientDownload(UUID sceneId,UUID versionId,UUID fileId,String fileName,HttpServletRequest request,HttpServletResponse response) throws IOException {
+        clientVersion(sceneId,versionId);
+        lockRead(versionId);
+        try {
+            String descriptorText=clientVersion(sceneId,versionId);
+            var file=file(versionId,fileId);
+            String path=(String)file.get("relativePath");
+            if(!RelativePath.fileName(path).equals(fileName)) throw error(HttpStatus.NOT_FOUND,"场景、版本或文件不存在");
+            requireNotDeleting(versionId);
+            if(!"AVAILABLE".equals(file.get("status"))) throw error(HttpStatus.CONFLICT,"文件尚未就绪");
+            String contentType=new ClientSceneService.ContentTypes(SceneResourceDescriptor.parse(descriptorText)).of(path);
+            stream(file,contentType,null,request,response);
+        } finally { versionLock(versionId).readLock().unlock(); }
+    }
+    /** The version's descriptor text if the scene is visible and still points at it; 404 if unknown, 409 if superseded. */
+    private String clientVersion(UUID sceneId,UUID versionId) {
+        var rows=db.queryForList("select s.published_version_id, v.descriptor::text as descriptor from ar_scene s join ar_scene_version v on v.scene_id=s.id"
+            +" where s.id=? and v.id=? and s.enabled and s.deleted_at is null and s.published_version_id is not null",sceneId,versionId);
+        if(rows.isEmpty()) throw error(HttpStatus.NOT_FOUND,"场景、版本或文件不存在");
+        if(!versionId.equals(rows.get(0).get("published_version_id"))) throw error(HttpStatus.CONFLICT,"该版本已不是当前发布版本，请重新获取场景描述");
+        return (String)rows.get(0).get("descriptor");
     }
     /** Length check only, then the stored digest as strong ETag; caller holds the version read lock. */
     private void stream(Map<String,Object> file,String contentType,String attachmentName,HttpServletRequest request,HttpServletResponse response) throws IOException {

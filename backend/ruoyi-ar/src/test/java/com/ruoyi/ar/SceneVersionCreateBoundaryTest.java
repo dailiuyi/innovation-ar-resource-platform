@@ -69,6 +69,15 @@ class SceneVersionCreateBoundaryTest {
         }
     }
 
+    @Test void fileNamesTheClientUrlCannotCarryAreRejectedWith400() throws Exception {
+        var service = service(100, 10, 1000);
+        for (String name : List.of("100%.json", "a;b.json")) {
+            var e = rejected(service, input(DESCRIPTOR, file("common/" + name, 1), file("standard/00.c.ply", 1)));
+            assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(), name);
+            assertTrue(e.getReason().contains(name), e.getReason());
+        }
+    }
+
     @Test void descriptorMustReferenceExactlyTheRegisteredFiles() throws Exception {
         var service = service(100, 10, 1000);
         var missing = rejected(service, input(DESCRIPTOR, file("common/settings.json", 1)));

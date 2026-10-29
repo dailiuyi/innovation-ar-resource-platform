@@ -53,16 +53,27 @@ def main():
         changed=copy.deepcopy(descriptor);mutate(changed)
         check('reject descriptor '+name,bool(list(descriptor_validator.iter_errors(changed))))
     operations=[]
-    legacy=re.compile(r'/drafts|draft|zip|marker|asset|/client/|/preview|/ready|/revoke|day|night',re.I)
+    legacy=re.compile(r'/drafts|draft|zip|marker|asset|/preview|/ready|/revoke|day|night',re.I)
     for path,methods in spec['paths'].items():
         for method,operation in methods.items():
             operations.append(operation['operationId'])
             check('no legacy or unimplemented route '+operation['operationId'], not legacy.search(path))
             check('implemented only '+operation['operationId'], operation['x-implementation']=='implemented' and operation['tags'])
             check('no legacy CSRF '+operation['operationId'], 'X-CSRF-TOKEN' not in {p['name'] for p in operation['parameters']})
-            if operation['operationId'] not in ('login','captchaConfig'):
+            if operation['operationId'] not in ('login','captchaConfig') and not path.startswith('/api/v1/client/'):
                 check('admin Bearer '+operation['operationId'], operation['security']==[{'bearerAuth':[]}])
     check('operation IDs unique',len(operations)==len(set(operations)))
+    client_content='/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}'
+    client_paths={'/api/v1/client/scenes':{'get'},'/api/v1/client/scenes/{sceneId}':{'get'},client_content:{'get','head'}}
+    check('client routes are exactly the three anonymous reads (file also HEAD)',
+          {p:set(m) for p,m in spec['paths'].items() if p.startswith('/api/v1/client/')}==client_paths)
+    for path,methods in client_paths.items():
+        for method in methods:
+            check('anonymous client operation has no security '+method+' '+path,spec['paths'][path][method]['security']==[])
+    check('client file documents 200, 206, 416 and 409',
+          all({'200','206','416','409'}<=set(spec['paths'][client_content][m]['responses']) for m in ('get','head')))
+    check('client file fileName is a string path parameter',
+          {'name':'fileName','in':'path','required':True,'schema':{'type':'string'}} in spec['paths'][client_content]['get']['parameters'])
     version_paths={'/api/v1/scene-versions/config':{'get'},'/api/v1/scenes/{sceneId}/versions':{'get','post'},
         '/api/v1/scene-versions/{versionId}':{'get','put','delete'},'/api/v1/scene-versions/{versionId}/publish':{'post'},
         '/api/v1/scene-versions/{versionId}/files/{fileId}':{'get'},
