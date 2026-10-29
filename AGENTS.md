@@ -26,16 +26,16 @@ One Spring Boot service, intranet local ArtifactStorage, manual content producti
 
 Version deletion is whole-version and physical: remove every stored payload and the rows, retain audit and a minimal idempotency receipt, and recover unfinished deletions at startup. Preserve the separation of scenes, content versions and deliverable files.
 
-Administrator publication is one published version pointer per scene: the version's descriptor and files are fixed, its description stays editable, and the previous version stays viewable and deletable after a replacement. Anonymous client reads, the complete-download tool and playback acceptance are later stages. Day/night variants, coordinates, scene addresses and catalog parsing are not part of the current model. Do not introduce task queues, Worker services, tenant isolation or approval roles without a new requirement.
+Administrator publication is one published version pointer per scene: the version's descriptor and files are fixed, its description stays editable, and the previous version stays viewable and deletable after a replacement. Anonymous client reads (catalogue, detail, Range file streams), the per-variant complete-download reference tool `scripts/download_scene.py`, and desktop-Chrome playback of the reference player are implemented and verified on the isolated instance (see [sample validation](docs/20-4dgs-sample-validation.md)). Phone/native playback, Unity loading and audio are not verified. Day/night variants, coordinates, scene addresses and catalog parsing are not part of the current model. Do not introduce task queues, Worker services, tenant isolation or approval roles without a new requirement.
 
 ## Repository map
 
 - `backend/`: pinned RuoYi Spring Boot 3, MyBatis, Bearer authentication, fixed-role accounts and ruoyi-ar. Only `classpath:db/demo` migrations initialize the application.
 - `frontend/`: pinned RuoYi Vue3; use `scripts/agent_check.py --profile frontend` for task-local dependency/build reuse. It installs with `npm ci` when needed; preserve the lockfile and do not repeat installs/builds outside the entrypoint.
 - `database/migrations/`: historical candidate SQL, not current application migrations.
-- `contracts/`: generated OpenAPI and resource.json v1 schema/example (the runtime-manifest files are static historical candidates, no longer generated). Edit `scripts/generate_contracts.py`, then regenerate; never fix drift only in generated files.
+- `contracts/`: generated OpenAPI (admin scene-version API plus the three anonymous client routes) and resource.json v1 schema/example (the runtime-manifest files are static historical candidates, no longer generated). Edit `scripts/generate_contracts.py`, then regenerate; never fix drift only in generated files.
 - `scripts/`: development, contract and acceptance tooling; `harness.py` is the common check entrypoint.
-- `compose.yaml`, `deploy/`: single-host containers; container tests must use isolated `innovation-ar-resource-platform-infra-check` resources.
+- `compose.yaml`, `deploy/`: single-host containers; container tests must use isolated `innovation-ar-resource-platform-infra-check` resources (`127.0.0.1:18082`, prepared by `scripts/prepare_4dgs_check.py`).
 - `.local/`: ignored runtime, logs, harness evidence and secrets. Never commit or print credentials.
 - Root images and notes are user references; preserve unrelated files and worktree changes.
 
@@ -45,11 +45,11 @@ Run the shortest requirement-specific business check first; trace actual callers
 
 For PR review use `scripts/review.py` to prepare a commit-scoped checkout, validate, and (after independent review) serve a loopback-only human acceptance instance. Include verified URL, SHA, credential-file location and stop command. This authorizes isolated local acceptance tooling, not merge or daily Demo/LAN deployment.
 
-Work locally first. Use Vite on `127.0.0.1:43174` and the local backend on `127.0.0.1:18080`. LAN Compose uses `192.168.0.12:43174` and a separate database/account set. No remote server deployment has been performed by this repository workflow.
+Work locally first. Use Vite on `127.0.0.1:43174` (point `AR_DEV_API_TARGET` at a backend; the default is `127.0.0.1:18080`, which `local_demo.py` uses). The daily Compose stack is the local Docker gateway on `192.168.0.12:18081` with its own database and accounts; its public face is `https://4dgs.elma-gohan.xyz`, an nginx relay on `elma-gohan.xyz` reached through a reverse SSH tunnel (`innovation-4dgs-relay.service`), so it is only reachable while this machine and the tunnel are up. The reference player is mounted onto the daily gateway only through a local, untracked compose override under `.local/`; it is not part of the production image. Changing the public address or the relay is a deployment and needs separate authorization.
 
-Do not rebuild images, copy into containers or recreate Compose services for copy/button/layout edits. Update the corresponding browser selectors and documentation; use full login/click checks for behavior changes. Do not re-enable retired LAN bootstrap accounts or mint sessions to make checks pass. Report login blockers honestly.
+Do not rebuild images, copy into containers or recreate Compose services for copy/button/layout edits; use the Vite dev server and update the corresponding browser selectors and documentation. Rebuilding the gateway or backend to ship a finished change to the daily instance needs explicit user approval, and back up the database before any migration. Use full login/click checks for behavior changes. The `bootstrap` account is retired on the daily instance: do not re-enable it or mint sessions to make checks pass. Report login blockers honestly.
 
-Read the development workflow before starting/stopping processes: this agent's Windows Job Object can kill descendants when a starter command exits. Confirm health endpoints after startup; a printed `started` is insufficient. Never stop the daily Demo just to validate a change. Harness ingestion builds a separate backend copy.
+On the Windows host, read the development workflow before starting/stopping processes: the agent's Job Object can kill descendants when a starter command exits. On Linux, long-lived processes such as Vite run as named services. Confirm health endpoints after startup; a printed `started` is insufficient. Never stop the daily instance just to validate a change. Harness ingestion builds a separate backend copy.
 
 Run `python scripts/harness.py doctor --profile quick`, then `python scripts/harness.py check --profile quick` for repository rules and contracts. Choose `frontend` for frontend behavior/build checks or `ingestion` for the isolated current-source backend/HTTP/browser flow. Inspect the report's scope, source fingerprint and skipped/blocked checks before claiming completion.
 
@@ -61,7 +61,7 @@ When preparing a Symphony issue, follow the runbook's model-selection procedure:
 
 Use four-space Python indentation, SQL/Python `snake_case`, API `camelCase`, UUIDs and UTC timestamps. Keep Chinese documentation concise. No global formatter/linter is configured. Update SQL, generated contracts and documentation together when their behavior changes.
 
-Use descriptive incremental Flyway migrations for subsequent changes; keep empty-database initialization reproducible. Use real isolated PostgreSQL for changed data invariants; PostgreSQL 18 results do not establish PostgreSQL 17 compatibility. Verify applicable concurrency, audit, storage and authentication behavior. Client-loading invariants belong to later stages and are not claimed until implemented and verified.
+Use descriptive incremental Flyway migrations for subsequent changes (currently through V016); keep empty-database initialization reproducible. V015 is a destructive clean cutover and must never run against the daily database without a backup and approval. Use real isolated PostgreSQL for changed data invariants; PostgreSQL 18 results do not establish PostgreSQL 17 compatibility. Verify applicable concurrency, audit, storage and authentication behavior. Client-loading invariants on phones and in Unity are not claimed until implemented and verified.
 
 Record commands, tested versions, results and limitations in [validation records](docs/06-validation.md). SQL checks do not establish HTTP, cloud storage or client behavior. No percentage coverage threshold exists.
 
