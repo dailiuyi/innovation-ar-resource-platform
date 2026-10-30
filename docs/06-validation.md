@@ -483,4 +483,13 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 首轮浏览器检查在 DevTools 请求正文的二进制对比处失败；改用本地 socket 接收实际 PUT 字节后，同一完整字节与摘要断言通过，未改上传实现或放宽断言。浏览器退出仍打印已有三个 `CancelledError`（挂起请求收尾），未屏蔽；最终 107 项均通过。
 - 已查看 `multi-file-import-socket/scene-list-ui/panel-file-import-confirmation-1440.png`，两种导入按钮及确认卡片可见、无重叠。人工路径：场景管理 → 版本与文件 → 导入文件 → 多选 ZIP 和其他文件 → 开始导入；中断刷新后重新选择完整原文件。
 - 文档更新后执行 `.local/ingestion-venv/bin/python scripts/harness.py check --profile quick`，全部通过；最终链接与契约报告为 `.local/harness/20261030T093313Z-zh0q6uap/report.json`。
-- 验证边界：接口元数据使用合成响应，上传字节使用真实本地 HTTP 接收器；未执行真实 Spring Boot/数据库入库、日常账号上传或 Unity 解压验收。未提交、合并、推送或部署；日常实例保持原版本。
+- 当时验证边界：接口元数据使用合成响应，上传字节使用真实本地 HTTP 接收器；未执行真实 Spring Boot/数据库入库、日常账号上传或 Unity 解压验收。随后经用户授权提交、合并、推送及部署，见下一节。
+
+## 2026-10-30 多文件导入部署到日常实例
+
+- 用户明确授权提交、合并 main、推送和部署。功能提交 `ebf930cec51574b29d138e1d2f8ad050cfadb1df` 已快进合并并推送 `origin/main`，此前两个本地注释/排版提交亦随 main 推送；部署仅更新前端，不更新 backend/JDK、不执行数据库迁移。
+- `.local/ingestion-venv/bin/python scripts/agent_check.py --profile frontend` 再次通过，复用并校验既有构建输入及 dist；报告 `.local/harness/20261030T093459Z-kfr8w6ck/report.json`。使用本地 release Dockerfile 将该 dist 打包为 `innovation-ar-resource-platform-gateway:multi-file-ebf930c` / `infra-v1`，基于已有 `upload-feedback-945d2fa` 镜像，不重新安装依赖或编译。
+- 发布命令：`docker compose --env-file config/compose.env -f compose.yaml -f .local/viewer-18081/compose.override.yaml up -d --no-build --no-deps --wait --wait-timeout 120 gateway`。保留参考播放器挂载，新 gateway `9e3509c29c8e` healthy，镜像 `sha256:388555e38f8b279ebf5790bda50d92cca9a3aae1fbcebabd7de7bdf2cb4e9c0b`。backend `82f93f44c48b`、PostgreSQL `e4adcbb490e8`、Redis `1881b409f8cc` 均未重建且 healthy。
+- 容器内 320 个前端文件与已验收 dist 的文件集合和逐文件 SHA256 全部一致。LAN 与公网首页、`/healthz`、`/prod-api/captchaImage` 均返回 200（captcha 业务码 200）；两者下发 `static/js/VersionPanel-Bhr93OmK.js` 与本地逐字节一致，SHA256 为 `c154c057defee18b00dbf26e19d3367068465532954e04a4504348623678ffa3`，包含“导入文件”和“重新选择文件”。
+- 匿名目录均返回 200，目前 `items=[]`、`total=0`，没有可见已发布场景，因此未执行详情或 Range 抽查，没有创建业务数据来满足验证。实际 Chrome 访问公网可显示登录页，无登录态，未做日常账号登录/上传、未启用 bootstrap 或生成会话；Unity 解压仍未验证。
+- 本地证据：`.local/releases/multi-file-import-20261030/release.json`、同目录 `public-login.png`。旧网关镜像 `upload-feedback-945d2fa` 保留，可将该镜像打回 `infra-v1` 后仅重建 gateway 回退；不涉及数据库回退。
