@@ -90,7 +90,7 @@
 
 2026-10-29 日常发布（用户授权提交、合并、部署和推送）：代码提交 `69f8904` 已快进合并到 `main`。使用已验收的 Jar 与 dist 打包 runtime 镜像，只重建 backend/gateway，保留 PostgreSQL、Redis 和现有参考播放器挂载；未改变公网中继或执行新迁移。
 
-- 部署前 `pg_dump -Fc` 备份到 `.local/releases/parallel-upload-20261029/daily-before-parallel-upload.dump`（0600，`pg_restore --list` 可读取 129 项）；旧镜像保留 `before-parallel-upload-20261029` 标签。容器版本、备份摘要和逐项结果在同目录 `release.json`。
+- 部署前 `pg_dump -Fc` 备份到 `.local/releases/parallel-upload-20261029/daily-before-parallel-upload.dump`（0600，`pg_restore --list` 可读取 129 项）。`before-parallel-upload-20261029` 镜像已于 2026-10-29 按用户要求删除，不能再靠旧标签回退。
 - 部署后 backend/gateway 均 healthy，Jar SHA256 为 `03ccb4e3cbdf095eb4636aae7ecfdc8c4c4269b3d7c328ecfa3fa49ef58de6d9`，网关全部 320 个文件与已测试 dist 一致。库中场景 4、版本 3、文件 134、发布指针 3、审计 282、账号 3，与部署前相同，Flyway 仍为 017。
 - LAN `http://192.168.0.12:18081` 和公网 `https://4dgs.elma-gohan.xyz` 的 healthz、captchaImage、匿名目录/详情均返回 200，Range 返回 206 和 16 字节；下发的 `VersionPanel-CfGxw4dG.js` 与本地构建逐字节一致。
 - 真实 Chrome 访问后台会跳到登录页；当前没有可用的已登录浏览器，未在日常库执行登录上传，没有启用 bootstrap 或生成会话。隔离实例的上传证据不能替代日常账号点击验收。
@@ -102,7 +102,7 @@
 - 每次 PUT 或既有单文件核对返回实际记录后，即时更新对应文件、详情计数和版本行；不等整轮结束，也不新增全量轮询。网络错误不会被本地直接写成服务端 FAILED。
 - `verify_scene_list_ui.py --channel chrome --report-dir .local/harness/upload-panel-feedback` 的真实浏览器加合成 HTTP 检查 99 项通过。哈希使用真实 Worker 与不等大小文件，逐块核对目录字节进度，并与文件实际 SHA256 对照；持有其余请求时验证首个已入库文件已经出现在表格。截图保存在同目录 `scene-list-ui/`。这证明本地页面行为，不替代日常账号点击导入。取消检查仍会在 Playwright 退出时打印此前已有的三个 CancelledError，脚本退出码为 0，未捕获或屏蔽。
 - `.local/ingestion-venv/bin/python scripts/agent_check.py --profile frontend` 通过，包含 14 项目录/调度测试、契约/链接门禁和本次重新构建的生产前端；报告 `.local/harness/20261029T115939Z-hj67ggr7/report.json`。未构建或改动已有脏工作区中的 Java 文件。
-- 2026-10-29 日常发布：提交 `945d2fa` 已快进合并到 `main` 并推送 `origin/main`。只重建 gateway，backend 容器 `82f93f44c48b`、PostgreSQL `e4adcbb490e8`、Redis `1881b409f8cc` 未重建，参考播放器挂载保留。回退镜像为 `innovation-ar-resource-platform-gateway:before-upload-feedback-20261029`。
+- 2026-10-29 日常发布：提交 `945d2fa` 已快进合并到 `main` 并推送 `origin/main`。只重建 gateway，backend 容器 `82f93f44c48b`、PostgreSQL `e4adcbb490e8`、Redis `1881b409f8cc` 未重建，参考播放器挂载保留。`before-upload-feedback-20261029` 及更早的 `before-v017`、`pre-4dgs` 应用镜像已删除；当前只保留正在运行的 `infra-v1`。回退需用对应 Git 提交重新构建，不能再改标签。
 - 新网关 `99a2ae553ce0` healthy，镜像修订号即 `945d2fa`。容器内 320 个前端文件与本次 frontend profile 复用的 dist 一致。LAN `http://192.168.0.12:18081` 与公网 `https://4dgs.elma-gohan.xyz` 均下发 `VersionPanel-BXy_m6gc.js`，sha256 `d025068f30815addfb6f12fc7f757d18a948581a1cfab9b48b5ef356f0893aba`，包含“准备校验：已读取”和“传输进度：”。
 - 未做数据库迁移，也未在日常账号上点击导入。审查指出的两处显示限制仍在：`size()` 舍入后文案可能与百分比不完全一致；普通 HTTP 失败要等整轮结束才写入文件行。
 

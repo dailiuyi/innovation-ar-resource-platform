@@ -421,6 +421,13 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - `git diff --check` 及两份新增文档的 `git diff --no-index --check /dev/null <文件>` 均无空白错误。
 - `python3 scripts/harness.py doctor --profile quick` 与 `python3 scripts/harness.py check --profile quick` 均返回 blocked（退出码 2）：缺少 contract validators；报告分别为 `.local/harness/20261027T080034Z-9t5d_ybf/report.json`、`.local/harness/20261027T080044Z-8qz0vq69/report.json`。本机无 `python` 命令，使用 `python3`。未执行业务、浏览器或数据库验收。
 
+## 2026-10-29 本机回环 Compose 首次部署
+
+- 用户选择仅本机入口，不用文档里的局域网地址。`python3 scripts/prepare_compose.py --max-bytes 1048576 --bind-address 127.0.0.1 --http-port 18081` 新建 `config/compose.env`（0600，未打印凭据）。`AR_STORAGE_MAX_BYTES=1048576` 只是基础设施测试上限，不是产品上传限制。
+- `docker compose --env-file config/compose.env config --quiet` 通过后执行 `up -d --build`，再 `up -d --wait --wait-timeout 120`。四个服务均为 healthy。这是新命名卷上的空库，不包含既有 Windows Demo 或 2026-09-25 局域网库的账号和场景。
+- 镜像：backend `sha256:8c55d8e07cc32bd8a16080d3bb476f72b86ade5127cf436e231ad524bb291da2`，gateway `sha256:fca532e581bc52b85ff1de91eacc447044f08d84f2c06a1827869b07d1d4a782`，postgres:17.6-bookworm `sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3`，redis:7.4.5-alpine3.21 `sha256:bb186d083732f669da90be8b0f975a37812b15e913465bb14d845db72a4e3e08`。
+- 本机 `http://127.0.0.1:18081/`、`/healthz` 返回 HTTP 200；`/prod-api/captchaImage` 业务码 200，`captchaEnabled=false`。`http://192.168.0.12:18081/` 连接被拒绝，符合只绑回环。未做引导账号登录、浏览器点击或入库闭环。停止用 `docker compose --env-file config/compose.env stop`；不要用 `down -v`。
+
 ## 2026-10-29 去掉 resource.json 描述（分支 remove-resource-descriptor）
 
 - 决定与改动见 [任务记录](tasks/active/2026-10-29-4dgs-resource-refactor.md) 同名一节。契约 `4DGS Scene Resource API 0.5.0`，迁移到 V017。
@@ -465,4 +472,4 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 未验证：
   - 管理员登录和后台真实点击导入（bootstrap 账号已退役，没有生成会话）。
   - 18081 上挂载的参考播放器：按代码推断，它读取已删除的 `variants`/`descriptor`，现在不可用，但没有实测。
-- 回退步骤：先把两个 `before-v017` 镜像重新打回 `infra-v1` 标签，再从备份恢复数据库（V017 删掉的列只能这样找回），最后 `up -d --no-build` 重建 backend 和 gateway。
+- 回退步骤原为把两个 `before-v017` 镜像重新打回 `infra-v1`。这两个镜像及 `pre-4dgs`、`before-parallel-upload-20261029`、`before-upload-feedback-20261029` 已于 2026-10-29 删除。数据库备份仍在，镜像回退只能从对应提交重新构建。

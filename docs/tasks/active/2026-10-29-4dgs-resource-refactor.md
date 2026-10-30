@@ -73,6 +73,15 @@
 
 完成时填写。
 
+## 日常实例 18081 挂载参考播放器（2026-10-29）
+
+用户要求在日常实例上直接验收，因此日常 gateway 用本地 override 挂载参考播放器；这是人工验收用的本机配置，不进镜像、不入库，生产镜像和 `compose.yaml` 未改。
+
+- 播放器用 `scripts/prepare_reference_viewer.py --origin http://192.168.0.12:18081` 生成到 `.local/viewer-18081/reference-viewer`，origin 被写进播放器，换访问地址必须重新生成。
+- gateway 命令：`docker compose --env-file config/compose.env -f compose.yaml -f .local/viewer-18081/compose.override.yaml up -d --no-deps --force-recreate gateway`；去掉 `-f` override 再 `up` 即恢复原 gateway，播放器不再可访问。
+- 实测（真实 Chrome，LAN origin）：`/viewer/<sceneId>?showdemo=4dv&variant=standard_quality` 对 dance_color 渲染就绪，播放器时间从 1.05 s 推进到 5.55 s，越过 5 s 分段；请求源只有 `192.168.0.12:18081`，另有一次对 `pd.4dv.ai` 的统计请求被 CSP 拦下。
+- 限制：LAN 的 HTTP 地址不是安全上下文，`crossOriginIsolated` 为 false；本次实测仍可播放，手机浏览器和 HTTPS 下的行为未验证。
+
 ## 去掉 resource.json 描述（2026-10-29）
 
 - 决定：删除 `resource.json` v1 描述。一个内容版本只是所选目录的固定文件清单（相对路径、大小、SHA256）加可编辑说明。

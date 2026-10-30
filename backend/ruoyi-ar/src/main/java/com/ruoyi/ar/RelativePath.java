@@ -17,10 +17,13 @@ public final class RelativePath {
     public static final int MAX_PATH = 1024;
     public static final int MAX_SEGMENT = 255;
     public static final int MAX_DEPTH = 32;
-    /** Windows 设备保留名（CON、NUL、COM1…），带不带扩展名都不能做文件名。 */
+    /**
+     * Windows 设备保留名（CON、NUL、COM1…），带不带扩展名都不能做文件名。
+     */
     private static final Pattern RESERVED = Pattern.compile("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?$", Pattern.CASE_INSENSITIVE);
 
-    private RelativePath() {}
+    private RelativePath() {
+    }
 
     /**
      * 校验并规范化单个相对路径，返回 NFC 形式；不合法抛 IllegalArgumentException，消息可直接展示给用户。
@@ -66,7 +69,8 @@ public final class RelativePath {
         sorted.sort(String::compareTo);
         for (String path : sorted) {
             if (!seen.add(path)) throw new IllegalArgumentException("相对路径重复");
-            if (!seenLower.add(path.toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("相对路径存在规范化或大小写冲突");
+            if (!seenLower.add(path.toLowerCase(Locale.ROOT)))
+                throw new IllegalArgumentException("相对路径存在规范化或大小写冲突");
         }
         List<String> folded = new ArrayList<>();
         for (String path : result) folded.add(path.toLowerCase(Locale.ROOT));
@@ -90,8 +94,10 @@ public final class RelativePath {
      */
     public static String safeExportPath(String fileName, java.util.UUID fileId) {
         if (fileName == null || fileId == null) throw new IllegalArgumentException("相对路径不能为空");
-        try { return normalizeOne(fileName); }
-        catch (IllegalArgumentException ignored) { }
+        try {
+            return normalizeOne(fileName);
+        } catch (IllegalArgumentException ignored) {
+        }
         String segment = fileName.replace('\\', '_');
         StringBuilder cleaned = new StringBuilder();
         for (int i = 0; i < segment.length(); i++) {
@@ -109,13 +115,17 @@ public final class RelativePath {
         return segment;
     }
 
-    /** 取最后一个 / 之后的部分；没有 / 时就是整个路径。 */
+    /**
+     * 取最后一个 / 之后的部分；没有 / 时就是整个路径。
+     */
     public static String fileName(String relativePath) {
         int index = relativePath.lastIndexOf('/');
         return index < 0 ? relativePath : relativePath.substring(index + 1);
     }
 
-    /** 校验单个路径片段：不能为空、不能过长、不能是 . 或 ..、不能以空格开头或以空格/点结尾、不含控制字符和 Windows 非法字符、不是保留名。 */
+    /**
+     * 校验单个路径片段：不能为空、不能过长、不能是 . 或 ..、不能以空格开头或以空格/点结尾、不含控制字符和 Windows 非法字符、不是保留名。
+     */
     private static void validateSegment(String segment) {
         if (segment.isEmpty()) throw new IllegalArgumentException("相对路径含有空片段");
         if (segment.length() > MAX_SEGMENT) throw new IllegalArgumentException("路径片段过长");
