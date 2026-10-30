@@ -473,3 +473,14 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
   - 管理员登录和后台真实点击导入（bootstrap 账号已退役，没有生成会话）。
   - 18081 上挂载的参考播放器：按代码推断，它读取已删除的 `variants`/`descriptor`，现在不可用，但没有实测。
 - 回退步骤原为把两个 `before-v017` 镜像重新打回 `infra-v1`。这两个镜像及 `pre-4dgs`、`before-parallel-upload-20261029`、`before-upload-feedback-20261029` 已于 2026-10-29 删除。数据库备份仍在，镜像回退只能从对应提交重新构建。
+
+## 2026-10-30 任意多文件与 ZIP 导入
+
+- 按用户确认需求新增“导入文件”，允许任意类型多选，一次选择创建一个版本；相对路径取文件名。保留目录导入，共用原有校验、哈希、三路上传和状态驱动续传；刷新后可重新选择文件或目录。ZIP 不解压，Unity 下载后自行处理。后端、数据库和 API 契约未修改。
+- `node --test scripts/test_scene_package.mjs`：16 项通过，覆盖任意文件/ZIP、NFC、重名冲突、空文件、选择与摘要不符及上传规划。
+- `.local/ingestion-venv/bin/python scripts/agent_check.py --profile frontend`：通过，包含 quick、解析测试与前端生产构建。报告：`.local/harness/20261030T093048Z-zh0k2cn8/report.json`；`sourceUnchanged=true`。该门禁运行后仅修改浏览器验收脚本和本文档，前端实现未变化。
+- `.local/ingestion-venv/bin/python scripts/verify_scene_list_ui.py --channel chrome --report-dir .local/harness/multi-file-import-socket`：真实 Chrome 107 项通过，退出码 0。文件选择器选择真实 ZIP 与任意二进制文件；本地 HTTP 接收器核对浏览器 PUT 的原始字节与登记 SHA256，验证同版本登记、失败 ZIP 重试、刷新后重新选择、缺文件拒绝以及已可用文件不重传。目录原有并发、进度与停止回归同时通过。
+- 首轮浏览器检查在 DevTools 请求正文的二进制对比处失败；改用本地 socket 接收实际 PUT 字节后，同一完整字节与摘要断言通过，未改上传实现或放宽断言。浏览器退出仍打印已有三个 `CancelledError`（挂起请求收尾），未屏蔽；最终 107 项均通过。
+- 已查看 `multi-file-import-socket/scene-list-ui/panel-file-import-confirmation-1440.png`，两种导入按钮及确认卡片可见、无重叠。人工路径：场景管理 → 版本与文件 → 导入文件 → 多选 ZIP 和其他文件 → 开始导入；中断刷新后重新选择完整原文件。
+- 文档更新后执行 `.local/ingestion-venv/bin/python scripts/harness.py check --profile quick`，全部通过；最终链接与契约报告为 `.local/harness/20261030T093313Z-zh0q6uap/report.json`。
+- 验证边界：接口元数据使用合成响应，上传字节使用真实本地 HTTP 接收器；未执行真实 Spring Boot/数据库入库、日常账号上传或 Unity 解压验收。未提交、合并、推送或部署；日常实例保持原版本。

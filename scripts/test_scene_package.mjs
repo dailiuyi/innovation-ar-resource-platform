@@ -43,6 +43,37 @@ test('空目录、单个文件或混合顶层目录拒绝', async () => {
   await rejects(mixed, /不属于同一个目录/)
 })
 
+test('显式文件模式接受任意多个文件和 ZIP，按 NFC 文件名排序并保留原文件对象', async () => {
+  const files = [{ name: '资源.zip', size: 17 }, { name: 'z.bin', size: 9 },
+    { name: 'e\u0301.txt', size: 3, webkitRelativePath: 'ignored/other.txt' }]
+  const pkg = await readPackage(files, { mode: 'files' })
+  assert.deepEqual(pkg.files.map(item => item.relativePath), ['z.bin', 'é.txt', '资源.zip'])
+  assert.equal(pkg.totalBytes, 29)
+  assert.equal(pkg.files[2].file, files[0])
+  assert.equal(pkg.files[1].file, files[2])
+  const digests = new Map(pkg.files.map(item => [item.relativePath, SHA_A]))
+  const request = createRequest(pkg, digests, { requestKey: 'files-key', description: '' })
+  assert.equal(request.files.length, 3)
+  const version = { files: request.files }
+  checkSelection(await readPackage([...files].reverse(), { mode: 'files' }), version)
+  checkDigests(pkg, digests, version)
+  assert.throws(() => checkSelection({ ...pkg, files: pkg.files.slice(1) }, version), /缺少/)
+  assert.throws(() => checkSelection({ ...pkg, files: [{ ...pkg.files[0], bytes: 10 }, ...pkg.files.slice(1)] }, version), /大小/)
+  assert.throws(() => checkDigests(pkg, new Map(digests).set('资源.zip', SHA_B), version), /SHA-256/)
+})
+
+test('文件模式共享空文件、保留名称与规范化碰撞校验，不接受伪造路径', async () => {
+  const rejectFiles = (files, pattern) => assert.rejects(() => readPackage(files, { mode: 'files' }), pattern)
+  await rejectFiles([], /未选择/)
+  await rejectFiles([{ name: 'empty.zip', size: 0 }], /空文件/)
+  for (const names of [['a.zip', 'a.zip'], ['a.zip', 'A.ZIP'], ['é.zip', 'e\u0301.zip']]) {
+    await rejectFiles(names.map(name => ({ name, size: 1 })), /重复|冲突/)
+  }
+  for (const name of ['', 'CON.zip', '../a.zip', 'folder/a.zip', 'folder\\a.zip']) {
+    await rejectFiles([{ name, size: 1 }], /不能为空|保留名称|路径分隔符/)
+  }
+})
+
 test('目录中有空文件时指出路径并拒绝', async () => {
   await rejects(directory({ extra: [entry('wedding/notes/blank.txt', 0)] }), /空文件无法上传：notes\/blank\.txt/)
 })

@@ -1,4 +1,4 @@
-// 成品目录解析：所选目录即版本根，目录下每个文件都登记并上传。
+// 资源选择解析：目录以所选目录为根，文件以文件名为相对路径；全部原样上传。
 // 纯函数、不依赖浏览器或 Vue；服务端才是最终校验边界，
 // 这里只做上传前的快速检查，路径规则与后端 RelativePath 保持一致。
 
@@ -78,10 +78,19 @@ export function rootEntries(files) {
   })
 }
 
-/** 读取并校验目录。返回 {files:[{relativePath,file,bytes}](按路径排序), totalBytes}；目录下每个文件都登记。 */
-export async function readPackage(files) {
-  const entries = rootEntries(files)
-  normalizePaths(entries.map(entry => entry.relativePath))
+/** mode 显式区分目录与文件选择；默认保留现有目录调用行为，不读取或解压文件内容。 */
+export async function readPackage(files, { mode = 'directory' } = {}) {
+  let entries
+  if (mode === 'directory') entries = rootEntries(files)
+  else if (mode === 'files') {
+    entries = Array.from(files, file => ({ relativePath: file.name, file }))
+    if (!entries.length) fail('未选择可上传的文件')
+    for (const entry of entries) {
+      if (typeof entry.relativePath === 'string' && /[/\\]/.test(entry.relativePath)) fail('文件名不能包含路径分隔符')
+    }
+  } else fail('未知的资源选择模式')
+  const paths = normalizePaths(entries.map(entry => entry.relativePath))
+  entries.forEach((entry, index) => { entry.relativePath = paths[index] })
   const sorted = entries
     .map(({ relativePath, file }) => ({ relativePath, file, bytes: file.size }))
     .sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0))
@@ -113,7 +122,7 @@ export function createRequest(pkg, digests, { requestKey, description }) {
   }
 }
 
-/** 重新选择目录后，先不看摘要：路径集合和大小必须与已固定的版本一致。 */
+/** 重新选择资源后，先不看摘要：路径集合和大小必须与已固定的版本一致。 */
 export function checkSelection(pkg, version) {
   const fixed = new Map(version.files.map(item => [item.relativePath, item]))
   for (const item of pkg.files) {
@@ -123,7 +132,7 @@ export function checkSelection(pkg, version) {
   }
   if (fixed.size !== pkg.files.length) {
     const present = new Set(pkg.files.map(item => item.relativePath))
-    fail(`所选目录缺少该版本登记的文件：${[...fixed.keys()].find(path => !present.has(path))}`)
+    fail(`所选资源缺少该版本登记的文件：${[...fixed.keys()].find(path => !present.has(path))}`)
   }
 }
 
@@ -132,7 +141,7 @@ export function checkDigests(pkg, digests, version) {
   const fixed = new Map(version.files.map(item => [item.relativePath, item]))
   for (const item of pkg.files) {
     if (digestOf(digests, item.relativePath) !== fixed.get(item.relativePath).sha256) {
-      fail(`${item.relativePath} 的内容与该版本登记的 SHA-256 不一致，请选择原目录`)
+      fail(`${item.relativePath} 的内容与该版本登记的 SHA-256 不一致，请选择原文件或原目录`)
     }
   }
 }

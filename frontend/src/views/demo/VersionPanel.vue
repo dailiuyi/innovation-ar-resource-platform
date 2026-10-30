@@ -22,10 +22,12 @@
     </section>
     <div class="action-row">
       <el-button type="primary" :disabled="busy||removing" @click="chooseDirectory">导入资源目录</el-button>
+      <el-button type="primary" :disabled="busy||removing" @click="chooseFiles">导入文件</el-button>
       <el-button :disabled="busy||removing" @click="refresh">刷新</el-button>
       <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
-      <span class="hint">所选目录下的全部文件都会上传；单文件上限 {{size(config.maxBytes)}}，每个版本最多 {{config.versionMaxFiles}} 个文件 / {{size(config.versionMaxBytes)}}。</span>
-      <input ref="picker" type="file" webkitdirectory directory multiple hidden @change="picked" />
+      <span class="hint">一次选择创建一个版本，全部文件原样上传（ZIP 不解压，由 Unity 解压）；目录保留相对路径，文件使用文件名。单文件上限 {{size(config.maxBytes)}}，每个版本最多 {{config.versionMaxFiles}} 个文件 / {{size(config.versionMaxBytes)}}。</span>
+      <input ref="picker" type="file" data-import-mode="directory" webkitdirectory directory multiple hidden @change="picked($event,'directory')" />
+      <input ref="filePicker" type="file" data-import-mode="files" multiple hidden @change="picked($event,'files')" />
     </div>
     <section v-if="importPlan" class="import-card">
       <h3>待导入：{{importPlan.pkg.files.length}} 个文件，共 {{size(importPlan.pkg.totalBytes)}}</h3>
@@ -70,8 +72,9 @@
       </el-form>
       <div class="action-row">
         <el-button v-if="canResume&&sessionForSelected" type="primary" :disabled="busy" @click="runSession">继续上传</el-button>
-        <el-button v-if="canResume" :type="sessionForSelected?'default':'primary'" :disabled="busy" @click="chooseFor(selected.id)">{{sessionForSelected?'重新选择目录':'继续上传'}}</el-button>
-        <span v-if="canResume" class="hint">继续上传需要选择同一个资源目录；已入库的文件不会重复传输。</span>
+        <el-button v-if="canResume" :type="sessionForSelected?'default':'primary'" :disabled="busy" @click="chooseFor(selected.id,'directory')">重新选择目录</el-button>
+        <el-button v-if="canResume" :type="sessionForSelected?'default':'primary'" :disabled="busy" @click="chooseFor(selected.id,'files')">重新选择文件</el-button>
+        <span v-if="canResume" class="hint">选择原文件或原目录，路径、大小和 SHA-256 必须与该版本一致；已入库的文件不会重复传输。</span>
         <el-button v-if="!selected.published" type="primary" :disabled="busy||removing||publishing||selected.uploadStatus!=='READY'" @click="publish(selected)">{{published?'替换发布':'发布'}}</el-button>
         <el-button type="danger" plain :disabled="busy||removing||selected.published" @click="remove(selected)">{{retryDelete(selected)?'重试删除':'删除整个版本'}}</el-button>
       </div>
@@ -98,7 +101,7 @@ const PAGE=20
 const config=ref({maxBytes:0,versionMaxFiles:0,versionMaxBytes:0})
 const versions=ref([]),total=ref(0),page=ref(1),sceneLockVersion=ref(0),published=ref(null),sceneName=ref('')
 const selected=ref(null),editDescription=ref('')
-const picker=ref(null),importPlan=shallowRef(null),session=shallowRef(null)
+const picker=ref(null),filePicker=ref(null),importPlan=shallowRef(null),session=shallowRef(null)
 const importDescription=ref('')
 const busy=ref(false),saving=ref(false),publishing=ref(false),removing=ref(false)
 const error=ref(''),progress=ref(0),progressText=ref('')
@@ -226,14 +229,20 @@ async function remove(version){
     if(e!=='cancel'&&e!=='close'){error.value=message(e);await reload()}
   }finally{removing.value=false}
 }
-function chooseDirectory(){resumeId=null;picker.value.value='';picker.value.click()}
-function chooseFor(versionId){resumeId=versionId;picker.value.value='';picker.value.click()}
-async function picked(event){
+function openPicker(mode,versionId=null){
+  resumeId=versionId
+  const input=mode==='files'?filePicker.value:picker.value
+  input.value='';input.click()
+}
+function chooseDirectory(){openPicker('directory')}
+function chooseFiles(){openPicker('files')}
+function chooseFor(versionId,mode){openPicker(mode,versionId)}
+async function picked(event,mode){
   const files=Array.from(event.target.files||[]);if(!files.length)return
   const target=resumeId;resumeId=null
   error.value=''
   try{
-    const pkg=await readPackage(files)
+    const pkg=await readPackage(files,{mode})
     checkLimits(pkg,config.value)
     if(!target){importDescription.value='';importPlan.value={pkg};return}
     if(selected.value?.id!==target)return

@@ -17,8 +17,11 @@ import socket
 import subprocess
 import sys
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -81,6 +84,8 @@ class Api:
         self.deferred = []
         self.created_bodies = []
         self.uploads = []
+        self.upload_bodies = []
+        self.upload_receiver = None
         self.fail_once = set()
         self.hold_uploads = False
         self.held_uploads = []
@@ -185,10 +190,13 @@ def route_handler(api, unmocked):
                                  body=json.dumps(api.detail(version), ensure_ascii=False))
         matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/files/([^/]+)/content', path)
         if matched and method == 'PUT':
+            if api.upload_receiver:
+                return route.continue_(url=api.upload_receiver + path)
             version = api.versions[matched.group(1)]
             item = next(f for f in version['files'] if f['fileId'] == matched.group(2))
             path_ = item['relativePath']
             api.uploads.append(path_)
+            # Binary upload assertions use the socket receiver, not DevTools post-data decoding.
             item['attempts'] += 1
             if path_ in api.unconfirmed_uploads:
                 return route.abort('failed')  # 连接中断：不宣告 FAILED，结果交由状态查询确认
@@ -239,6 +247,50 @@ def route_handler(api, unmocked):
         route.fulfill(status=404, content_type='application/json',
                       body='{"code":404,"message":"unmocked request"}')
     return handler
+
+
+def upload_receiver(api):
+    """Capture real socket bytes, avoiding DevTools' lossy binary Blob post-data representation."""
+    class Receiver(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def respond(self, status, payload):
+            self.send_response(status)
+            self.send_header('Access-Control-Allow-Origin', self.headers.get('Origin', '*'))
+            self.send_header('Access-Control-Allow-Credentials', 'true')
+            self.send_header('Access-Control-Allow-Methods', 'PUT, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', self.headers.get('Access-Control-Request-Headers', '*'))
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, ensure_ascii=False).encode())
+
+        def do_OPTIONS(self):
+            self.respond(200, {})
+
+        def do_PUT(self):
+            matched = re.fullmatch(r'/api/v1/scene-versions/([^/]+)/files/([^/]+)/content', self.path)
+            if not matched:
+                self.respond(404, {})
+                return
+            version = api.versions[matched.group(1)]
+            item = next(f for f in version['files'] if f['fileId'] == matched.group(2))
+            name = item['relativePath']
+            content = self.rfile.read(int(self.headers['Content-Length']))
+            api.upload_bodies.append((version['id'], name, content))
+            api.uploads.append(name)
+            item['attempts'] += 1
+            if name in api.fail_once:
+                api.fail_once.remove(name)
+                item['status'], item['failureReason'] = 'FAILED', '存储暂时不可用'
+                self.respond(503, {'code': 'AR_503', 'message': '存储暂时不可用'})
+            else:
+                item['status'], item['failureReason'] = 'AVAILABLE', None
+                self.respond(200, {'code': 200, **item})
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Receiver)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def buttons(page, row):
@@ -424,7 +476,7 @@ def reset_xhr(page):
 
 
 def import_directory(drawer, package, description=''):
-    drawer.locator('input[type=file]').set_input_files(str(package))
+    drawer.locator('input[type=file][webkitdirectory]').set_input_files(str(package))
     drawer.get_by_role('button', name='开始导入', exact=True).wait_for()
     if description:
         field = drawer.locator('.import-card input')
@@ -486,6 +538,7 @@ def main():
     port = args.port or free_port()
     web = f'http://127.0.0.1:{port}'
     api = Api()
+    receiver = upload_receiver(api)
     unmocked = []
     vite = subprocess.Popen(['node', str(ROOT / 'frontend/node_modules/vite/bin/vite.js'),
                              '--host', '127.0.0.1', '--port', str(port), '--strictPort'],
@@ -828,6 +881,65 @@ def main():
                   and '确定未入库' not in drawer.inner_text())
             api.unconfirmed_uploads = set()
             api.state_failures = set()
+
+            # 文件导入使用真实文件选择器与 ZIP 内容，验证一个选择只创建一个版本。
+            page.reload()
+            drawer = panel(page)
+            drawer.get_by_role('button', name='导入文件', exact=True).wait_for()
+            api.upload_receiver = f'http://127.0.0.1:{receiver.server_port}'
+            loose = run / 'loose-files'
+            loose.mkdir(exist_ok=True)
+            archive = loose / '资源.zip'
+            with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
+                zipped.writestr('nested/model.bin', b'\x00\xffUnity archive payload\n' * 20)
+            arbitrary = loose / 'arbitrary.data'
+            arbitrary.write_bytes(b'\x00\xfeopaque resource bytes')
+            selected_files = [archive, arbitrary]
+            expected_bytes = {file.name: file.read_bytes() for file in selected_files}
+            created_before = len(api.created_bodies)
+            api.fail_once = {archive.name}
+            with page.expect_file_chooser() as chooser:
+                drawer.get_by_role('button', name='导入文件', exact=True).click()
+            check('导入文件打开非目录多选输入', chooser.value.is_multiple
+                  and drawer.locator('input[data-import-mode=files]').get_attribute('webkitdirectory') is None)
+            chooser.value.set_files([str(file) for file in selected_files])
+            drawer.get_by_role('heading', name='待导入：2 个文件', exact=False).wait_for()
+            page.screenshot(path=str(run / 'panel-file-import-confirmation-1440.png'), full_page=True)
+            drawer.get_by_role('button', name='开始导入', exact=True).click()
+            check('多文件首次上传保留单个失败并允许续传',
+                  wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 1 个').count() == 1, timeout=30))
+            files_version = latest_version(api, SHORT_ID)
+            check('一次多文件选择创建同一个版本且仅使用文件名',
+                  len(api.created_bodies) == created_before + 1
+                  and sorted(f['relativePath'] for f in files_version['files']) == sorted(expected_bytes))
+            received = {(version_id, name): body for version_id, name, body in api.upload_bodies}
+            check('ZIP 与任意文件 PUT 原始字节和登记 SHA-256 完全一致，ZIP 未展开',
+                  all(received.get((files_version['id'], name)) == content
+                      and next(f for f in files_version['files'] if f['relativePath'] == name)['sha256']
+                      == hashlib.sha256(content).hexdigest() for name, content in expected_bytes.items()))
+
+            page.reload()
+            drawer = panel(page)
+            drawer.get_by_role('heading', name=f"v{files_version['versionNo']} 详情", exact=False).wait_for()
+            check('刷新后明确提供文件与目录两种重新选择入口',
+                  drawer.get_by_role('button', name='重新选择文件', exact=True).count() == 1
+                  and drawer.get_by_role('button', name='重新选择目录', exact=True).count() == 1)
+            uploads_before = len(api.uploads)
+            with page.expect_file_chooser() as chooser:
+                drawer.get_by_role('button', name='重新选择文件', exact=True).click()
+            chooser.value.set_files([str(arbitrary)])
+            check('刷新后重新选择缺失文件被拒绝且不发送上传',
+                  wait_until(page, lambda: summary_alert(drawer, '缺少该版本登记的文件').count() == 1)
+                  and len(api.uploads) == uploads_before)
+            with page.expect_file_chooser() as chooser:
+                drawer.get_by_role('button', name='重新选择文件', exact=True).click()
+            chooser.value.set_files([str(file) for file in reversed(selected_files)])
+            check('刷新重新选择后仅重试失败 ZIP，跳过 AVAILABLE 且不创建新版本',
+                  wait_until(page, lambda: drawer.get_by_text('全部文件已校验入库，可以发布').count() == 1, timeout=30)
+                  and api.uploads[uploads_before:] == [archive.name]
+                  and len(api.created_bodies) == created_before + 1)
+            check('重试 ZIP 字节仍保持原样',
+                  api.upload_bodies[-1] == (files_version['id'], archive.name, expected_bytes[archive.name]))
             check('导入完成后关闭面板回到列表', close_panel(page))
 
             short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)
@@ -863,6 +975,8 @@ def main():
             check('未出现未拦截的接口调用', not unmocked)
             browser.close()
     finally:
+        receiver.shutdown()
+        receiver.server_close()
         vite.terminate()
         try:
             vite.wait(timeout=10)
