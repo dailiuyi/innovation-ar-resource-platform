@@ -8,8 +8,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * 本模块（com.ruoyi.ar）控制器的统一异常出口。优先级高于若依自带的全局异常处理（Order -100），
+ * 保证 /api/v1 下的错误响应都是 {code, message, traceId} 结构，而不是若依的 AjaxResult。
+ */
 @RestControllerAdvice(basePackages="com.ruoyi.ar") @Order(-100)
 public class ArExceptionHandler {
+    /**
+     * 把异常映射为 HTTP 状态码和对外文案：
+     * 业务层抛出的 ResponseStatusException 沿用其状态码和原因；未授权为 403；参数校验/解析类异常为 400；
+     * 其余视为 500，对外只给通用文案，细节只写日志。
+     * traceId 每次响应随机生成；仅 500 会把它连同堆栈写入日志，用于按用户反馈定位问题。
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String,String>> handle(Exception e) {
         int status=500;String message="服务内部错误";
