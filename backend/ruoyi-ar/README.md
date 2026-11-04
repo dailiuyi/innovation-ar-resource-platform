@@ -34,3 +34,5 @@ src/main/java/com/ruoyi/ar/
 MyBatis 使用项目已有的 `@MapperScan("com.ruoyi.**.mapper")`；移除 AR 根包额外扫描。Spring 组件扫描、Knife4j 的 packages-to-scan 和异常 advice 都继续覆盖 com.ruoyi.ar 子包，实际启动后检查这些配置，不仅以编译通过判断扫描成功。
 
 验证入口：`python3 scripts/check_java.py --module ruoyi-admin --package`（从仓库根目录执行，需 Java 21+），随后执行 quick 与隔离 HTTP 检查。具体本轮命令、PostgreSQL 版本、结果和边界见 [验证记录](../../docs/06-validation.md)。
+
+注释约定（2026-11-04）：类注释只说明职责，代码旁只解释业务约束、事务/文件边界和失败恢复。省略方法名已表达的含义及与 Knife4j 重复的说明；完整流程统一见 Review 导读。

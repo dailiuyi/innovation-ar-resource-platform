@@ -638,3 +638,11 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 ## 2026-11-04 清理根目录旧重构计划
 
 用户确认清理范围后，移除未跟踪的 `4DGS_成品分发重构_PLAN.md`。其 resource.json/档位设计已由现行资源入库说明及任务记录接替，无现行文档依赖；完整原件与 `.local/consolidation/20261104-main/main-original-files.tar.gz` 内同名文件逐字一致后才删除。未改动现行任务、源码或备份，未推送。
+
+## 2026-11-04 精简 ruoyi-ar 注释
+
+用户要求注释简洁、便于读业务逻辑。在原项目目录的 `docs/simplify-ar-comments` 分支执行，基线 3b6375b；没有新建 worktree。精简 19 个生产 Java 文件：移除字段/方法直译和重复 Knife4j 的 Javadoc，保留职责、业务约束、事务/文件边界及恢复规则；完整流程仍见 Review 导读。模块 README 记录注释约定。
+
+验证：`python3 .local/comment-cleanup/verify_tokens.py` 确认 19 个文件的非注释 token 与基线一致，比较包含所有字符串、SQL 和注解。`JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-ar` 执行 44 项测试，0 失败/错误/跳过，报告 `.local/java-check/adcb5513858f/report.json`。本轮 doctor/quick 均通过，quick 报告 `.local/harness/20261104T081215Z-2glsq7ol/report.json`。`git diff --check` 通过。
+
+未修改业务代码或 Knife4j 元数据；未执行 HTTP/浏览器验证，未合并 main、推送或部署。`.idea/` 和 README.md.bak 原样保留。

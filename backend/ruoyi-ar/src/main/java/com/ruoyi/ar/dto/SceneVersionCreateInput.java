@@ -6,10 +6,7 @@ import jakarta.validation.constraints.*;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * 创建版本请求。requestKey 是客户端生成的幂等键，重试同一导入时复用；
- * files 是整个版本的固定文件清单。
- */
+/** 同次导入重试复用 requestKey，文件清单创建后不可改。 */
 @Schema(name = "CreateInput")
 public record SceneVersionCreateInput(
         @Schema(description = "客户端生成的幂等键，重试同一导入时复用", requiredMode = Schema.RequiredMode.REQUIRED)

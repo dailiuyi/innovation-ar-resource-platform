@@ -14,11 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
 
-/**
- * 场景自身（名称、启用状态、软删除）的业务逻辑。每个写操作都在同一事务内完成：
- * 新建记录 after，删除记录 before，更新和启停记录 before/after；业务写入与对应审计一起提交。
- * 查询前置快照后，写 SQL 仍须匹配 lock_version，不能仅凭先前查询结果决定更新成功。
- */
+/** 管理场景名称、启停和软删除；业务更新与审计在同一事务提交。 */
 @Service
 public class SceneService {
     private final SceneMapper mapper;
@@ -29,35 +25,25 @@ public class SceneService {
         this.json = json;
     }
 
-    /** 场景列表与总数共用名称过滤条件；控制器只负责参数校验。 */
     public Map<String, Object> list(String name, int limit, int offset) {
         return Map.of("items", mapper.list(name, limit, offset), "total", mapper.count(name));
     }
 
-    /** 审计列表独立于场景可见性，软删除后仍保留记录。 */
+    /** 场景软删除后仍保留审计。 */
     public Map<String, Object> audits(int limit, int offset) {
         return Map.of("items", mapper.audits(limit, offset), "total", mapper.auditCount());
     }
 
-    /**
-     * 查询未删除的场景，不存在抛 404。
-     */
     public Map<String, Object> find(String id) {
         Map<String, Object> row = mapper.find(id);
         if (row == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "场景不存在");
         return row;
     }
 
-    /**
-     * 抛出 400，供 expectedVersion 缺失这类请求错误使用。
-     */
     private void invalid(String message) {
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
     }
 
-    /**
-     * 以当前登录用户的身份写审计；序列化失败属于程序错误，直接抛出。
-     */
     private void audit(String id, String action, Map<String, Object> detail) {
         try {
             mapper.audit(id, SecurityUtils.getUserId(), SecurityUtils.getUsername(), action, json.writeValueAsString(detail));
@@ -66,9 +52,6 @@ public class SceneService {
         }
     }
 
-    /**
-     * 新建场景；乐观锁版本号由数据库默认值 0 起算。
-     */
     @Transactional
     public Map<String, Object> create(SceneInput s) {
         String id = UUID.randomUUID().toString();
@@ -78,9 +61,7 @@ public class SceneService {
         return after;
     }
 
-    /**
-     * 重命名。update 影响 0 行说明 expectedVersion 已过期（或场景刚被删除），返回 409 让用户刷新。
-     */
+    /** 更新必须匹配 expectedVersion，过期或并发删除返回 409。 */
     @Transactional
     public Map<String, Object> update(String id, SceneInput s) {
         if (s.expectedVersion() == null) invalid("缺少 expectedVersion");
@@ -92,10 +73,7 @@ public class SceneService {
         return after;
     }
 
-    /**
-     * 软删除。同样以 expectedVersion 防止基于过期页面误删。
-     * 只停用并隐藏场景，不调用 ArtifactStorage，不物理删除版本或文件。整版清理由 SceneVersionService 负责。
-     */
+    /** 只隐藏并停用场景，不清理版本和文件；物理清理走整版删除。 */
     @Transactional
     public void delete(String id, long version) {
         var before = find(id);
@@ -104,9 +82,7 @@ public class SceneService {
         audit(id, "DELETE", Map.of("before", before));
     }
 
-    /**
-     * 启用或停用；reason 写入审计。
-     */
+    /** 启停原因写入审计。 */
     @Transactional
     public Map<String, Object> enabled(String id, boolean enabled, long version, String reason) {
         var before = find(id);

@@ -3,9 +3,7 @@ package com.ruoyi.ar.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.*;
 
-/**
- * 登记的单个文件：相对路径、字节数（至少 1）和小写十六进制 SHA256。
- */
+/** 版本内固定的文件路径、大小和摘要。 */
 @Schema(name = "FileInput")
 public record SceneVersionFileInput(
         @Schema(description = "版本内相对路径", example = "models/a.bundle", requiredMode = Schema.RequiredMode.REQUIRED)

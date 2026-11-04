@@ -21,10 +21,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-/**
- * 给演示客户端用的匿名只读接口。刻意不在类上加角色限制：SecurityConfig 只放行下面这三个 GET 路由
- * （以及文件内容的 HEAD），其余方法和路径仍然要求登录或被拒绝。
- */
+/** 匿名只读接口；SecurityConfig 仅放行指定的 GET/HEAD 路由。 */
 @Tag(name = "客户端只读接口", description = "匿名只读：已发布场景目录、详情与单文件 Range 下载，无需登录")
 @SecurityRequirements
 @RestController
@@ -40,9 +37,6 @@ public class ClientSceneController {
         this.versions = versions;
     }
 
-    /**
-     * 已发布且可下载的场景列表，name 为大小写不敏感的子串过滤，按名称排序。
-     */
     @Operation(security = {}, summary = "已发布场景列表", description = "匿名读取已发布且可下载的场景；name 子串过滤，按名称排序")
     @GetMapping("/scenes")
     public Map<String, Object> list(@Parameter(description = "名称过滤（子串，不区分大小写）", example = "街区")
@@ -54,19 +48,12 @@ public class ClientSceneController {
         return scenes.list(name, limit, offset);
     }
 
-    /**
-     * 场景当前发布版本的文件清单及每个文件的下载路径。
-     */
     @Operation(security = {}, summary = "场景发布详情", description = "场景当前发布版本的文件清单及每个文件的下载路径")
     @GetMapping("/scenes/{sceneId}")
     public Map<String, Object> detail(@Parameter(description = "场景 ID", required = true) @PathVariable UUID sceneId) {
         return scenes.detail(sceneId);
     }
 
-    /**
-     * 下载单个文件，支持 GET/HEAD 和 Range。路径末尾的 fileName 只用于校验和让播放器看到扩展名，
-     * 文件定位靠前面的 UUID。
-     */
     @Operation(security = {}, summary = "下载单个文件", description = "支持 GET/HEAD 和 Range 断点续传。路径末尾的 fileName 只用于校验和展示扩展名，文件定位靠 UUID")
     @RequestMapping(value = "/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}",
             method = {RequestMethod.GET, RequestMethod.HEAD})

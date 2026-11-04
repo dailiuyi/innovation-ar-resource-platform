@@ -11,27 +11,18 @@ import java.util.regex.Pattern;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
-/**
- * 强 ETag 与单区间 Range 响应。ETag 必须与实际发送的字节一致（这里取登记的 SHA256）。
- * 本类只负责 HTTP 区间与响应流；场景权限、版本归属和文件就绪校验由 SceneVersionService 完成。
- */
+/** 处理强 ETag 和单区间下载；权限、文件归属和就绪状态由调用方校验。 */
 public final class HttpRange {
     private static final Pattern BYTES = Pattern.compile("(?i)bytes=(\\d*)-(\\d*)");
     private static final int BUFFER = 64 * 1024;
 
-    /**
-     * 解析结果。status 为 200（完整）、206（区间）或 416（区间不可满足）；
-     * start/end 为闭区间字节位置，size 为文件总长。
-     */
+    /** start/end 为闭区间；status 为完整 200、区间 206 或不可满足 416。 */
     public record Slice(int status, long start, long end, long size) {
         public long length() {
             return size == 0 ? 0 : Math.max(0, end - start + 1);
         }
     }
 
-    /**
-     * 按偏移和长度打开存储流，由调用方（存储层）提供。
-     */
     @FunctionalInterface
     public interface StreamOpen {
         InputStream open(long offset, long length) throws IOException;
@@ -41,9 +32,8 @@ public final class HttpRange {
     }
 
     /**
-     * 只支持单个区间：{@code a-b}、{@code a-} 和后缀 {@code -n}。其他形式及语法非法的区间一律忽略，
-     * 返回完整的 200；语法合法但无法满足的返回 416。HEAD 请求和 If-Range 与 ETag 不符时同样返回完整内容。
-     * 超大数字不会抛异常。
+     * 支持 a-b、a-、-n；合法但不可满足返回 416。
+     * 非法或多区间、HEAD、If-Range 不匹配时按完整 200 处理。
      */
     public static Slice parse(HttpServletRequest request, long size, String etag) {
         boolean body = !"HEAD".equalsIgnoreCase(request.getMethod());
@@ -68,9 +58,7 @@ public final class HttpRange {
         return new Slice(206, start, Math.min(end, size - 1), size);
     }
 
-    /**
-     * 纯数字串转 long；超出 long 范围时取最大值而不是抛异常。
-     */
+    /** 超大数字取 Long.MAX_VALUE，让后续区间规则处理。 */
     private static long number(String digits) {
         try {
             return Long.parseLong(digits);
@@ -79,19 +67,13 @@ public final class HttpRange {
         }
     }
 
-    /**
-     * 完整内容：200，区间覆盖 0 到 size-1。
-     */
     private static Slice full(long size) {
         return new Slice(200, 0, Math.max(0, size - 1), size);
     }
 
     /**
-     * 写响应头与正文。固定带 Accept-Ranges 和 ETag，Cache-Control 为 no-store；
-     * filename 非空时以附件下载，同时给出 ASCII 兜底名和 RFC 5987 的 filename*（UTF-8）。
-     * 416 只写 Content-Range 头（RFC 9110 的未满足区间写法，附文件总长度）；
-     * sendBody 为 false（HEAD）或长度为 0 时只发响应头，不调用 open 打开文件正文。
-     * 响应头已发出后若流提前结束会抛 IOException，连接会被中断，客户端能发现内容不全。
+     * HEAD 和 416 不打开正文；GET 按长度输出，提前结束则抛 IOException。
+     * filename 非空时返回附件名，中文名使用 UTF-8 编码。
      */
     public static void write(HttpServletResponse response, Slice slice, String etag, String contentType,
                              String filename, boolean sendBody, StreamOpen open) throws IOException {
