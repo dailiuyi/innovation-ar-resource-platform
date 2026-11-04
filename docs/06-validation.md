@@ -612,3 +612,25 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 限制：本轮未执行浏览器点击、启动恢复故障注入、磁盘写满/断电或 Unity/手机播放验收。HTTP 使用合成内容，不证明模型可播放。已有单测保留原断言；未扩大包级辅助方法的可见性。分包本身不代表所有原有业务路径均已独立审查。
 
 保留的隔离实例入口 `http://127.0.0.1:18082/doc.html`，凭据仍在主工作区 `.local/4dgs-task/4dgs-check/credentials.json`。本轮实际启动配置与 Jar 指纹记录在独立工作区 `.local/layers/runtime.json`；需要停止时运行 `python3 .local/layers/stop_instance.py`（仅停止隔离 backend/gateway，保留数据库、存储与证据）。人工验收：按模块 README 查目录，在导读依次打开 Controller → DTO → Service → Mapper/Storage，并在本地文档选择分组查看接口。
+
+## 2026-11-04 主工作区合并与 worktree 清理
+
+用户授权逐项处理未提交修改、把本轮 worktree 合并到 main 并清理；有风险的改动交由用户决策。实际核对结果：主工作区完整 binary diff 与 Knife4j 开始前保存的原补丁完全一致，没有期间新增的未提交业务修改。11 个 Knife4j/注解/nginx 文件已被 eea5266 及后续提交吸收；application-druid.yml 的 YAML 解析结果与原 main 完全相同，仅 CRLF 和末尾空行不同。本轮无需另提交重复修改或调整数据库配置值。
+
+先在主目录 `.local/consolidation/20261104-main/` 私有备份原补丁、12 个修改文件及本地参考文件（main-original-files.tar.gz），完整归档旧 worktree（worktree-complete.tar.gz，包含其忽略的证据和构建产物；Maven 缓存为原有符号链接）。manifest.json 保存提交、路径与 SHA256；两个归档均重新核对摘要并遍历读取验证。原补丁与归档权限 0600，目录 0700，不提交或外发。
+
+备份并确认差异未变化后，仅还原已核对的 12 个 tracked 文件到原 main 基线，再执行 `git merge --ff-only refactor/ar-package-layers`，main 从 8522186 快进至 06d55f2，完整包含 eea5266、659b9a8、06d55f2。没有重写历史、压缩提交或丢弃未合并内容。
+
+`.idea/`、`README.md.bak` 和根目录 `4DGS_成品分发重构_PLAN.md` 原样保留为本地未跟踪文件，不提交。旧计划仍含已废弃的 descriptor/档位设计，不提升为当前需求或说明；没有删除这些参考文件。
+
+隔离 backend/gateway 原先绑定旧 worktree 的 Jar/nginx.conf。先把已测试 Jar 复制到主目录 `.local/consolidation/20261104-main/runtime/ruoyi-admin.jar`，核对 SHA256 仍为 `0904c7a0b528a299bbc246b72aea7c4878e119b766643e0bc11d6d9bfda5e877`；nginx 改绑主目录 deploy/nginx.conf，Compose override、实际命令与 runtime.json 均保存在同一 runtime 目录。仅重建隔离 backend/gateway，未重启 PostgreSQL/Redis，未操作云端日常服务。四个隔离服务最终均 healthy。
+
+清理前已列出目标 worktree、可移除产物和三个已合并任务分支，确认 worktree 无 tracked/untracked 源码改动、HEAD 与 main 相同、所有容器均不再挂载其路径且完整归档校验通过，才执行 `git worktree remove --force /home/elma/文档/Code/innovation-ar-knife4j`。force 仅用于删除已归档的忽略产物。移除本轮已合并的本地 feat/knife4j-docs-20261104、docs/business-review-guide、refactor/ar-package-layers 三个分支；其他历史分支与远端分支保留。`git worktree list` 最终仅有原主目录。
+
+迁移后验证：
+
+- 主目录 `.local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick` 与 `check --profile quick` 通过；检查报告 `.local/harness/20261104T074403Z-acaa6f90/report.json`。
+- 新挂载的隔离服务 `/healthz`、`/doc.html`、`/api/v1/client/scenes` 全部 HTTP 200；两个 AR OpenAPI 分组与归档中的迁移前快照完整 JSON 相同。
+- 分包源码与已测提交 06d55f2 一致，复用其 Java 50 项、入库 HTTP 74 项和边界 11 项证据，没有把本轮路径迁移称为重跑这些测试。
+
+开发与 IDEA 入口统一为 `/home/elma/文档/Code/innovation-ar-resource-platform` 的 main；旧 worktree 绝对路径现在仅在历史记录和私有归档中有效。隔离入口仍为 http://127.0.0.1:18082/doc.html；如需停止隔离应用，可读取 runtime/runtime.json 中 compose 数组并追加 `stop backend gateway`。本轮只完成本地合并，未推送 main，未部署云端。人工验收：在原 IDEA 项目中 Reload from Disk，必要时重新加载 Maven，然后展开 ruoyi-ar 的职责目录。
