@@ -1,4 +1,7 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.controller;
+
+import com.ruoyi.ar.service.ClientSceneService;
+import com.ruoyi.ar.service.SceneVersionService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;

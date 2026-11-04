@@ -1,4 +1,8 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.controller;
+
+import com.ruoyi.ar.dto.SceneEnabledInput;
+import com.ruoyi.ar.dto.SceneInput;
+import com.ruoyi.ar.service.SceneService;
 
 import java.util.*;
 
@@ -21,11 +25,9 @@ import org.springframework.web.bind.annotation.*;
 @Validated
 public class SceneController {
     private final SceneService service;
-    private final SceneMapper mapper;
 
-    public SceneController(SceneService service, SceneMapper mapper) {
+    public SceneController(SceneService service) {
         this.service = service;
-        this.mapper = mapper;
     }
 
     /**
@@ -39,7 +41,7 @@ public class SceneController {
                                     @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
                                     @Parameter(description = "偏移量", example = "0")
                                     @RequestParam(defaultValue = "0") @Min(0) int offset) {
-        return Map.of("items", mapper.list(name, limit, offset), "total", mapper.count(name));
+        return service.list(name, limit, offset);
     }
 
     /**
@@ -83,19 +85,12 @@ public class SceneController {
     }
 
     /**
-     * 启停请求体。reason 必填，会写入审计日志。
-     */
-    public record EnabledInput(@NotNull Boolean enabled, @NotNull @Min(0) Long expectedVersion,
-                               @NotBlank @Size(max = 1000) String reason) {
-    }
-
-    /**
      * 启用/停用场景。停用后匿名客户端看不到该场景（见 ClientSceneService 的可见性条件）。
      */
     @Operation(summary = "启用/停用场景", description = "停用后匿名客户端看不到该场景。reason 必填，写入审计日志")
     @PutMapping("/scenes/{id}/enabled")
     public Map<String, Object> enabled(@Parameter(description = "场景 ID", required = true) @PathVariable UUID id,
-                                       @Valid @RequestBody EnabledInput s) {
+                                       @Valid @RequestBody SceneEnabledInput s) {
         return service.enabled(id.toString(), s.enabled(), s.expectedVersion(), s.reason());
     }
 
@@ -108,6 +103,6 @@ public class SceneController {
                                       @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
                                       @Parameter(description = "偏移量", example = "0")
                                       @RequestParam(defaultValue = "0") @Min(0) int offset) {
-        return Map.of("items", mapper.audits(limit, offset), "total", mapper.auditCount());
+        return service.audits(limit, offset);
     }
 }

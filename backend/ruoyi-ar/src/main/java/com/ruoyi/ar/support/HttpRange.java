@@ -1,4 +1,4 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.support;
 
 import java.io.IOException;
 import java.io.InputStream;

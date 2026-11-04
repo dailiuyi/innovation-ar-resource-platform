@@ -1,4 +1,7 @@
-package com.ruoyi.ar.storage;
+package com.ruoyi.ar.config;
+
+import com.ruoyi.ar.storage.ArtifactStorage;
+import com.ruoyi.ar.storage.LocalArtifactStorage;
 
 import java.io.IOException;
 import java.nio.file.Path;

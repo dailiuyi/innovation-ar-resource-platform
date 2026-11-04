@@ -1,4 +1,6 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.mapper;
+
+import com.ruoyi.ar.dto.SceneInput;
 
 import java.util.List;
 import java.util.Map;

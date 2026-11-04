@@ -1,6 +1,6 @@
 # 业务代码阅读与人工 Review 导读
 
-整理日期：2026-11-04。源码基线：`eea5266`（Knife4j 部署版本）。本次在 `docs/business-review-guide` 补注释和导读；不改变业务行为。这里记录源码中的执行顺序，供人工核对，不代表独立审查已通过。
+整理日期：2026-11-04。源码基线：`eea5266`（Knife4j 部署版本）。注释导读已于 `659b9a8` 提交；2026-11-04 在 `refactor/ar-package-layers` 按职责分包，本文链接同步指向新位置。这里记录源码中的执行顺序，供人工核对，不代表独立审查已通过。
 
 ## 从哪里开始读
 
@@ -12,12 +12,14 @@
 | 2 | [VersionPanel.vue](../frontend/src/views/demo/VersionPanel.vue)：picked → startImport → runSession | 整条导入链路的页面编排，自动发布也在这里 |
 | 3 | [scenePackage.js](../frontend/src/utils/scenePackage.js)、[hash.worker.js](../frontend/src/views/demo/hash.worker.js) | 路径/清单预检、摘要、续传检查、三路派发 |
 | 4 | [scene.js](../frontend/src/api/scene.js)、[request.js](../frontend/src/utils/request.js) | HTTP 路径、原始字节上传、Bearer Token、响应处理 |
-| 5 | [SceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/SceneController.java)、[SceneVersionController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/SceneVersionController.java) | HTTP 参数校验、角色要求与状态码；不在控制器编排文件状态 |
-| 6 | [SceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/SceneService.java)、[SceneMapper](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/SceneMapper.java) | 场景写入与审计的事务，场景软删除 |
-| 7 | [SceneVersionService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/SceneVersionService.java)：create → upload → finish → publish | 清单固定、数据库事务与存储提交分段、发布指针 |
+| 5 | [SceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/controller/SceneController.java)、[SceneVersionController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/controller/SceneVersionController.java) | HTTP 参数校验、角色要求与状态码；不在控制器编排文件状态 |
+| 6 | [SceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/service/SceneService.java)、[SceneMapper](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/mapper/SceneMapper.java) | 场景写入与审计的事务，场景软删除 |
+| 7 | [SceneVersionService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/service/SceneVersionService.java)：create → upload → finish → publish | 清单固定、数据库事务与存储提交分段、发布指针 |
 | 8 | [LocalArtifactStorage](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/storage/LocalArtifactStorage.java) | 文件锁、大小/SHA256 校验、暂存与正式文件 |
-| 9 | [ClientSceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/ClientSceneController.java)、[ClientSceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/ClientSceneService.java)、[HttpRange](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/HttpRange.java) | 匿名可见条件、下载前复核、Range 响应 |
+| 9 | [ClientSceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/controller/ClientSceneController.java)、[ClientSceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/service/ClientSceneService.java)、[HttpRange](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/support/HttpRange.java) | 匿名可见条件、下载前复核、Range 响应 |
 | 10 | SceneVersionService：removeVersion → completeDeletion → afterPropertiesSet | 删除意图、部分失败、启动续做与文件对账 |
+
+目录与依赖边界见 [ruoyi-ar 模块说明](../backend/ruoyi-ar/README.md)。请求 DTO 已独立到 dto 包；场景和审计列表由 Controller 调用 SceneService，再访问 SceneMapper。
 
 ## 请求如何穿过系统
 
@@ -38,7 +40,7 @@ flowchart LR
 
 开发环境 API 前缀为 `/dev-api`，由 Vite 代理去掉；生产管理 API 前缀为 `/prod-api`，由 nginx 去掉。匿名 `/api/v1/client/` 保持原路径代理。路径规则见 [nginx.conf](../deploy/nginx.conf) 与 [vite.config.js](../frontend/vite.config.js)。
 
-[SecurityConfig](../backend/ruoyi-framework/src/main/java/com/ruoyi/framework/config/SecurityConfig.java) 只放行列出的路由；管理场景路由要求登录，版本控制器另有 `ar_admin` 角色检查。Knife4j 页面与 JSON 可匿名读，这不授予业务写权限。[ArExceptionHandler](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/ArExceptionHandler.java) 处理 AR 控制器异常；过滤器阶段的未登录拒绝和框架登录接口不走同一响应出口。
+[SecurityConfig](../backend/ruoyi-framework/src/main/java/com/ruoyi/framework/config/SecurityConfig.java) 只放行列出的路由；管理场景路由要求登录，版本控制器另有 `ar_admin` 角色检查。Knife4j 页面与 JSON 可匿名读，这不授予业务写权限。[ArExceptionHandler](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/exception/ArExceptionHandler.java) 处理 AR 控制器异常；过滤器阶段的未登录拒绝和框架登录接口不走同一响应出口。
 
 ## 数据分别保存什么
 
@@ -133,4 +135,4 @@ stateDiagram-v2
 
 ## 本轮验证
 
-验证命令、结果和限制记录在 [验证记录](06-validation.md) 的“2026-11-04 业务注释与人工 Review 导读”。本轮不重启或部署服务；云端继续运行 `eea5266` 对应的部署产物。
+验证命令、结果和限制记录在 [验证记录](06-validation.md) 的“2026-11-04 业务注释与人工 Review 导读”。本次分包仅在本地隔离实例验证，未部署云端；注释阶段与分包阶段的证据分别记录。

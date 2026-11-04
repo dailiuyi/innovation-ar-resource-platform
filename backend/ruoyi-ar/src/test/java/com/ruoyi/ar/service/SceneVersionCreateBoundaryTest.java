@@ -1,4 +1,7 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.service;
+
+import com.ruoyi.ar.dto.SceneVersionCreateInput;
+import com.ruoyi.ar.dto.SceneVersionFileInput;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,15 +25,15 @@ class SceneVersionCreateBoundaryTest {
         return new SceneVersionService(null, null, null, JSON, maxBytes, maxFiles, versionBytes);
     }
 
-    private static SceneVersionController.FileInput file(String path, long bytes) {
-        return new SceneVersionController.FileInput(path, bytes, SHA);
+    private static SceneVersionFileInput file(String path, long bytes) {
+        return new SceneVersionFileInput(path, bytes, SHA);
     }
 
-    private static SceneVersionController.CreateInput input(SceneVersionController.FileInput... files) {
-        return new SceneVersionController.CreateInput(UUID.randomUUID(), "", List.of(files));
+    private static SceneVersionCreateInput input(SceneVersionFileInput... files) {
+        return new SceneVersionCreateInput(UUID.randomUUID(), "", List.of(files));
     }
 
-    private static ResponseStatusException rejected(SceneVersionService service, SceneVersionController.CreateInput input) {
+    private static ResponseStatusException rejected(SceneVersionService service, SceneVersionCreateInput input) {
         return assertThrows(ResponseStatusException.class, () -> service.create(UUID.randomUUID(), input));
     }
 

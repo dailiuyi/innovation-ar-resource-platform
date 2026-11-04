@@ -1,4 +1,4 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.support;
 
 import java.text.Normalizer;
 import java.util.ArrayList;

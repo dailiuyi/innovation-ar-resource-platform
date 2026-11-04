@@ -1,4 +1,4 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.exception;
 
 import java.util.Map;
 import java.util.UUID;

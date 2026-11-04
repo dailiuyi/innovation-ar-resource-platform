@@ -1,4 +1,10 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.service;
+
+import com.ruoyi.ar.dto.SceneVersionCreateInput;
+import com.ruoyi.ar.dto.SceneVersionEditInput;
+import com.ruoyi.ar.dto.SceneVersionFileInput;
+import com.ruoyi.ar.support.HttpRange;
+import com.ruoyi.ar.support.RelativePath;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -300,7 +306,7 @@ public class SceneVersionService implements InitializingBean {
      * </ol>
      * 不上传任何字节；上传由 {@link #upload} 逐个文件进行。
      */
-    public Created create(UUID sceneId, SceneVersionController.CreateInput input) {
+    public Created create(UUID sceneId, SceneVersionCreateInput input) {
         var files = input.files();
         if (files.size() > versionMaxFiles) throw error(HttpStatus.PAYLOAD_TOO_LARGE, "超过每个版本的文件数量上限");
         long total = 0;
@@ -312,7 +318,7 @@ public class SceneVersionService implements InitializingBean {
         if (total > versionMaxBytes) throw error(HttpStatus.PAYLOAD_TOO_LARGE, "超过每个版本的总大小上限");
         List<String> paths;
         try {
-            paths = RelativePath.normalizeAll(files.stream().map(SceneVersionController.FileInput::relativePath).toList());
+            paths = RelativePath.normalizeAll(files.stream().map(SceneVersionFileInput::relativePath).toList());
         } catch (IllegalArgumentException e) {
             throw error(HttpStatus.BAD_REQUEST, "files " + e.getMessage());
         }
@@ -373,7 +379,7 @@ public class SceneVersionService implements InitializingBean {
     /**
      * 修改版本说明，用版本的 lock_version 做乐观锁；版本正在删除时拒绝。文件清单不可改。
      */
-    public Map<String, Object> edit(UUID versionId, SceneVersionController.EditInput input) {
+    public Map<String, Object> edit(UUID versionId, SceneVersionEditInput input) {
         return tx.execute(s -> {
             UUID sceneId = sceneOf(versionId);
             scene(sceneId, true);

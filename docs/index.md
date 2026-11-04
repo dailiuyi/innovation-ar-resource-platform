@@ -12,7 +12,7 @@
 | 如何开发、启动、打包 | [开发工作流](development-workflow.md)、[Windows 原生手册](08-demo-runbook.md)、[容器手册](10-local-infrastructure.md) | 云端 `81.71.154.125:18081` 经 nginx 提供公网 HTTPS；仅迁移账号，本机原实例停止并保留数据；隔离验收 `127.0.0.1:18082`，Vite `127.0.0.1:43174`，不能混用数据与配置 |
 | 下载参考工具如何工作 | [资源传输参考](11-artifact-transfer-reference.md) | 场景下载使用 download_scene.py，复用单文件 Range/If-Range；通用打包扩展不是当前业务流程 |
 | 应该跑什么检查 | [Harness 使用说明](13-harness.md) | profile 通过只覆盖声明的范围 |
-| 人工阅读业务代码，从哪里开始 | [业务代码 Review 导读](23-code-review-guide.md) | 源码调用链、状态与事务/文件边界；不替代独立审查 |
+| 人工阅读业务代码，从哪里开始 | [业务代码 Review 导读](23-code-review-guide.md)、[ruoyi-ar 分包说明](../backend/ruoyi-ar/README.md) | 源码调用链、状态与事务/文件边界；不替代独立审查 |
 | 如何审查改动 | [Code Review 默认规则](14-code-review.md) | 短提示指定范围与重点，默认独立审查、不修改 |
 | 如何快速验收并提供预览 | [专项检查与审查实例](16-fast-review.md) | 先需求专项，固定提交目录，独立审查后交付回环实例 |
 | 以前验证过什么 | [验证记录](06-validation.md)、[证据索引](evidence/README.md) | 历史报告不证明当前未提交修改 |

@@ -591,3 +591,24 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - `git -c core.whitespace=cr-at-eol diff --check`：通过。
 
 未执行前端生产构建、HTTP/数据库集成、并发故障注入或浏览器验收；语法树/字节码一致性和现有单测证明本轮未改业务逻辑，不等于原业务全部正确。人工验收路径：从导读阅读顺序进入 VersionPanel.runSession，再跟到 SceneVersionService.uploadLocked/finish，最后查看删除及恢复；按导读末尾检查点核对源码。
+
+## 2026-11-04 ruoyi-ar 按职责分包
+
+用户确认分层计划后执行。主机 elma-ubuntu-pc，工作区 `/home/elma/文档/Code/innovation-ar-knife4j`，独立分支 `refactor/ar-package-layers`，基线 `659b9a8047eabde8970b26ff8de9389b5e3c8b04`。主工作区的 main 与原未提交修改保持原状；未推送、未部署云端。
+
+将类分到 controller/dto/service/mapper/storage/config/exception/support，测试同步分到 service/support/storage。原 Controller 内的五个请求 record 提取为 dto 下独立业务类型，SceneInput 一并迁移；字段、校验和原 OpenAPI schema 名保持一致。Service 不再引用 Controller 类型，SceneController 的列表和审计查询改为经过 SceneService。SceneMapper 移入 mapper，移除 AR 根包的额外扫描，使用项目通用 mapper 扫描。原 JdbcTemplate SQL、事务、锁和 Map 响应保留。目录职责与后续约束见 [模块说明](../backend/ruoyi-ar/README.md)，人工阅读入口见 [Review 导读](23-code-review-guide.md)。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：最终通过，50 tests，0 failures/errors/skipped；报告 `.local/java-check/cec498ee59f9/report.json`。JBR 25.0.4.1 编译目标 Java 21；Jar SHA256 `0904c7a0b528a299bbc246b72aea7c4878e119b766643e0bc11d6d9bfda5e877`。
+- 静态核对：所有生产类 package 与实际目录一致，AR 根包无平铺 Java 文件，service 无 controller 导入，SceneController 不再持有 Mapper；SceneVersionService、ClientSceneService、SceneMapper 的字符串字面量（含 SQL）与基线完全一致。
+- 使用原工作区 `.local/ingestion-venv/bin/python` 执行 `scripts/harness.py doctor --profile quick` 和 `scripts/harness.py check --profile quick`：通过。首次 quick 报告 `.local/harness/20261104T073219Z-us_o5fze/report.json`；完成验证记录后最终 quick 通过，日志 `.local/layers/quick-final.txt`，报告 `.local/harness/20261104T073504Z-xzi9411l/report.json`。
+- 复用 `prepare_4dgs_check.py` 准备的 `innovation-ar-resource-platform-infra-check`，用 `.local/check-override.json` 挂载本轮 Jar，执行 `up -d --no-deps --no-build --force-recreate --wait --wait-timeout 240 backend gateway`。backend/gateway 健康，PostgreSQL 17.6，日常云端服务未操作。
+- `scripts/verify_ingestion.py --base-url http://127.0.0.1:18082 --admin-base-url http://127.0.0.1:18082/prod-api --credentials-file <原隔离凭据文件> --report-dir .local/layers/ingestion`：74/74 HTTP 检查通过。涵盖版本创建与幂等、校验与重传、说明修改、发布、物理删除、审计、21 MiB 上传与 Range，以及不同文件可并行/同文件返回 409。报告 `.local/layers/ingestion/validation-ingestion.json`。
+- `python3 .local/layers/http_boundaries.py`：11/11 通过，覆盖隔离账号登录、管理路由未登录 401、SceneService 列表与审计分页、启停及嵌套文件 DTO 校验 400、AR advice traceId、匿名目录/详情与文件 GET/Range/HEAD。报告 `.local/layers/http-boundaries.json`。凭据仅从私有 JSON 读取，Token 仅留内存。
+- 对比隔离实例迁移前后的 `/v3/api-docs/ar-client`、`/v3/api-docs/ar-admin`：解析后的整个 JSON 完全相同，分别 3/10 个路径。前后快照位于 `.local/layers/before-*.json`、`after-*.json`，确认分组扫描、schema、认证声明和路径保持一致。
+- `git -c core.whitespace=cr-at-eol diff --check`：通过。
+
+限制：本轮未执行浏览器点击、启动恢复故障注入、磁盘写满/断电或 Unity/手机播放验收。HTTP 使用合成内容，不证明模型可播放。已有单测保留原断言；未扩大包级辅助方法的可见性。分包本身不代表所有原有业务路径均已独立审查。
+
+保留的隔离实例入口 `http://127.0.0.1:18082/doc.html`，凭据仍在主工作区 `.local/4dgs-task/4dgs-check/credentials.json`。本轮实际启动配置与 Jar 指纹记录在独立工作区 `.local/layers/runtime.json`；需要停止时运行 `python3 .local/layers/stop_instance.py`（仅停止隔离 backend/gateway，保留数据库、存储与证据）。人工验收：按模块 README 查目录，在导读依次打开 Controller → DTO → Service → Mapper/Storage，并在本地文档选择分组查看接口。

@@ -1,4 +1,4 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 

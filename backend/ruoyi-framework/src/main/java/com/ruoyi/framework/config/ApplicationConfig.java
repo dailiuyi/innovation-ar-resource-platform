@@ -17,7 +17,6 @@ import org.springframework.context.annotation.EnableAspectJAutoProxy;
 @EnableAspectJAutoProxy(exposeProxy = true)
 // 指定要扫描的Mapper类的包的路径
 @MapperScan("com.ruoyi.**.mapper")
-@MapperScan(basePackages = "com.ruoyi.ar", annotationClass = org.apache.ibatis.annotations.Mapper.class)
 public class ApplicationConfig
 {
     /**

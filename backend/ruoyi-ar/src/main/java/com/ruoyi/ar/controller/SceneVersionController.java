@@ -1,4 +1,9 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.controller;
+
+import com.ruoyi.ar.dto.SceneVersionCreateInput;
+import com.ruoyi.ar.dto.SceneVersionEditInput;
+import com.ruoyi.ar.dto.SceneVersionPublishInput;
+import com.ruoyi.ar.service.SceneVersionService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -14,7 +19,6 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -36,50 +40,6 @@ public class SceneVersionController {
     public SceneVersionController(SceneVersionService service) {
         this.service = service;
     }
-
-    /**
-     * 登记的单个文件：相对路径、字节数（至少 1）和小写十六进制 SHA256。
-     */
-    public record FileInput(
-            @Schema(description = "版本内相对路径", example = "models/a.bundle", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotBlank @Size(max = 1024) String relativePath,
-            @Schema(description = "字节数（至少 1）", example = "1048576", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull @Min(1) Long bytes,
-            @Schema(description = "小写十六进制 SHA256", example = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull @Pattern(regexp = "[0-9a-f]{64}") String sha256) {
-    }
-
-    /**
-     * 创建版本请求。requestKey 是客户端生成的幂等键，重试同一导入时复用；
-     * files 是整个版本的固定文件清单。
-     */
-    public record CreateInput(
-            @Schema(description = "客户端生成的幂等键，重试同一导入时复用", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull UUID requestKey,
-            @Schema(description = "版本说明（最长 2000 字符）", example = "街道白天场景 v2", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull @Size(max = 2000) String description,
-            @Schema(description = "整个版本的固定文件清单", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotEmpty List<@Valid FileInput> files) {
-    }
-
-    /**
-     * 修改版本说明；expectedVersion 是版本自身的乐观锁版本号。
-     */
-    public record EditInput(
-            @Schema(description = "版本说明（最长 2000 字符）", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull @Size(max = 2000) String description,
-            @Schema(description = "版本自身的乐观锁版本号", example = "2", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull @Min(0) Long expectedVersion) {
-    }
-
-    /**
-     * 发布请求；expectedSceneVersion 是场景的乐观锁版本号，用来发现发布期间场景被改动。
-     */
-    public record PublishInput(
-            @Schema(description = "场景的乐观锁版本号", example = "5", requiredMode = Schema.RequiredMode.REQUIRED)
-            @NotNull @Min(0) Long expectedSceneVersion) {
-    }
-
 
     /**
      * 返回存储相关的上限（单文件大小、每版本文件数与总字节数），供前端导入前预检。
@@ -109,7 +69,7 @@ public class SceneVersionController {
     @Operation(summary = "创建版本", description = "首次创建返回 201；同一 requestKey 且内容相同的重试返回 200 和已有版本")
     @PostMapping("/scenes/{sceneId}/versions")
     public ResponseEntity<Map<String, Object>> create(@Parameter(description = "场景 ID", required = true) @PathVariable UUID sceneId,
-                                                       @Valid @RequestBody CreateInput input) {
+                                                       @Valid @RequestBody SceneVersionCreateInput input) {
         var result = service.create(sceneId, input);
         return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.version());
     }
@@ -129,7 +89,7 @@ public class SceneVersionController {
     @Operation(summary = "修改版本说明", description = "只修改版本说明；文件清单创建后不可变")
     @PutMapping("/scene-versions/{versionId}")
     public Map<String, Object> edit(@Parameter(description = "版本 ID", required = true) @PathVariable UUID versionId,
-                                    @Valid @RequestBody EditInput input) {
+                                    @Valid @RequestBody SceneVersionEditInput input) {
         return service.edit(versionId, input);
     }
 
@@ -139,7 +99,7 @@ public class SceneVersionController {
     @Operation(summary = "发布版本", description = "把该版本设为场景当前发布版本；原发布版本保留，仍可查看和删除")
     @PostMapping("/scene-versions/{versionId}/publish")
     public Map<String, Object> publish(@Parameter(description = "版本 ID", required = true) @PathVariable UUID versionId,
-                                        @Valid @RequestBody PublishInput input) {
+                                        @Valid @RequestBody SceneVersionPublishInput input) {
         return service.publish(versionId, input.expectedSceneVersion());
     }
 

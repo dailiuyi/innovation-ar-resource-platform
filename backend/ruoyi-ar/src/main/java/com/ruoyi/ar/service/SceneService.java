@@ -1,4 +1,7 @@
-package com.ruoyi.ar;
+package com.ruoyi.ar.service;
+
+import com.ruoyi.ar.dto.SceneInput;
+import com.ruoyi.ar.mapper.SceneMapper;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,6 +27,16 @@ public class SceneService {
     public SceneService(SceneMapper mapper, ObjectMapper json) {
         this.mapper = mapper;
         this.json = json;
+    }
+
+    /** 场景列表与总数共用名称过滤条件；控制器只负责参数校验。 */
+    public Map<String, Object> list(String name, int limit, int offset) {
+        return Map.of("items", mapper.list(name, limit, offset), "total", mapper.count(name));
+    }
+
+    /** 审计列表独立于场景可见性，软删除后仍保留记录。 */
+    public Map<String, Object> audits(int limit, int offset) {
+        return Map.of("items", mapper.audits(limit, offset), "total", mapper.auditCount());
     }
 
     /**
