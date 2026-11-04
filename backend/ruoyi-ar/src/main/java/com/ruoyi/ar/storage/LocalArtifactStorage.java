@@ -27,7 +27,7 @@ import java.util.UUID;
  * <p>目录布局（根目录下）：
  * <ul>
  *   <li>{@code staging/<uuid>.part}：正在接收的内容；</li>
- *   <li>{@code staging/<uuid>.ready}：已接收且大小、SHA256 校验通过，等待发布；</li>
+ *   <li>{@code staging/<uuid>.ready}：已接收且大小、SHA256 校验通过，等待提交正式存储；</li>
  *   <li>{@code committed/<uuid>.bin}：正式文件，对外读取只看这里；</li>
  *   <li>{@code locks/<uuid>.lock}：每个文件一把文件锁，保护写入、恢复和删除。</li>
  * </ul>
@@ -86,7 +86,9 @@ public final class LocalArtifactStorage implements ArtifactStorage {
     /**
      * 存储流程：在文件锁内，若已有完整字节（.bin 或 .ready）就只校验、不覆盖，并且不读取 input；
      * 否则写入 .part，边写边算大小和 SHA256，校验通过后改名为 .ready，最后硬链接成 .bin 并删除 .ready。
-     * 任何一步失败都会删除 .part，不留下可读的正式文件。拿不到文件锁时抛 IOException，由调用方重试。
+     * 接收或改名失败会尝试清理 .part；提交阶段失败可能保留 .ready 或已创建的 .bin，供 recover 核对。
+     * 这里的 publish 只提交存储文件，不等于业务上发布场景版本，也不会修改数据库。
+     * 拿不到文件锁时抛 IOException，由调用方决定重试。
      */
     @Override
     public void store(Descriptor expected, InputStream input) throws IOException {
@@ -115,6 +117,7 @@ public final class LocalArtifactStorage implements ArtifactStorage {
                 }
                 throw error;
             }
+            // 先建立正式硬链接再删暂存名；两者短暂并存时指向同一份字节，不再复制/重算摘要。
             publish(target, ready);
             return null;
         });

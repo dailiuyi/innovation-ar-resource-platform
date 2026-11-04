@@ -29,6 +29,9 @@ import org.springframework.web.server.ResponseStatusException;
  *
  * <p>前提：单个应用实例 + 一个私有本地存储卷，没有后台上传 Worker。
  * <p>版本的文件清单（相对路径、字节数、SHA256）在创建时固定，之后只能改说明。
+ * <p>阅读顺序：create 固定清单 → upload/finish 入库 → publish 切换指针；
+ * removeVersion/completeDeletion 与 afterPropertiesSet 负责删除和中断恢复。
+ * 数据库事务与文件 IO 分开提交，不能依赖数据库回滚撤销磁盘写入。
  * <p>并发规则：
  * <ul>
  *   <li>数据库层：创建、编辑、发布、删除版本时，先对所属场景行 {@code for update}，把同一场景的这些操作串行化。</li>
@@ -45,6 +48,8 @@ public class SceneVersionService implements InitializingBean {
      * 版本摘要查询（不含文件明细）。uploadStatus 由文件状态聚合得出，优先级从高到低：
      * DELETING（有未完成的删除，且没有失败原因）、DELETE_FAILED（有未完成的删除，且已记录失败原因）、
      * UPLOADING（有文件在上传）、FAILED（有文件失败）、READY（全部文件 AVAILABLE）、否则 PENDING。
+     * 这些是查询时推导的版本状态，不是 ar_scene_version 中独立维护的状态列。
+     * READY 与 published 独立：前者表示文件已入库，后者表示场景指针指向此版本。
      * published 表示它是否是所属场景当前的发布版本。场景已软删除时查不到。
      */
     private static final String SUMMARY = "select v.id::text as id, v.scene_id::text as \"sceneId\", v.version_no as \"versionNo\", v.description, v.lock_version as \"lockVersion\","
@@ -322,6 +327,7 @@ public class SceneVersionService implements InitializingBean {
             specs.add(new FileSpec(paths.get(i), files.get(i).bytes(), files.get(i).sha256()));
         final long totalBytes = total;
         return tx.execute(s -> {
+            // 场景行锁覆盖幂等检查、分配版本号和插入；不同场景可以独立创建。
             scene(sceneId, true);
             // 幂等键与删除回执：已删除的版本留有回执，不能静默重建同一个 requestKey
             if (Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from ar_version_deletion where scene_id=? and request_key=?)", Boolean.class, sceneId, input.requestKey())))
@@ -424,6 +430,7 @@ public class SceneVersionService implements InitializingBean {
             }
             return current;
         });
+        // 上面的事务已结束，非 AVAILABLE 记录已提交为 UPLOADING；若落盘后 finish 未提交，启动对账仍可补记。
         boolean wasAvailable = "AVAILABLE".equals(row.get("status"));
         try {
             var expected = descriptor(row);
@@ -442,6 +449,7 @@ public class SceneVersionService implements InitializingBean {
             finish(versionId, id, false, reason, false);
             throw mismatch ? error(HttpStatus.UNPROCESSABLE_ENTITY, reason) : error(HttpStatus.SERVICE_UNAVAILABLE, reason);
         }
+        // store 成功只保证存储层完成；finish 成功才把数据库状态变为 AVAILABLE。
         if (!wasAvailable) finish(versionId, id, true, null, false);
         return file(versionId, id);
     }
@@ -484,6 +492,8 @@ public class SceneVersionService implements InitializingBean {
      * 发布：把版本设为场景当前版本，原发布版本不受影响。已经是发布版本则直接返回（幂等）。
      * 持版本写锁，并在事务里锁场景行；用场景的 lock_version 做乐观锁，不一致返回 409。
      * 只检查数据库里的文件状态，不读存储、不重算摘要。
+     * expectedSceneVersion 是场景修订号；与编辑说明用的版本 lockVersion 是两套独立计数。
+     * 发布只切换指针，不移动文件；前端自动发布和人工发布都调用本方法。
      */
     public Map<String, Object> publish(UUID versionId, long expectedSceneVersion) {
         if (Boolean.TRUE.equals(summary(versionId).get("published"))) return detail(versionId);
@@ -568,6 +578,7 @@ public class SceneVersionService implements InitializingBean {
                 audit(sceneId, versionId, null, "VERSION_DELETE_REQUEST", detail);
                 return true;
             }));
+            // 删除意图已提交，接下来允许部分文件先被删掉；失败保留行和回执，重试再继续。
             if (needed && !completeDeletion(versionId, false))
                 throw error(HttpStatus.SERVICE_UNAVAILABLE, "物理删除未完成，请查看失败原因并重试删除版本");
         } finally {
@@ -577,7 +588,8 @@ public class SceneVersionService implements InitializingBean {
 
     /**
      * 执行删除：先按 id 删除全部存储文件，成功后才在一个事务里删除文件行、版本行并把回执标记完成，
-     * 因此不会出现行没了而字节还在的状态。存储删除失败只记录失败原因和审计，保留数据库行以便重试。
+     * 文件已删但删行事务未提交时，重试会再次按相同 UUID 删除，再完成数据库提交。
+     * 存储删除失败只记录失败原因和审计，保留数据库行以便重试；不把已删的部分文件恢复出来。
      * 审计的操作者取自回执（发起删除的人）。调用方须持版本写锁。返回 true 表示已完成。
      */
     private boolean completeDeletion(UUID versionId, boolean recovery) {
@@ -630,7 +642,8 @@ public class SceneVersionService implements InitializingBean {
 
     /**
      * 匿名读取“当前发布版本”的单个文件。URL 里写明了发放时的版本：场景一旦指向别的版本就返回 409，
-     * 所以一次下载过程不会混入两个版本。存在性检查先于加锁，避免任意 id 都创建一把锁；
+     * 每个请求按 URL 中的版本和文件 id 读取，不把旧 URL 自动切到新文件；正在传输的请求不会持续检查发布指针。
+     * 存在性检查先于加锁，避免任意 id 都创建一把锁；
      * 加锁后再检查一次，读锁一直持有到响应流结束。URL 末尾的文件名只做比对，从不用作路径。
      */
     public void clientDownload(UUID sceneId, UUID versionId, UUID fileId, String fileName, HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -691,6 +704,7 @@ public class SceneVersionService implements InitializingBean {
      */
     @Override
     public void afterPropertiesSet() {
+        // 必须先续做删除：这些版本不能再被后面的文件恢复逻辑重新标为可用。
         for (var row : db.queryForList("select version_id from ar_version_deletion where completed_at is null order by version_id")) {
             UUID versionId = (UUID) row.get("version_id");
             lockWrite(versionId);
@@ -718,6 +732,8 @@ public class SceneVersionService implements InitializingBean {
                 UUID versionId = UUID.fromString((String) row.get("versionId"));
                 String status = (String) row.get("status");
                 try {
+                    // AVAILABLE 不在本次查询内；这里不是对全部正式文件做周期性完整性扫描。
+                    // 只有 .part 时 recover 返回 false；PENDING/FAILED 保持原状态，UPLOADING 改为 FAILED。
                     if (leftovers.contains(id) && storage.recover(descriptor(row)))
                         finish(versionId, id, true, null, true);
                     else if ("UPLOADING".equals(status))

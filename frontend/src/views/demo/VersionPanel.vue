@@ -94,6 +94,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createVersion, deleteVersion, getScene, getVersion, getVersionConfig, getVersionFile, listVersions, publishVersion, updateVersion, uploadVersionFile } from '@/api/scene'
 import { PackageError, UPLOAD_CONCURRENCY, checkDigests, checkLimits, checkSelection, createRequest, readPackage, runUploads, uploadPlan } from '@/utils/scenePackage'
+// 页面编排：选文件 → 本地校验/哈希 → 创建固定清单 → 三路逐文件上传 → 查询就绪 → 自动发布。
+// importPlan 是待确认的选择；session 保存当前页的 File 对象与幂等键，刷新页面后需重新选择原文件。
 const props=defineProps({sceneId:String})
 const emit=defineEmits(['close','sceneUpdated'])
 const route=useRoute(),router=useRouter()
@@ -110,6 +112,7 @@ const uploadStates={PENDING:'待上传',UPLOADING:'上传中',FAILED:'有失败'
 const fileStates={PENDING:'待上传',UPLOADING:'处理中',AVAILABLE:'已入库',FAILED:'失败'}
 let worker,rejectHash,cancelled=false,runToken=0,resumeId=null
 const controllers=new Set()
+// 请求序号只阻止过期响应覆盖当前视图，不撤销服务端已完成的创建、上传或发布。
 let sceneRequest=0,listRequest=0,detailRequest=0
 const FileDetail=defineComponent({props:{file:Object},setup:props=>()=>
   h('div',{class:'file-detail'},[h('div',['SHA-256：',h('code',{class:'digest'},props.file.sha256)]),h('div',`文件编号 ${props.file.fileId}，上传尝试 ${props.file.attempts} 次，${props.file.bytes} 字节`)])})
@@ -161,6 +164,7 @@ async function selectVersion(id){
     return version
   }catch(e){error.value=message(e);return null}
 }
+// 恢复 URL 指定版本；不可用时优先选当前发布版本，否则选当前页版本号最大的记录。
 async function selectInitial(restored){
   if(restored){
     if(await selectVersion(restored))return
@@ -181,6 +185,7 @@ async function reload(){
     if(selected.value)await loadDetail(selected.value.id)
   }catch(e){error.value=message(e)}
 }
+// 说明编辑使用 selected.lockVersion；发布使用列表返回的 sceneLockVersion，两者不能混用。
 async function saveDescription(){
   saving.value=true
   try{
@@ -237,6 +242,7 @@ function openPicker(mode,versionId=null){
 function chooseDirectory(){openPicker('directory')}
 function chooseFiles(){openPicker('files')}
 function chooseFor(versionId,mode){openPicker(mode,versionId)}
+// 新导入先显示清单和说明输入；续传先核对路径/大小，再进入 session 计算摘要比对原版本。
 async function picked(event,mode){
   const files=Array.from(event.target.files||[]);if(!files.length)return
   const target=resumeId;resumeId=null
@@ -251,6 +257,7 @@ async function picked(event,mode){
     await runSession()
   }catch(e){error.value=message(e)}
 }
+// requestKey 在一次 session 内固定；创建响应丢失后继续本 session，可命中服务端已有版本。
 async function startImport(){
   const plan=importPlan.value
   if(!plan)return
@@ -258,6 +265,7 @@ async function startImport(){
   session.value={sceneId:props.sceneId,versionId:null,pkg:plan.pkg,digests:null,expect:null,requestKey:randomKey(),description:importDescription.value}
   await runSession()
 }
+// 每个文件单独启用 Worker；大文件分块读取，避免在 Vue 主线程一次读入整个文件。
 function digest(file,onProgress){
   return new Promise((resolve,reject)=>{
     rejectHash=reject
@@ -291,6 +299,7 @@ async function hashAll(pkg,live){
   }
   return digests
 }
+// 停止本地哈希、后续派发和在途 HTTP；不删除已经登记的版本，也不能据此判定服务端失败。
 function cancel(){cancelled=true;worker?.terminate();rejectHash?.(new Error('已取消'));for(const c of controllers)c.abort()}
 // 查询失败或服务端仍在处理时，上传结果无法确认；与“请求失败”分开列出。
 class UploadUnconfirmedError extends Error {}
@@ -304,6 +313,7 @@ async function reconcile(versionId,record,onState){
   if(state.status==='UPLOADING')throw new UploadUnconfirmedError('服务端仍在处理，请稍后点击“刷新状态”')
   throw new Error(`上传未完成${state.failureReason?'：'+state.failureReason:''}，可继续上传`)
 }
+// 明确的业务错误直接交给本轮汇总；无响应/502/504 或非 AVAILABLE 响应，再查单文件确认结果。
 async function uploadOne(versionId,record,file,onProgress,onState){
   const controller=new AbortController()
   controllers.add(controller)
@@ -316,9 +326,15 @@ async function uploadOne(versionId,record,file,onProgress,onState){
   }finally{controllers.delete(controller)}
   await reconcile(versionId,record,onState)
 }
+/**
+ * 同一 session 可继续执行：摘要和 versionId 已取得就复用，再按服务端最新状态规划上传。
+ * runToken 隔离场景切换后的旧回调；文件上传失败相互独立，runUploads 等待本轮全部在途任务结束。
+ * 上传全部确认后才调用发布；发布失败保留已入库文件，提示人工核对并手动发布。
+ */
 async function runSession(){
   const s=session.value
   if(!s||busy.value||publishing.value||s.sceneId!==props.sceneId)return
+  // 固定本轮开始时的场景修订号；上传期间场景被修改，自动发布返回 409，不覆盖别人的操作。
   const expectedSceneVersion=sceneLockVersion.value
   const token=++runToken
   const live=()=>token===runToken&&s.sceneId===props.sceneId
@@ -341,6 +357,7 @@ async function runSession(){
       await selectVersion(created.id)
       if(!live())return
     }
+    // 不沿用初次创建的文件状态快照：重试前重新读取，以跳过已入库或其他页面正在处理的文件。
     const detail=reactive(await getVersion(s.versionId))
     if(!live())return
     if(selected.value?.id===detail.id)selected.value=detail
@@ -399,6 +416,7 @@ async function runSession(){
       const failed=issues.filter(i=>i.kind==='请求失败').length
       throw new Error(`本轮请求失败 ${failed} 个，结果未确认 ${issues.length-failed} 个。完整列表见下方；刷新状态后继续上传，已入库和处理中不会重复发送。`)
     }
+    // 发送进度到 100% 还不够；再读全版本，确认 READY 且所有文件 AVAILABLE 才进入发布阶段。
     const complete=await getVersion(s.versionId)
     if(!live())return
     if(cancelled)throw new Error('已取消')
@@ -441,6 +459,7 @@ async function loadSceneName(id,sequence){
     sceneName.value=scene?.name||''
   }catch{if(sequence===sceneRequest)sceneName.value=''}
 }
+// 场景切换会清空本地选择和 session；旧请求可能仍在服务端完成，回来刷新状态才能确认。
 watch(()=>props.sceneId,async id=>{
   const sequence=++sceneRequest
   ++listRequest;++detailRequest

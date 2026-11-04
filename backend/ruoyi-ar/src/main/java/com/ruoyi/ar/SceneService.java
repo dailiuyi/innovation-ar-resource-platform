@@ -13,7 +13,8 @@ import org.springframework.http.HttpStatus;
 
 /**
  * 场景自身（名称、启用状态、软删除）的业务逻辑。每个写操作都在同一事务内完成：
- * 先读修改前的快照，再按乐观锁更新，最后写审计，审计里保存修改前后的完整快照。
+ * 新建记录 after，删除记录 before，更新和启停记录 before/after；业务写入与对应审计一起提交。
+ * 查询前置快照后，写 SQL 仍须匹配 lock_version，不能仅凭先前查询结果决定更新成功。
  */
 @Service
 public class SceneService {
@@ -80,6 +81,7 @@ public class SceneService {
 
     /**
      * 软删除。同样以 expectedVersion 防止基于过期页面误删。
+     * 只停用并隐藏场景，不调用 ArtifactStorage，不物理删除版本或文件。整版清理由 SceneVersionService 负责。
      */
     @Transactional
     public void delete(String id, long version) {

@@ -573,3 +573,21 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 发布文件、Dockerfile 和 release.py 在服务器 `releases/knife4j-20261104/`；本地测试报告、截图与脚本在独立工作区 `.local/`。回退须在仓库目录恢复保存的 Compose，再以同一 up 命令启动 backend/gateway；不恢复数据库快照、不删除卷。旧镜像保留，回退未实际执行。
 
 人工验收：打开 `/doc.html` → 左上选择客户端只读接口或场景与版本管理 → 展开接口查看说明；需要调试管理接口时，先登录获取 token，再在 Authorize 填入 token。
+
+## 2026-11-04 业务注释与人工 Review 导读
+
+用户授权补齐业务注释并梳理代码供人工 review。主机 elma-ubuntu-pc；独立工作区 `/home/elma/文档/Code/innovation-ar-knife4j`，分支 `docs/business-review-guide`，基线 `eea5266b96b505cef314e0a24206c7fceb52aa82`。原主工作区 main 的未提交修改保留。本轮仅修改注释与文档，没有变更 API 注解、SQL、配置值或业务语句，没有部署、推送或启动服务。
+
+交付见 [业务代码 Review 导读](23-code-review-guide.md)：从前端选择/哈希/三路上传到后端清单登记、存储提交、发布、匿名下载、删除及启动恢复，标出场景与版本两套修订号、事务与 IO 边界和人工核对入口。修正旧注释对“存储任何步骤失败都不会留下正式文件”以及“所有 API 错误都经过 AR advice”的过度表述。依据是当前源码调用关系；本轮不签署独立代码审查结论。
+
+实际验证：
+
+- `python3 .local/verify_comment_only.py`：8 个修改的 Java 文件，忽略注释/空白后的 token 与基线完全一致。字符串/字符字面量保留比较。
+- `node .local/verify_frontend_comments.cjs`：5 个前端文件，忽略注释和源码位置的 Babel 语法树与基线一致；两个 Vue 文件的 script 外模板/样式逐字一致。脚本复用原工作区现有 @babel/parser，不安装依赖。首次比较包含 parenStart 位置元数据而失败，移除这一位置字段后通过；没有改业务代码。
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：50 tests，0 failures/errors/skipped；JBR 25.0.4.1，目标 Java 21。报告 `.local/java-check/058a62360556/report.json`。Jar SHA256 `30771b4559d492addd2008c4df0938c62bcd03d9c44d154aac1cf0cd6e63948a`，未部署。
+- 使用 `javap -c -p` 对比基线 Jar 内 8 个对应顶层类和本轮编译类：指令与成员声明一致，不比较调试行号。JBR 未附 javap，改用本机 PATH 内的 javap 完成比较。
+- `node --test scripts/test_scene_package.mjs`：16 tests 全通过；日志 `.local/comments-node.txt`。
+- 使用原工作区 `.local/ingestion-venv/bin/python` 执行 `scripts/harness.py doctor --profile quick`：通过。quick 首次在新导读的目录链接处失败：链接检查器要求目标为文件；将其改为 V015/V017 的具体文件链接后重跑。最终 quick 全部通过；日志 `.local/comments-quick-final.txt`，报告 `.local/harness/20261104T072232Z-qt9zan5g/report.json`。
+- `git -c core.whitespace=cr-at-eol diff --check`：通过。
+
+未执行前端生产构建、HTTP/数据库集成、并发故障注入或浏览器验收；语法树/字节码一致性和现有单测证明本轮未改业务逻辑，不等于原业务全部正确。人工验收路径：从导读阅读顺序进入 VersionPanel.runSession，再跟到 SceneVersionService.uploadLocked/finish，最后查看删除及恢复；按导读末尾检查点核对源码。

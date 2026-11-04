@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * 强 ETag 与单区间 Range 响应。ETag 必须与实际发送的字节一致（这里取登记的 SHA256）。
+ * 本类只负责 HTTP 区间与响应流；场景权限、版本归属和文件就绪校验由 SceneVersionService 完成。
  */
 public final class HttpRange {
     private static final Pattern BYTES = Pattern.compile("(?i)bytes=(\\d*)-(\\d*)");
@@ -89,7 +90,7 @@ public final class HttpRange {
      * 写响应头与正文。固定带 Accept-Ranges 和 ETag，Cache-Control 为 no-store；
      * filename 非空时以附件下载，同时给出 ASCII 兜底名和 RFC 5987 的 filename*（UTF-8）。
      * 416 只写 Content-Range 头（RFC 9110 的未满足区间写法，附文件总长度）；
-     * sendBody 为 false（HEAD）或长度为 0 时只发响应头。
+     * sendBody 为 false（HEAD）或长度为 0 时只发响应头，不调用 open 打开文件正文。
      * 响应头已发出后若流提前结束会抛 IOException，连接会被中断，客户端能发现内容不全。
      */
     public static void write(HttpServletResponse response, Slice slice, String etag, String contentType,

@@ -114,6 +114,7 @@ public class SecurityConfig
                     .requestMatchers(HttpMethod.POST, "/system/user").authenticated()
                     .requestMatchers(HttpMethod.DELETE, "/system/user/{id}").authenticated()
                     .requestMatchers(HttpMethod.PUT, "/system/user/changeStatus", "/system/user/resetPwd", "/system/user/profile", "/system/user/profile/updatePwd").authenticated()
+                    // 路由层先要求登录；版本控制器另以 @PreAuthorize 校验 ar_admin 角色。
                     .requestMatchers(HttpMethod.GET, "/api/v1/scenes", "/api/v1/scenes/{id}", "/api/v1/audits").authenticated()
                     .requestMatchers(HttpMethod.POST, "/api/v1/scenes").authenticated()
                     .requestMatchers(HttpMethod.DELETE, "/api/v1/scenes/{id}").authenticated()

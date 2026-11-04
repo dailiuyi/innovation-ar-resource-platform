@@ -43,12 +43,14 @@ import { watch } from 'vue'
 import cache from '@/plugins/cache'
 import useUserStore from '@/store/modules/user'
 const route=useRoute(),router=useRouter()
+// URL 的 sceneId/versionId 恢复版本面板；离开面板后重新读场景列表，不缓存发布结果。
 const panelScene=computed(()=>String(route.query.sceneId||''))
 function openVersions(row){const query={...route.query,sceneId:row.id};delete query.versionId;router.replace({query})}
 function closeVersions(){const query={...route.query};delete query.sceneId;delete query.versionId;router.replace({query});load()}
 import { ElMessage, ElMessageBox } from 'element-plus'
 const deleting=ref(false)
 const items=ref([]),total=ref(0),page=ref(1),limit=ref(20),name=ref(''),loading=ref(false),visible=ref(false),saving=ref(false),form=ref({})
+// 新建名称草稿按账号保存在浏览器；编辑既有场景不写草稿，创建成功后清除。
 const draftKey='ar:new-scene-name:'+useUserStore().id
 watch(()=>form.value.name,value=>{
   if(!form.value.id)cache.local.set(draftKey,value??'')
@@ -57,11 +59,13 @@ async function load(){loading.value=true;try{const r=await request.get('/api/v1/
 function search(){page.value=1;load()}
 function create(){form.value={name:cache.local.get(draftKey)||''};visible.value=true}
 async function edit(row){form.value=await request.get('/api/v1/scenes/'+row.id);visible.value=true}
+// 输入法确认候选词时不提交；普通 Enter 才调用保存。
 function submitName(event){
   if(event.isComposing||event.keyCode===229)return
   event.preventDefault()
   save()
 }
+// 行上的 lockVersion 作为 expectedVersion；409 后刷新列表，让用户基于新状态重试。
 async function save(){
   if(saving.value)return
   if(!form.value.name?.trim()) return ElMessage.warning('请填写场景名称')
@@ -80,6 +84,7 @@ async function toggle(row){
   try{const {value}=await ElMessageBox.prompt('请填写原因','确认'+(row.enabled?'停用':'启用'),{inputValidator:v=>!!v?.trim()||'原因不能为空'});await request.put('/api/v1/scenes/'+row.id+'/enabled',{enabled:!row.enabled,expectedVersion:row.lockVersion,reason:value});ElMessage.success('状态已更新');await load()}
   catch(e){if(e.response?.status===409) await load()}
 }
+// 此处删除场景只做软删除；逐版本清理实际文件走 VersionPanel 的 deleteVersion。
 async function remove(row){
   if(deleting.value) return
   deleting.value=true

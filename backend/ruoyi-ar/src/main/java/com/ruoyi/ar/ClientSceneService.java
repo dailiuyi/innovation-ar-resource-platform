@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * 匿名只读的“当前已发布场景版本”元数据。只查数据库，不打开任何模型文件，也不计算摘要；
  * 文件字节由 {@link SceneVersionService#clientDownload} 提供，版本锁归它管。
+ * 列表、详情是独立查询，不能作为后续下载的授权缓存；下载时会重新检查场景和发布指针。
  */
 @Service
 @ConditionalOnProperty(name = "ar.storage.enabled", havingValue = "true")

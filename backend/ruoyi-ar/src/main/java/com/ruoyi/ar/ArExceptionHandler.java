@@ -11,7 +11,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 /**
  * 本模块（com.ruoyi.ar）控制器的统一异常出口。优先级高于若依自带的全局异常处理（Order -100），
- * 保证 /api/v1 下的错误响应都是 {code, message, traceId} 结构，而不是若依的 AjaxResult。
+ * 进入本 advice 的控制器异常返回 {code, message, traceId}。
+ * Security 过滤器在控制器之前拒绝的未登录请求，不经过这里；框架登录接口仍采用 AjaxResult。
  */
 @RestControllerAdvice(basePackages = "com.ruoyi.ar")
 @Order(-100)

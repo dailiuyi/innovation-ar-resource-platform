@@ -29,6 +29,7 @@ public interface SceneMapper {
     @Select("select " + COLUMNS + " from ar_scene where deleted_at is null and position(lower(#{name}) in lower(name))>0 order by created_at desc,id limit #{limit} offset #{offset}")
     List<Map<String, Object>> list(@Param("name") String name, @Param("limit") int limit, @Param("offset") int offset);
 
+    /** 与 list 使用相同过滤条件；不统计软删除场景。 */
     @Select("select count(*) from ar_scene where deleted_at is null and position(lower(#{name}) in lower(name))>0")
     long count(String name);
 
@@ -68,6 +69,7 @@ public interface SceneMapper {
     @Select("select id,scene_id::text as \"sceneId\",actor_id as \"actorId\",actor_name as \"actorName\",action,detail::text as detail,created_at as \"createdAt\" from ar_audit order by id desc limit #{limit} offset #{offset}")
     List<Map<String, Object>> audits(@Param("limit") int limit, @Param("offset") int offset);
 
+    /** 审计总数独立于场景可见性，场景软删除后记录仍保留。 */
     @Select("select count(*) from ar_audit")
     long auditCount();
 }

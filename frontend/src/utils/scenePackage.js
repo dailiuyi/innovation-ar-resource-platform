@@ -167,6 +167,7 @@ export const UPLOAD_CONCURRENCY = 3
  * 以至多 limit 个并发执行 upload(record)。单个失败不影响其余记录；stopped() 为真后不再派发新记录，在途的照常完成。
  * 返回按 records 原顺序排列的失败 [{ record, error }]。
  */
+// next 在第一次 await 前递增，同一页面的各 lane 不会重复领取同一记录；没有跨页面总并发限制。
 export async function runUploads(records, limit, upload, stopped) {
   const failures = []
   let next = 0
