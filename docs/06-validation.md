@@ -634,3 +634,7 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 分包源码与已测提交 06d55f2 一致，复用其 Java 50 项、入库 HTTP 74 项和边界 11 项证据，没有把本轮路径迁移称为重跑这些测试。
 
 开发与 IDEA 入口统一为 `/home/elma/文档/Code/innovation-ar-resource-platform` 的 main；旧 worktree 绝对路径现在仅在历史记录和私有归档中有效。隔离入口仍为 http://127.0.0.1:18082/doc.html；如需停止隔离应用，可读取 runtime/runtime.json 中 compose 数组并追加 `stop backend gateway`。本轮只完成本地合并，未推送 main，未部署云端。人工验收：在原 IDEA 项目中 Reload from Disk，必要时重新加载 Maven，然后展开 ruoyi-ar 的职责目录。
+
+## 2026-11-04 清理根目录旧重构计划
+
+用户确认清理范围后，移除未跟踪的 `4DGS_成品分发重构_PLAN.md`。其 resource.json/档位设计已由现行资源入库说明及任务记录接替，无现行文档依赖；完整原件与 `.local/consolidation/20261104-main/main-original-files.tar.gz` 内同名文件逐字一致后才删除。未改动现行任务、源码或备份，未推送。
