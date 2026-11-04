@@ -11,7 +11,7 @@
 ## 当前本机入口
 
 - 本机 Vite 前端：http://127.0.0.1:43174
-- 日常 Compose 网关：http://192.168.0.12:18081；公网入口：https://4dgs.elma-gohan.xyz（反向 SSH 隧道与 nginx 中继，使用独立容器后端和数据库）
+- 日常 Compose 网关：http://81.71.154.125:18081；公网入口：https://4dgs.elma-gohan.xyz（nginx 直接中继到云端）。2026-10-30 仅迁移账号，本机原 `192.168.0.12:18081` 应用与反向隧道停止，原数据保留。
 - 下列端口仅用于本文 Windows 原生工具：后端 `127.0.0.1:18080`、PostgreSQL 17.6 `127.0.0.1:15432`、独立 Redis 3.0.504 `127.0.0.1:16379`。
 - Linux 隔离验收使用 `127.0.0.1:18082`，见 [Harness](13-harness.md)。
 
@@ -31,7 +31,7 @@ npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-`infra` 只初始化本项目 `.local/pgdata17`，使用固定本机独立端口。已有实例运行时不要重复执行。Vite 监听 `127.0.0.1:43174`，代理到本机后端；日常 Compose 监听 `192.168.0.12:18081`，两者独立。`local_demo.py frontend` 读取 `AR_FRONTEND_HOST`，使用前先核对实际绑定，不能占用已有服务。
+`infra` 只初始化本项目 `.local/pgdata17`，使用固定本机独立端口。已有实例运行时不要重复执行。Vite 监听 `127.0.0.1:43174`，代理到本机后端；日常 Compose 已迁到云端 `81.71.154.125:18081`，本机原应用停止并保留数据，不要当作开发环境自行重启。`local_demo.py frontend` 读取 `AR_FRONTEND_HOST`，使用前先核对实际绑定，不能占用已有服务。
 
 首次运行生成 `.local/demo-secrets.json`，包含数据库密码、Token 密钥与引导密码；无共享默认密码。空库启动后用 `bootstrap` 登录，在账号管理中创建第一个日常管理员。创建成功后引导账号失效，重新使用新账号登录即可。
 

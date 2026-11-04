@@ -1,7 +1,7 @@
 <template>
   <el-drawer :model-value="!!sceneId" :title="sceneName?'版本与文件 · '+sceneName:'版本与文件'" size="90%" :close-on-click-modal="false" :before-close="close">
     <p>所属场景：{{sceneName||sceneId||''}}<span v-if="sceneName">（编号 {{sceneId}}）</span></p>
-    <p>每个场景是一个独立的 4DGS 成品。版本创建后说明之外的文件清单固定；需要改变模型、配置或路径时导入新版本，再发布切换。</p>
+    <p>每个场景是一个独立的 4DGS 成品。版本创建后说明之外的文件清单固定；导入新版本并确认全部文件入库后会自动发布，替换当前发布版本。</p>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <div v-if="error" class="action-row">
       <el-button :disabled="busy" @click="refresh">刷新状态</el-button>
@@ -15,7 +15,7 @@
       <template v-if="published">
         <p><span class="meta-label">版本</span>v{{published.versionNo}}　{{published.description || '（无说明）'}}</p>
         <p><span class="meta-label">发布</span>{{formatTime(published.publishedAt)}}，{{published.publishedByName}}</p>
-        <p class="published-note">已发布版本的文件清单固定，仅可修改说明；导入新版本不会改变它。</p>
+        <p class="published-note">已发布版本的文件清单固定，仅可修改说明；新版本全部入库后会自动替换发布，原版本保留为历史。</p>
         <el-button link type="primary" @click="selectVersion(published.id)">查看详情</el-button>
       </template>
       <p v-else class="published-empty">该场景尚未发布</p>
@@ -24,8 +24,8 @@
       <el-button type="primary" :disabled="busy||removing" @click="chooseDirectory">导入资源目录</el-button>
       <el-button type="primary" :disabled="busy||removing" @click="chooseFiles">导入文件</el-button>
       <el-button :disabled="busy||removing" @click="refresh">刷新</el-button>
-      <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
-      <span class="hint">一次选择创建一个版本，全部文件原样上传（ZIP 不解压，由 Unity 解压）；目录保留相对路径，文件使用文件名。单文件上限 {{size(config.maxBytes)}}，每个版本最多 {{config.versionMaxFiles}} 个文件 / {{size(config.versionMaxBytes)}}。</span>
+      <el-button v-if="busy" type="warning" :disabled="publishing" @click="!publishing&&cancel()">{{publishing?'正在发布':'停止本次传输'}}</el-button>
+      <span class="hint">一次选择创建一个版本，全部文件确认入库后自动发布并替换当前发布版本，原版本保留为历史；上传失败、结果未确认或停止传输时不会自动发布。全部文件原样上传（ZIP 不解压，由 Unity 解压）；目录保留相对路径，文件使用文件名。单文件上限 {{size(config.maxBytes)}}，每个版本最多 {{config.versionMaxFiles}} 个文件 / {{size(config.versionMaxBytes)}}。</span>
       <input ref="picker" type="file" data-import-mode="directory" webkitdirectory directory multiple hidden @change="picked($event,'directory')" />
       <input ref="filePicker" type="file" data-import-mode="files" multiple hidden @change="picked($event,'files')" />
     </div>
@@ -74,7 +74,7 @@
         <el-button v-if="canResume&&sessionForSelected" type="primary" :disabled="busy" @click="runSession">继续上传</el-button>
         <el-button v-if="canResume" :type="sessionForSelected?'default':'primary'" :disabled="busy" @click="chooseFor(selected.id,'directory')">重新选择目录</el-button>
         <el-button v-if="canResume" :type="sessionForSelected?'default':'primary'" :disabled="busy" @click="chooseFor(selected.id,'files')">重新选择文件</el-button>
-        <span v-if="canResume" class="hint">选择原文件或原目录，路径、大小和 SHA-256 必须与该版本一致；已入库的文件不会重复传输。</span>
+        <span v-if="canResume" class="hint">选择原文件或原目录，路径、大小和 SHA-256 必须与该版本一致；已入库的文件不会重复传输，全部确认入库后会自动发布并替换当前发布版本。</span>
         <el-button v-if="!selected.published" type="primary" :disabled="busy||removing||publishing||selected.uploadStatus!=='READY'" @click="publish(selected)">{{published?'替换发布':'发布'}}</el-button>
         <el-button type="danger" plain :disabled="busy||removing||selected.published" @click="remove(selected)">{{retryDelete(selected)?'重试删除':'删除整个版本'}}</el-button>
       </div>
@@ -318,9 +318,11 @@ async function uploadOne(versionId,record,file,onProgress,onState){
 }
 async function runSession(){
   const s=session.value
-  if(!s)return
+  if(!s||busy.value||publishing.value||s.sceneId!==props.sceneId)return
+  const expectedSceneVersion=sceneLockVersion.value
   const token=++runToken
-  const live=()=>token===runToken
+  const live=()=>token===runToken&&s.sceneId===props.sceneId
+  let uploadConfirmed=false
   busy.value=true;cancelled=false;error.value='';uploadIssues.value=[]
   try{
     if(!s.digests){
@@ -397,17 +399,37 @@ async function runSession(){
       const failed=issues.filter(i=>i.kind==='请求失败').length
       throw new Error(`本轮请求失败 ${failed} 个，结果未确认 ${issues.length-failed} 个。完整列表见下方；刷新状态后继续上传，已入库和处理中不会重复发送。`)
     }
+    const complete=await getVersion(s.versionId)
+    if(!live())return
+    if(cancelled)throw new Error('已取消')
+    if(complete.uploadStatus!=='READY'||!complete.files.every(file=>file.status==='AVAILABLE'))
+      throw new UploadUnconfirmedError('版本尚未确认全部就绪，请刷新状态后继续上传')
+    uploadConfirmed=true
     session.value=null
-    progressText.value='全部文件已校验入库，可以发布'
+    publishing.value=true
+    if(!complete.published){
+      progressText.value='全部文件已校验入库，正在自动发布'
+      await publishVersion(s.versionId,expectedSceneVersion)
+      if(!live())return
+    }
+    progressText.value=complete.published?'全部文件已校验入库，该版本已发布':'全部文件已校验入库并自动发布'
+    emit('sceneUpdated')
+    ElMessage.success(complete.published?'该版本已发布':'全部文件已入库并自动发布')
   }catch(e){
     if(!live())return
     if(e instanceof PackageError)session.value=null
-    error.value=cancelled?'已停止本次传输，上传结果未确认。已入库的文件会保留；请刷新状态后继续上传':message(e)
-    progressText.value='本次操作未确认全部完成'
+    if(uploadConfirmed){
+      error.value=`全部文件已校验入库，但自动发布失败：${message(e)}。无需重新上传，请确认当前发布版本后手动发布。`
+      progressText.value='文件已入库，自动发布未完成'
+    }else{
+      error.value=cancelled?'已停止本次传输，上传结果未确认。已入库的文件会保留；请刷新状态后继续上传':message(e)
+      progressText.value='本次操作未确认全部完成'
+    }
   }finally{
     if(live()){
-      worker?.terminate();rejectHash=null;controllers.clear();busy.value=false
+      worker?.terminate();rejectHash=null;controllers.clear()
       await reload()
+      if(live()){busy.value=false;publishing.value=false}
     }
   }
 }
@@ -423,7 +445,7 @@ watch(()=>props.sceneId,async id=>{
   const sequence=++sceneRequest
   ++listRequest;++detailRequest
   cancel();++runToken
-  session.value=null;importPlan.value=null;busy.value=false
+  session.value=null;importPlan.value=null;busy.value=false;publishing.value=false
   selected.value=null;versions.value=[];total.value=0;published.value=null;sceneLockVersion.value=0;page.value=1
   error.value='';progressText.value='';sceneName.value='';uploadIssues.value=[];importDescription.value=''
   if(!id)return

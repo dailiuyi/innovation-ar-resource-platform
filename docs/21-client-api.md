@@ -6,7 +6,7 @@
 
 | 项 | 值 |
 |---|---|
-| Base URL | `https://4dgs.elma-gohan.xyz`。链路是 elma-gohan 的 nginx（HTTPS）经反向 SSH 隧道到开发机 gateway；开发机离线或隧道断开时该地址不可用 |
+| Base URL | `https://4dgs.elma-gohan.xyz`。2026-10-30 起由 elma-gohan 的 nginx（HTTPS）直接转发到云端 `81.71.154.125:18081`，不依赖开发机或反向 SSH 隧道；本次只迁移账号，原模型没有迁移 |
 | 前缀 | `/api/v1/client/`，与管理后台同源 |
 | 认证 | 无。不要发送 `Authorization`、Cookie。三个路由只开放 GET，文件路由另开放 HEAD |
 | 传输 | HTTPS（Let's Encrypt 证书）；JSON 为 UTF-8，文件为二进制流。不需要为 Android/iOS 放行明文流量 |

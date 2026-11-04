@@ -26,7 +26,7 @@ docker compose --env-file config/compose.env ps
 
 准备脚本使用独占创建生成随机数据库密码、Token 密钥和引导密码，不打印密码，也不覆盖已有文件。`config/*.env` 已忽略且不进入 Docker 构建上下文。Windows 文件权限继承宿主目录权限，应将仓库置于自己的私有工作目录；Linux 新配置权限为 0600。
 
-当前日常入口为 `http://192.168.0.12:18081`，由私有 `config/compose.env` 配置。公网 `https://4dgs.elma-gohan.xyz` 经过 `elma-gohan.xyz` 的 nginx 中继与反向 SSH 隧道到开发机 gateway；开发机或隧道离线即不可用。这不是云端应用迁移或 CDN 部署。
+当前日常入口为 `http://81.71.154.125:18081`，推荐使用 `https://4dgs.elma-gohan.xyz`；HTTPS 在 `elma-gohan.xyz` 的 nginx 终止，再经 HTTP 转发到云端 gateway。2026-10-30 经用户选择切换，已不依赖开发机和反向隧道。本机旧实例的四个容器、项目网络和应用镜像标签已按授权清理，四个原数据卷、私有配置和备份完整保留，隧道服务停用；本机模型未迁移，禁止清理原数据卷。对象存储、CDN 和自动备份未部署。
 
 Compose/准备脚本在未覆盖参数时仍默认 `127.0.0.1:18081`；隔离验收固定用 `127.0.0.1:18082`，不能混用日常库和配置。首次空库使用 `bootstrap` 和私有配置内的引导密码登录，创建日常管理员后引导账号停用；新容器库不自动导入原生 Demo 数据。
 
@@ -52,6 +52,26 @@ Compose/准备脚本在未覆盖参数时仍默认 `127.0.0.1:18081`；隔离验
 PostgreSQL 当前延续 Demo 的初始化/运行同账号模式，该账号拥有较高权限。此开发机演示实例不是生产安全基线；后续权限拆分需另立迁移方案。健康检查只确认进程/基础接口可用，不代表客户端业务验收。
 
 镜像使用明确版本标签；应用镜像为 `innovation-ar-resource-platform-backend:infra-v1`、`innovation-ar-resource-platform-gateway:infra-v1`。迁移时应传输实际已验收的镜像并核对镜像 ID，不能把同名标签当作内容相同的证明。
+
+### 云端独立实例（2026-10-30）
+
+用户授权在 `http://81.71.154.125:18081/` 新建独立部署，SSH 别名 `innovation`，运行用户 `daily`，目录 `/home/daily/innovation-ar-resource-platform`。运行 Compose 不含构建步骤，当前镜像为 backend `parallel-upload-69f8904`、gateway `auto-publish-20261030t124437z`、PostgreSQL `17.6-bookworm`、Redis `7.4.5-alpine3.21`。本次 gateway 复用已验收 dist 打包，包含尚未提交的自动发布/Enter/草稿功能；来源指纹与实际镜像摘要见服务器 `releases/auto-publish-20261030t124437z/source.json`、`release.json`，不能将基线提交 `8ee5581` 当作完整功能源码提交。初次部署的 `manifest.json` 和 `multi-file-ebf930c` 镜像保留为历史/回退材料。
+
+初次部署使用全新数据库和文件卷。用户随后将范围明确为**仅迁移账号**，并选择将旧域名切到云端：现已迁移完整 `sys_user`、用户角色/岗位关联，两个原日常账号继续启用且密码不变，退役 bootstrap 仍停用/删除，不能使用云端生成的引导密码登录。没有迁移源端场景、版本、文件、业务审计或登录会话；云端原验收审计保留。HTTP IP 入口是明文，推荐 HTTPS 域名；中继到云端的上游仍是 HTTP，尚未配置端到端 TLS、自动备份或 CDN。
+
+服务器上查看状态、启动与停止（停止保留命名卷，禁止 `down -v`）：
+
+```bash
+cd /home/daily/innovation-ar-resource-platform
+docker compose --env-file config/compose.env ps
+docker compose --env-file config/compose.env up -d --no-build --pull never --wait --wait-timeout 240
+docker compose --env-file config/compose.env stop
+```
+
+单文件上限 1 GiB，每版本最多 1000 文件 / 4 GiB；ZIP 原样上传，由 Unity 下载后解压。该服务器已实测多文件真实入库与管理员完整/Range 下载，未验证 Unity 解压、手机播放或大文件带宽。部署及验收证据见 [验证记录](06-validation.md)「云端独立 Docker 部署」。
+
+账号迁移备份：源端 `.local/migrations/accounts-cloud-20261030/source-before.dump`，云端 `/home/daily/innovation-ar-resource-platform/backups/accounts-20261030/target-before.dump`（均含敏感账号数据，不外发）；nginx 原配置位于 `root@elma-gohan.xyz:/root/4dgs-before-cloud-accounts-20261030.conf`。本机旧容器与应用镜像已清理，但卷仍在；获准回退时先停止云端写入并保全新增数据，核对 `.local/releases/cloud-81.71.154.125-20261030/images.tar.gz.sha256` 后 `docker image load --input .local/releases/cloud-81.71.154.125-20261030/images.tar.gz`，再将 backend `parallel-upload-69f8904` 和 gateway `multi-file-ebf930c` 打回本机 Compose 所用的 `infra-v1` 标签，重建服务以挂回原卷。随后恢复隧道及中继原配置，`nginx -t`、reload。云端已有新增写入时，不能直接恢复旧快照或切回本机丢弃它们；回退恢复演练未执行。
+
 
 ## 存储组件约定
 
@@ -100,4 +120,4 @@ docker compose -p innovation-ar-resource-platform-infra-check --env-file config/
 6. 核对数据库记录和逐文件摘要，启动相同版本应用，检查登录、场景、审计、文件引用、发布关系及真实客户端下载。
 7. 验收后切换服务地址，源环境保持停止且保留数据。若回退，先停止目标写入，再切回源；目标已有新增数据时不能直接回退而丢弃它。
 
-本轮验证容器重建持久性，不声称已完成上述跨物理主机迁移。
+云端新部署与账号跨主机迁移已完成；上述整库及成品卷的完整跨主机迁移未执行，用户最终明确只迁移账号。不能将账号一致性核对当作文件迁移、真实日常账号密码登录或 Unity 客户端验收。

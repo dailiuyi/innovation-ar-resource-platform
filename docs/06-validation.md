@@ -493,3 +493,63 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 容器内 320 个前端文件与已验收 dist 的文件集合和逐文件 SHA256 全部一致。LAN 与公网首页、`/healthz`、`/prod-api/captchaImage` 均返回 200（captcha 业务码 200）；两者下发 `static/js/VersionPanel-Bhr93OmK.js` 与本地逐字节一致，SHA256 为 `c154c057defee18b00dbf26e19d3367068465532954e04a4504348623678ffa3`，包含“导入文件”和“重新选择文件”。
 - 匿名目录均返回 200，目前 `items=[]`、`total=0`，没有可见已发布场景，因此未执行详情或 Range 抽查，没有创建业务数据来满足验证。实际 Chrome 访问公网可显示登录页，无登录态，未做日常账号登录/上传、未启用 bootstrap 或生成会话；Unity 解压仍未验证。
 - 本地证据：`.local/releases/multi-file-import-20261030/release.json`、同目录 `public-login.png`。旧网关镜像 `upload-feedback-945d2fa` 保留，可将该镜像打回 `infra-v1` 后仅重建 gateway 回退；不涉及数据库回退。
+
+## 2026-10-30 云端独立 Docker 部署（81.71.154.125）
+
+- 用户授权打包并部署到 `http://81.71.154.125:18081/`。主机 `VM-0-10-tencentos`（SSH `innovation`，用户 `daily`），x86_64，Docker 29.7.2、Compose 5.4.0。部署前 18081 空闲，无本项目容器、卷或目录，磁盘剩余 27 GiB；新建独立实例，无旧库需要备份，未迁移本机账号/数据，也未切换域名、隧道或服务器 GitLab/OpenResty。
+- 本地发布目录 `.local/releases/cloud-81.71.154.125-20261030/`，服务器部署目录 `/home/daily/innovation-ar-resource-platform`。从日常实例已验收镜像导出 backend `parallel-upload-69f8904`、gateway `multi-file-ebf930c`、postgres `17.6-bookworm`、redis `7.4.5-alpine3.21`；前端代码 `ebf930c`、后端代码 `69f8904`。不重新编译 Java、替换 JDK 或在远端构建源码。
+- `docker image save` + gzip 镜像包 456,471,568 B，SHA256 `3e83ab32944b5901281790782655290cd96d488ff1d641c2d590d2ba37dfbaed`，SSH 传输后摘要一致；`docker image load` 后四个镜像 ID 均与 manifest 一致。运行版 Compose 去掉 build 并固定镜像标签。`prepare_compose.py` 在远端独占创建 0600 私有配置，凭据独立随机，不复制本机密钥；0.0.0.0:18081，单文件 1 GiB，版本 1000 文件 / 4 GiB。
+- 执行 `docker compose --project-directory /home/daily/innovation-ar-resource-platform --env-file /home/daily/innovation-ar-resource-platform/config/compose.env -f /home/daily/innovation-ar-resource-platform/compose.yaml up -d --no-build --pull never --wait --wait-timeout 240`，四个服务 healthy，Flyway 017 成功。backend `28b4704bfb27`、gateway `b5b19b8539af`、postgres `73ca9c7f7fef`、redis `331a4ce17fa9`。PostgreSQL/Redis/backend 无宿主端口，只暴露 gateway 18081；命名卷持久化。
+- 从本机直连公网（禁用代理）检查：首页、healthz、captchaImage、匿名目录均 200，公网 Chrome 可渲染登录页。服务器 320 个前端文件的集合及逐文件 SHA256 与已验收 dist 全部一致；公网 `VersionPanel-Bhr93OmK.js` 与本地字节一致。
+- 真实 Chrome 通过 SSH 本地转发登录新实例 bootstrap（未在公网 HTTP 发送凭据），新建临时验收场景，经“导入文件”同时选择 169 B ZIP 和 18 B 任意二进制文件，一个版本两文件均 AVAILABLE / READY。逐文件从真实后端管理员下载，完整字节与本地原件一致、SHA256 与登记一致，`Range: bytes=0-15` 均 206 且字节正确。截图 `upload-ready.png`，无合成接口替代。
+- 随后经 UI 整版物理删除验收版本、删除临时场景，并注销引导会话。复查版本 404，数据库未删除场景 0、版本 0、文件 0，审计 9 条保留；未创建自选身份的日常管理员。首次账号初始化仍由用户自行完成，bootstrap 凭据只在服务器私有配置。
+- 证据位于发布目录 `release.json`、`upload-smoke.json`、`manifest.json`、`public-login.png`、`upload-ready.png`。未验证匿名已发布文件下载、Unity 解压或播放、大文件吞吐、重启恢复、跨主机数据迁移、HTTPS 和自动备份。原 `4dgs.elma-gohan.xyz` 服务保持原链路。
+- 可复用完整部署包：`.local/releases/innovation-ar-resource-platform-cloud-20261030.tar`，SHA256 `4fc8bc2e87a2fd50bb745f21b3005f71a3b8a56eeea0587865dc70203c010191`。含 Compose、镜像包及校验、manifest、私有配置生成脚本和空 config 目录；已检查不包含 `config/compose.env` 或实际凭据。
+- 文档更新后 `.local/ingestion-venv/bin/python scripts/harness.py check --profile quick` 通过，报告 `.local/harness/20261030T102147Z-8hk4os9_/report.json`。部署文档留在本地分支 `docs/cloud-deployment-20261030`，此次未提交或推送文档。验收专用 SSH 转发已关闭。
+
+## 2026-10-30 仅迁移账号并切换旧域名
+
+- 用户先请求迁移数据，在入口选择中明确选择“旧域名也切到云端”，随后缩小数据范围为“账户迁移就行了”。最终执行：仅迁移账号及角色/岗位关联，旧域名转云端，本机应用与旧隧道停止、全部原数据保留。没有迁移场景、版本、文件、源端业务审计或登录会话，没有重置用户密码或生成会话。
+- 迁移前源端 3 行用户（2 个有效日常管理员 + 已删除/停用 bootstrap）、5 个未删除场景、8 个版本、179 个文件共 5,095,481,636 B、392 条业务审计，无未完成上传或删除。目标只有初次部署验收的已删除场景、9 条业务审计和 bootstrap，无版本/文件。两端 PostgreSQL 17.6、Flyway 017，角色/部门 100 相同，源端无头像和岗位关联。
+- 两端停止 gateway/backend 写入、PostgreSQL 保持运行，先分别 `pg_dump -Fc` 备份。源端 `.local/migrations/accounts-cloud-20261030/source-before.dump`；目标 `/home/daily/innovation-ar-resource-platform/backups/accounts-20261030/target-before.dump`；两份 `pg_restore --list` 可读取，私有目录/文件权限 0700/0600。备份含敏感账号数据，禁止提交或外发。
+- 仅导出 `sys_user`、`sys_user_role`、`sys_user_post`，经 SSH 私有传输。事务内 COPY 到临时表，按原 user_id 更新/插入用户并替换用户关联；不 TRUNCATE 用户表，保留目标审计对 user_id=101 的外键。账号触发器全程保持启用，更新后显式恢复源端 `credential_epoch`，用户序列设为 103。密码哈希、状态、删除标志、资料及关联均逐项一致；`dlydly`、`wzj` 启用，bootstrap 仍 status=1 / del_flag=2。
+- 使用完整账号行（含密码哈希和凭据版本）的确定性 JSON 指纹，以及角色/岗位关联指纹，验证启动前后源/目标一致。对两端 `ar_scene`、`ar_scene_version`、`ar_version_file`、`ar_version_deletion`、`ar_audit` 迁移前后分别计算指纹，全部不变，证明没有搬运或覆盖业务数据。
+- 云端 `up -d --no-build --pull never --wait --wait-timeout 180 backend gateway` 后 healthy。HTTPS 登录接口使用合成密码尝试 retired bootstrap，返回业务错误且不签发 token；不依赖错误文案判断成功。真实日常账号密码未请求/读取，因此未做这两个账号的交互登录；需用户用原密码自行验收。
+- 中继 `root@elma-gohan.xyz:/etc/nginx/conf.d/4dgs.conf` 仅将上游从 `http://127.0.0.1:18181` 改为 `http://81.71.154.125:18081` 并更新对应注释；原配置保存在 `/root/4dgs-before-cloud-accounts-20261030.conf`。`nginx -t` 成功后 reload。TLS 仍由原中继终止，中继到云端的上游为 HTTP，不声称端到端加密。
+- 本机 gateway/backend 保持停止，PostgreSQL/Redis 和原卷全部保留；`systemctl --user disable --now innovation-4dgs-relay.service` 已停用旧隧道。停用后域名 healthz 仍 200；域名及云端 IP 首页、healthz、captchaImage、匿名目录均 200，匿名目录仍为空。Chrome 实际打开 HTTPS 登录页，截图 `domain-login.png`。
+- 非敏感验收证据：`.local/migrations/accounts-cloud-20261030/migration-evidence.json`；源库备份、账号 CSV 与导入 SQL 留在同一私有目录，未提交。部署文档同步主实例、旧域名和旧源端状态，仍留在本地分支 `docs/cloud-deployment-20261030`，未提交/推送。
+- 回退：先停止云端写入并保全新增数据，再按需要恢复云端迁移前备份；启动原本机 gateway/backend、`systemctl --user enable --now innovation-4dgs-relay.service`，在中继恢复已备份 nginx 配置并 `nginx -t`、reload。云端已有新写入时不得直接回退丢弃；此处记录回退路径，未实际执行回退恢复演练。
+- 文档与运行口径更新后 `.local/ingestion-venv/bin/python scripts/harness.py check --profile quick` 全部通过，报告 `.local/harness/20261030T103244Z-57cmm07m/report.json`。最终云端四个服务 healthy，账号迁移备份目录/备份权限复核为 0700/0600。
+
+## 2026-10-30 清理本机旧 Docker 实例（保留数据）
+
+- 用户授权清理原 Docker。鉴于只迁移账号、模型仍在本机，执行前明确列出清理及保留清单，没有执行全局 prune、`down -v` 或删除备份/文件卷。
+- `docker compose --env-file config/compose.env -f compose.yaml -f .local/viewer-18081/compose.override.yaml down --timeout 30` 删除本机旧日常 gateway/backend/postgres/redis 四个容器及两个项目网络；四个命名卷全部保留。随后 `docker image rm` 仅移除本项目五个应用镜像标签（gateway `infra-v1`、`multi-file-ebf930c`、`upload-feedback-945d2fa`；backend `infra-v1`、`parallel-upload-69f8904`），对应三个应用镜像 ID 删除。
+- 清理后四个卷的元数据与清理前完全一致，并通过 `postgres:17.6-bookworm` 一次性只读、无网络容器读取体积：artifacts_data 5,413,482,539 B、postgres_data 67,164,374 B、backend_logs 1,207,060 B、framework_uploads 4,096 B。迁移前源库 dump 仍为 90,809 B，SHA256 与清理前一致。Docker 镜像归档、私有配置、播放器原文件和迁移备份均未删除。
+- 两个 `innovation-ar-resource-platform-infra-check` 容器、两个 `ocg-live-005cbbb2` 容器保留；共享 PostgreSQL/Redis 镜像、ocg-agent 镜像和全局构建缓存未清理。没有在云端或中继服务器执行 Docker 清理。
+- 云端 IP 与 HTTPS 域名 healthz 均实测 200。清理证据 `.local/cleanup/retired-daily-20261030/before.json`、`after.json`；本机恢复需先从镜像归档 load 并恢复 Compose 标签，不能将旧容器“启动”当作恢复方法，详见 [基础设施手册](10-local-infrastructure.md)。
+- 文档更新后 `harness.py doctor --profile quick` 与 `harness.py check --profile quick` 均通过；报告分别为 `.local/harness/20261030T112310Z-oqu39r48/report.json`、`.local/harness/20261030T112310Z-7tlnbpr8/report.json`。此次清理记录未提交或推送。
+
+## 2026-10-30 上传自动发布与新建场景草稿（本地实现）
+
+- 用户确认：上传/续传全部成功后自动发布当前版本；所谓“版本名”即现有版本说明，继续允许发布后修改，不新增字段；新建场景非空名称按 Enter 提交，未提交原文在关闭弹窗/刷新后恢复，创建成功才清空。
+- `VersionPanel.vue` 复用现有 API：本轮开始记录场景修订号，上传结束后确认服务端 READY 且逐文件 AVAILABLE，才自动调用发布，不弹确认；失败、取消或未确认不发布。发布 409/503 不自动重试、不重新上传，保留就绪文件和历史版本，允许用户确认当前指针后手动发布。后端、数据库、OpenAPI 未改；自动发布仅由当前上传页面触发。
+- `scenes.vue` 防止原生表单刷新和 in-flight 重复提交，提交名称 trim，中文输入法确认 Enter 不触发创建。未提交名称使用现有 `cache.local`，按 `ar:new-scene-name:<userId>` 存储，创建失败保留、成功后清除，编辑已有场景不覆盖创建草稿。
+- `.local/ingestion-venv/bin/python scripts/verify_scene_list_ui.py --channel chrome --report-dir .local/harness/auto-publish-scene-draft`：169 项通过。补正截图动画时序后，同命令改用 `--report-dir .local/harness/auto-publish-scene-draft-visual` 再跑完整流程，仍为 169 项通过、退出码 0，JSON 汇总全部 passed。覆盖首传/续传/ZIP 多文件自动发布、未就绪/失败/未确认/取消不发布、并发修订冲突不静默重试、发布失败只重试发布、历史内容保留、发布后说明编辑、Enter/IME/空白/重复提交，以及草稿关闭/刷新/失败/成功/编辑隔离。
+- `.local/ingestion-venv/bin/python scripts/agent_check.py --profile frontend` 通过，包含 quick、scene-package 消费者回归及前端生产构建；报告 `.local/harness/20261030T123853Z-e9qm58wy/report.json`，`sourceUnchanged=true`。门禁后仅修改截图捕获及文档，前端实现未再改变，不重复编译。
+- 已查看最终 `scene-list-ui/scene-create-draft-1440.png` 和 `panel-automatically-published-edited-1440.png`：草稿输入可见，自动发布卡片、历史版本及说明编辑无重叠。首轮草稿截图抓在动画前，已改为定位弹窗截图、禁用截图动画并复验；发布截图等待瞬时提示消失。脚本退出仍打印已有三个 `CancelledError`，未屏蔽或改成成功。
+- `verify_ingestion.py` 的真实后端浏览器验收入口同步为等待自动发布；本轮未运行该真实 Spring Boot/数据库集成流程。已执行证明是实际 Chrome + 合成元数据响应、真实 Worker、HTTP 原始字节接收器，不代表云端真实账号或完整后端验收。临时本地 Vite 和浏览器已关闭，未启动已清理的本机旧实例。
+- 当时修改保留在本地分支 `feat/auto-publish-scene-draft`，与此前未提交部署文档并存，未提交、合并、推送或部署；随后用户授权部署，见下一节。人工路径：新建场景输入名称 → 关闭/刷新再开确认草稿 → Enter 创建 → 导入文件 → 全部入库后查看当前发布卡片 → 修改版本说明并保存。
+- 文档更新后 `harness.py check --profile quick` 全部通过，最终报告 `.local/harness/20261030T124220Z-2i91tzno/report.json`。
+
+## 2026-10-30 云端部署自动发布与场景草稿
+
+- 用户授权部署到服务器。本次只替换云端 gateway，未提交、合并或推送代码；没有重新编译 Java、更新 JDK、执行迁移或修改账号/文件。来源为分支 `feat/auto-publish-scene-draft` 的未提交前端，基线 `8ee558116d11c50cec902e8677b492b4c161e316`，源码指纹 `8b13804adc5e86a7a8552b1219aa8161f3900e41b4f535ba08216bb2a92b21d9`，镜像另标记 dirty=true 和独立发布号，不冒充已提交源码。
+- 部署前 `.local/ingestion-venv/bin/python scripts/agent_check.py --profile frontend` 通过，核对输入/产物后复用既有构建，未重新安装或编译前端。报告 `.local/harness/20261030T124431Z-0g5wt705/report.json`；本地 169 项 Chrome 业务证据见上一节。
+- 发布号 `auto-publish-20261030t124437z`，本地 `.local/releases/auto-publish-20261030t124437z/`，云端 `/home/daily/innovation-ar-resource-platform/releases/auto-publish-20261030t124437z/`。前端包 3,377,333 B，SHA256 `84b4f91f3e4461dec8f20aa8c604695cfce506e479685ee5c8c1b3e322b6a8ff`，SSH 传输后摘要一致；基于已有网关镜像仅替换静态文件。
+- 新镜像 `innovation-ar-resource-platform-gateway:auto-publish-20261030t124437z`，ID `sha256:99954d9b0175403be25288ce02f66c9c1b50b3c9432957b4802921d5e599a353`。云端 Compose 仅更换 gateway 镜像一行，`config --quiet` 通过后执行 `up -d --no-build --no-deps --pull never --wait --wait-timeout 120 gateway`；新 gateway `981b36e0696f` healthy。backend `28b4704bfb27`、PostgreSQL `73ca9c7f7fef`、Redis `331a4ce17fa9` ID 均未变且 healthy。
+- 部署前后账号 3、场景总行数 6、版本 4、文件 4、审计 49，计数一致；部署前无 UPLOADING。本次不迁移/改写业务数据，未重新启动本机已清理实例，也未修改中继或域名解析。
+- 容器内全部 320 个前端文件的集合及逐文件 SHA256 与已验收 dist 一致。IP 和 HTTPS 域名均下发 `VersionPanel-BM0nuoDo.js`（SHA256 `216594575e321024c30a07e65eec2e879f81b1bee10c028913e64baef1018b48`）及 `scenes-0EE1fyhp.js`（SHA256 `ef9d2dc9a8c121d25147533367c12aefc7a504d9987f129a5126bee245b5d31f`），字节与本地一致。
+- 两个入口的首页、healthz、captchaImage 均 200；匿名目录各 4 项，详情返回 200，单文件 Range 抽查各返回 206 和 16 B。实际 Chrome 访问 HTTPS 可渲染登录页；没有现成日常账号登录态，未代登录或向云端上传测试数据，不将本地合成接口检查冒充线上真实账号自动发布验收。
+- 回退保留旧镜像 `multi-file-ebf930c` 与发布目录 `compose.before.yaml`；必要时恢复该配置后仅重建 gateway，不动数据库。验收在本地与远端发布目录 `release.json`、`source.json`，登录截图 `public-login.png`。用户手动验收：刷新页面后，用现有账号新建场景按 Enter、验证名称草稿、上传并查看自动发布、修改已发布版本说明。
+- 发布记录更新后 `harness.py check --profile quick` 全部通过，报告 `.local/harness/20261030T124923Z-9w4qz5l6/report.json`；本次文档与源码均未提交/推送。

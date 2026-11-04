@@ -35,7 +35,7 @@ python -c "import time; time.sleep(10**9)"
 
 Do not report the local demo as up merely because `local_demo.py` printed `started`. Confirm `http://127.0.0.1:18080/captchaImage` and `http://127.0.0.1:43174/` after the starter is still running. `python scripts/local_demo.py stop` remains the stop path.
 
-日常 Compose 网关为 `http://192.168.0.12:18081`，公网 `https://4dgs.elma-gohan.xyz` 经 `elma-gohan.xyz` 的 nginx 与反向 SSH 隧道转入；开发机或隧道离线时不可用。Vite 为 `127.0.0.1:43174`，Linux 隔离验收为 `127.0.0.1:18082`，三者不能混用数据库、账号与配置。Compose 前端在镜像构建时固化；Redis 使用 tmpfs，仅 Redis 重启会丢失其中的登录会话，重建 backend/gateway 本身不等于清空 Redis。
+日常 Compose 网关现为 `http://81.71.154.125:18081`，公网 `https://4dgs.elma-gohan.xyz` 经 `elma-gohan.xyz` 的 nginx 直接转入云端；不再依赖开发机和反向隧道。2026-10-30 仅迁移账号，本机原 `192.168.0.12:18081` 的 gateway/backend 已停止，数据库和文件卷保留，隧道服务已停用；不得自行重启旧服务或切回旧路由。Vite 为 `127.0.0.1:43174`，Linux 隔离验收为 `127.0.0.1:18082`，不能混用数据库、账号与配置。Compose 前端在镜像构建时固化；Redis 使用 tmpfs，仅 Redis 重启会丢失其中的登录会话，重建 backend/gateway 本身不等于清空 Redis。
 
 For copy, button, or layout-only changes: edit `frontend/src` and any Playwright selector that clicks the old control (`scripts/verify_browser.py`, `scripts/verify_ingestion.py`). Update the matching sentence in `docs/` if it names that control. A removed label is done when the source and selectors no longer name it. Full login-and-click checks are for behavior changes. `bootstrap` is retired on the LAN demo; do not enable it or mint sessions to satisfy a browser check. If you cannot log in, say so and stop.
 

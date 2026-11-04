@@ -9,7 +9,7 @@
 | 客户端如何对接接口 | [客户端接口对接文件](21-client-api.md)、[Unity 对接技术文档](22-unity-integration.md) | 匿名读取、Range 下载、断点续传与错误处理；手机和 Unity 原生加载未验证 |
 | 当前平台如何组成 | [当前架构](11-current-platform-architecture.md) | 结合现行实现核对；后续设计不等于已有能力 |
 | 深圳试点大资源如何传输和存储 | [公网分发架构建议](19-public-resource-delivery-proposal.md) | 云主机挂盘与 CDN，预留对象存储；方案未实施 |
-| 如何开发、启动、打包 | [开发工作流](development-workflow.md)、[Windows 原生手册](08-demo-runbook.md)、[容器手册](10-local-infrastructure.md) | 日常 `192.168.0.12:18081` 经反向 SSH/nginx 提供公网 HTTPS；隔离验收 `127.0.0.1:18082`，Vite `127.0.0.1:43174`，不能混用数据与配置 |
+| 如何开发、启动、打包 | [开发工作流](development-workflow.md)、[Windows 原生手册](08-demo-runbook.md)、[容器手册](10-local-infrastructure.md) | 云端 `81.71.154.125:18081` 经 nginx 提供公网 HTTPS；仅迁移账号，本机原实例停止并保留数据；隔离验收 `127.0.0.1:18082`，Vite `127.0.0.1:43174`，不能混用数据与配置 |
 | 下载参考工具如何工作 | [资源传输参考](11-artifact-transfer-reference.md) | 场景下载使用 download_scene.py，复用单文件 Range/If-Range；通用打包扩展不是当前业务流程 |
 | 应该跑什么检查 | [Harness 使用说明](13-harness.md) | profile 通过只覆盖声明的范围 |
 | 如何审查改动 | [Code Review 默认规则](14-code-review.md) | 短提示指定范围与重点，默认独立审查、不修改 |

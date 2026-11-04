@@ -5,7 +5,8 @@
 删除等业务闭环。覆盖：入口按钮可点且不被遮挡、选中版本随地址栏保留、场景切换后迟到响应不写回、
 取消确认不产生请求，以及导入目录登记并上传目录下全部文件（无 resource.json 描述）：固定三路并发、单个文件失败不阻断其余、
 完整列出请求失败与结果未确认的文件、停止时中止全部在途请求且不再派发、续传只发送 FAILED/PENDING 并跳过 AVAILABLE/UPLOADING；
-版本说明可输入并提交、目录哈希按实际累计字节显示进度、上传未结束时已确认文件同步到版本行和详情。
+版本说明在发布前后均可编辑、目录哈希按实际累计字节显示进度、上传未结束时已确认文件同步到版本行和详情；
+全部确认后的自动发布、发布失败保留文件及修订冲突，以及新建场景 Enter、防重复提交和持久草稿。
 真实后端点击验收在隔离 Compose 实例上执行。
 """
 import argparse
@@ -91,6 +92,16 @@ class Api:
         self.held_uploads = []
         self.unconfirmed_uploads = set()
         self.state_failures = set()
+        self.scene_creates = []
+        self.scene_edits = []
+        self.hold_scene_create = False
+        self.held_scene_creates = []
+        self.scene_create_failures = []
+        self.publish_calls = []
+        self.publish_failures = []
+        self.version_list_requests = []
+        self.description_edits = []
+        self.unconfirm_completed_version = False
 
     def add_version(self, version_id, scene_id, number, description, paths, status, request_key=None):
         self.versions[version_id] = {
@@ -125,6 +136,7 @@ class Api:
         return {'code': 200, **self.summary(version), 'files': version['files']}
 
     def listing(self, scene_id):
+        self.version_list_requests.append(scene_id)
         scene = self.scene(scene_id)
         mine = sorted((v for v in self.versions.values() if v['sceneId'] == scene_id), key=lambda v: -v['versionNo'])
         published = self.versions.get(self.published.get(scene_id))
@@ -156,12 +168,37 @@ def route_handler(api, unmocked):
                       'meta': {'title': '场景管理', 'icon': 'build', 'noCache': False}}]}]})
         if path == '/api/v1/scenes' and method == 'GET':
             return reply(api.list_scenes())
+        if path == '/api/v1/scenes' and method == 'POST':
+            body = json.loads(request.post_data or '{}')
+            api.scene_creates.append(body)
+
+            def create_scene():
+                if api.scene_create_failures:
+                    status = api.scene_create_failures.pop(0)
+                    return reply({'code': status, 'message': '场景创建暂时失败'}, status)
+                scene = {'id': '88888888-8888-4888-8888-%012d' % len(api.scene_creates),
+                         'name': body['name'], 'enabled': True, 'lockVersion': 0}
+                api.scenes.append(scene)
+                return reply({'code': 200, **scene}, 201)
+
+            if api.hold_scene_create:
+                api.held_scene_creates.append(create_scene)
+                return
+            return create_scene()
         if path == '/api/v1/scene-versions/config' and method == 'GET':
             return reply({'code': 200, 'maxBytes': 10485760, 'versionMaxFiles': 1000, 'versionMaxBytes': 4294967296})
         matched = re.fullmatch(r'/api/v1/scenes/([^/]+)', path)
         if matched and method == 'GET':
             api.scene_detail_requests.append(matched.group(1))
             return reply({'code': 200, **api.scene(matched.group(1))})
+        if matched and method == 'PUT':
+            body = json.loads(request.post_data or '{}')
+            api.scene_edits.append(body)
+            scene = api.scene(matched.group(1))
+            if body.get('expectedVersion') != scene['lockVersion']:
+                return reply({'code': 409, 'message': '场景修订号不匹配'}, 409)
+            scene.update(name=body['name'], lockVersion=scene['lockVersion'] + 1)
+            return reply({'code': 200, **scene})
         matched = re.fullmatch(r'/api/v1/scenes/([^/]+)/enabled', path)
         if matched and method == 'PUT':
             body = json.loads(request.post_data or '{}')
@@ -226,8 +263,14 @@ def route_handler(api, unmocked):
             body = json.loads(request.post_data or '{}')
             version = api.versions[matched.group(1)]
             scene = api.scene(version['sceneId'])
+            api.publish_calls.append({'versionId': version['id'], **body})
+            if api.publish_failures:
+                status = api.publish_failures.pop(0)
+                return reply({'code': status, 'message': '发布暂时失败'}, status)
             if body.get('expectedSceneVersion') != scene['lockVersion']:
                 return reply({'code': 409, 'message': '场景修订号不匹配'}, 409)
+            if any(item['status'] != 'AVAILABLE' for item in version['files']):
+                return reply({'code': 400, 'message': '文件尚未全部入库'}, 400)
             api.published[scene['id']] = version['id']
             scene['lockVersion'] += 1
             return reply({'code': 200, **api.summary(version)})
@@ -238,7 +281,20 @@ def route_handler(api, unmocked):
             if api.defer_detail == matched.group(1):
                 api.deferred.append(route)
                 return
-            return reply(api.detail(api.versions[matched.group(1)]))
+            version = api.versions[matched.group(1)]
+            if (api.unconfirm_completed_version and version['requestKey']
+                    and all(item['status'] == 'AVAILABLE' for item in version['files'])):
+                api.unconfirm_completed_version = False
+                version['files'][0]['status'] = 'UPLOADING'
+            return reply(api.detail(version))
+        if matched and method == 'PUT':
+            body = json.loads(request.post_data or '{}')
+            version = api.versions[matched.group(1)]
+            api.description_edits.append({'versionId': version['id'], **body})
+            if body.get('expectedVersion') != version['lockVersion']:
+                return reply({'code': 409, 'message': '版本修订号不匹配'}, 409)
+            version.update(description=body['description'], lockVersion=version['lockVersion'] + 1)
+            return reply(api.detail(version))
         if matched and method == 'DELETE':
             api.deleted_versions.append(matched.group(1))
             del api.versions[matched.group(1)]
@@ -521,6 +577,218 @@ def make_package(run):
     return root
 
 
+def scene_draft_scenario(page, api, run):
+    key = 'ar:new-scene-name:1'
+    draft = '  未提交的新场景草稿  '
+
+    def open_create():
+        page.get_by_role('button', name='新建场景', exact=True).click()
+        dialog = page.locator('.el-dialog').filter(has=page.get_by_role('heading', name='新建场景', exact=True))
+        dialog.wait_for(state='visible')
+        return dialog
+
+    def stored():
+        return page.evaluate('key=>localStorage.getItem(key)', key)
+
+    dialog = open_create()
+    field = dialog.locator('input')
+    before = len(api.scene_creates)
+    original_url = page.url
+    field.fill('   ')
+    field.press('Enter')
+    page.wait_for_timeout(300)
+    check('空白名称 Enter 不创建、不关闭或导航',
+          len(api.scene_creates) == before and dialog.is_visible() and page.url == original_url)
+    field.fill(draft)
+    check('名称修改立即持久化未提交草稿', stored() == draft)
+    field.dispatch_event('keydown', {'key': 'Enter', 'code': 'Enter', 'isComposing': True, 'keyCode': 229})
+    page.wait_for_timeout(300)
+    check('输入法确认 Enter 不创建场景', len(api.scene_creates) == before and dialog.is_visible())
+    dialog.get_by_role('button', name='关闭', exact=True).click()
+    dialog.wait_for(state='hidden')
+    dialog = open_create()
+    check('关闭后重新打开保留名称草稿', dialog.locator('input').input_value() == draft)
+    page.reload()
+    page.get_by_role('heading', name='场景管理', exact=True).wait_for()
+    dialog = open_create()
+    field = dialog.locator('input')
+    check('完整刷新后仍能恢复未提交名称', field.input_value() == draft and stored() == draft)
+    dialog.screenshot(path=str(run / 'scene-create-draft-1440.png'), animations='disabled')
+
+    api.scene_create_failures = [503]
+    field.press('Enter')
+    check('创建失败已收到真实页面 POST 响应',
+          wait_until(page, lambda: len(api.scene_creates) == before + 1
+                     and not dialog.get_by_role('button', name='保存', exact=True).evaluate(
+                         "el=>el.classList.contains('is-loading')")))
+    check('创建失败保留弹窗、输入与持久草稿',
+          dialog.is_visible() and field.input_value() == draft and stored() == draft)
+    dialog.get_by_role('button', name='关闭', exact=True).click()
+    dialog.wait_for(state='hidden')
+
+    # 编辑和保存现有场景不得覆盖此前尚未提交的创建草稿。
+    page.get_by_role('row').filter(has_text=SHORT_NAME).get_by_role(
+        'button', name='场景信息', exact=True).click()
+    edit = page.locator('.el-dialog').filter(has=page.get_by_role('heading', name='场景信息', exact=True))
+    edit.wait_for(state='visible')
+    edit.locator('input').fill(SHORT_NAME + '临时编辑')
+    check('编辑输入不覆盖新建草稿', stored() == draft)
+    edit.get_by_role('button', name='保存', exact=True).click()
+    edit.wait_for(state='hidden')
+    check('编辑成功不清除新建草稿', stored() == draft and len(api.scene_edits) == 1)
+    page.get_by_role('row').filter(has_text=SHORT_NAME + '临时编辑').get_by_role(
+        'button', name='场景信息', exact=True).click()
+    edit.wait_for(state='visible')
+    edit.locator('input').fill(SHORT_NAME)
+    edit.get_by_role('button', name='保存', exact=True).click()
+    edit.wait_for(state='hidden')
+
+    dialog = open_create()
+    field = dialog.locator('input')
+    api.hold_scene_create = True
+    field.press('Enter')
+    check('非空 Enter 发出一个场景创建请求且名称已去首尾空白',
+          wait_until(page, lambda: len(api.held_scene_creates) == 1)
+          and api.scene_creates[-1]['name'] == draft.strip())
+    # 原生禁用输入不能接收键盘；仍派发事件，覆盖处理函数自身的 in-flight 防线。
+    for _ in range(3):
+        field.dispatch_event('keydown', {'key': 'Enter', 'code': 'Enter'})
+    dialog.get_by_role('button', name='保存', exact=True).dispatch_event('click')
+    page.wait_for_timeout(300)
+    check('创建请求挂起时重复 Enter 和点击只保留一个 POST',
+          len(api.scene_creates) == before + 2 and len(api.held_scene_creates) == 1 and stored() == draft)
+    api.hold_scene_create = False
+    api.held_scene_creates.pop()()
+    dialog.wait_for(state='hidden')
+    page.get_by_role('row').filter(has_text=draft.strip()).wait_for()
+    check('成功创建后才清除持久草稿', stored() is None)
+    dialog = open_create()
+    check('成功后的新建弹窗为空', dialog.locator('input').input_value() == '')
+    dialog.get_by_role('button', name='关闭', exact=True).click()
+    dialog.wait_for(state='hidden')
+
+
+def published_ready(drawer, api, version):
+    return (api.published.get(version['sceneId']) == version['id']
+            and all(item['status'] == 'AVAILABLE' for item in version['files'])
+            and f"v{version['versionNo']}" in drawer.locator('.published-card').inner_text()
+            and drawer.locator('.published-card .el-tag').count() == 1
+            and drawer.get_by_role('button', name='停止本次传输', exact=True).count() == 0
+            and drawer.get_by_role('progressbar').count() == 0)
+
+
+def edit_version_description(page, drawer, api, version, description):
+    before = len(api.description_edits)
+    paths = [dict(item) for item in version['files']]
+    drawer.locator('.version-detail input').fill(description)
+    drawer.get_by_role('button', name='保存说明', exact=True).click()
+    check('版本说明实际保存且不改变文件清单',
+          wait_until(page, lambda: len(api.description_edits) == before + 1
+                     and version['description'] == description
+                     and drawer.locator('.version-detail input').input_value() == description
+                     and not drawer.get_by_role('button', name='保存说明', exact=True).evaluate(
+                         "el=>el.classList.contains('is-loading')"))
+          and version['files'] == paths)
+
+
+def automatic_publication_scenario(page, drawer, api, package, run):
+    """Exercise full uploads and publication-only recovery without uploading the bytes again."""
+    previous = api.published[SHORT_ID]
+    calls_before = len(api.publish_calls)
+    uploaded_before = len(api.uploads)
+    api.unconfirm_completed_version = True
+    import_directory(drawer, package, '最终状态确认回归')
+    check('所有 PUT 成功但最终版本状态未确认时停止，不自动发布',
+          wait_until(page, lambda: not api.unconfirm_completed_version
+                     and drawer.locator('.el-alert--error').count() == 1
+                     and drawer.get_by_role('progressbar').count() == 0,
+                     timeout=30)
+          and len(api.publish_calls) == calls_before and api.published[SHORT_ID] == previous
+          and len(api.uploads) == uploaded_before + len(IMPORT_FILES))
+    version = latest_version(api, SHORT_ID)
+    version['files'][0]['status'] = 'AVAILABLE'
+    uploaded_before = len(api.uploads)
+    drawer.get_by_role('button', name='继续上传', exact=True).first.click()
+    check('最终状态确认恢复后无需重传且自动发布一次',
+          wait_until(page, lambda: published_ready(drawer, api, version), timeout=30)
+          and len(api.uploads) == uploaded_before and len(api.publish_calls) == calls_before + 1)
+
+    for failure in (None, 409, 503, 'concurrent'):
+        previous = api.published[SHORT_ID]
+        previous_files = [dict(item) for item in api.versions[previous]['files']]
+        revision = api.scene(SHORT_ID)['lockVersion']
+        calls_before = len(api.publish_calls)
+        created_before = len(api.created_bodies)
+        api.publish_failures = [failure] if isinstance(failure, int) else []
+        api.hold_uploads = failure == 'concurrent'
+        import_directory(drawer, package, f'自动发布回归 {failure}')
+        check('本轮目录创建一个新版本',
+              wait_until(page, lambda: len(api.created_bodies) == created_before + 1, timeout=30))
+        if failure == 'concurrent':
+            check('并发发布冲突前有真实在途文件请求',
+                  wait_until(page, lambda: len(api.held_uploads) == 3, timeout=30))
+            # 另一管理员切换场景发布修订；本轮只能使用开始时已观察到的修订。
+            api.scene(SHORT_ID)['lockVersion'] += 1
+            api.published[SHORT_ID] = SHORT_VERSION
+            previous = SHORT_VERSION
+            previous_files = [dict(item) for item in api.versions[previous]['files']]
+            release_held(api)
+        version = latest_version(api, SHORT_ID)
+        if failure is None:
+            check('完整目录首次成功即自动发布，无手动发布步骤',
+                  wait_until(page, lambda: published_ready(drawer, api, version), timeout=30))
+        else:
+            check(f'发布 {failure} 失败结束传输并显示错误',
+                  wait_until(page, lambda: len(api.publish_calls) == calls_before + 1
+                             and drawer.locator('.el-alert--error').count() == 1
+                             and drawer.get_by_role('button', name='停止本次传输', exact=True).count() == 0
+                             and drawer.get_by_role('progressbar').count() == 0,
+                             timeout=30))
+            check(f'发布 {failure} 失败保留全部已入库文件和旧发布指针',
+                  all(item['status'] == 'AVAILABLE' for item in version['files'])
+                  and api.published[SHORT_ID] == previous
+                  and api.summary(version)['uploadStatus'] == 'READY'
+                  and api.versions[previous]['files'] == previous_files)
+        page.wait_for_timeout(300)
+        check(f'自动发布 {failure} 仅发送一次且不弹确认',
+              len(api.publish_calls) == calls_before + 1
+              and api.publish_calls[-1] == {'versionId': version['id'], 'expectedSceneVersion': revision}
+              and page.locator('.el-message-box:visible').count() == 0)
+        if failure is not None:
+            uploaded = list(api.uploads)
+            created = len(api.created_bodies)
+            if failure == 409:
+                edit_version_description(page, drawer, api, version, '未发布版本说明仍可编辑')
+            if failure == 'concurrent':
+                check('并发修订冲突不静默采用新修订重新发布',
+                      api.publish_calls[-1]['expectedSceneVersion'] != api.scene(SHORT_ID)['lockVersion']
+                      and len(api.publish_calls) == calls_before + 1)
+                # 用户明确刷新后，才允许人工确认使用当前修订重试。
+                listings = len(api.version_list_requests)
+                drawer.get_by_role('button', name='刷新', exact=True).click()
+                check('人工刷新加载当前发布修订',
+                      wait_until(page, lambda: len(api.version_list_requests) > listings))
+            drawer.locator('.version-detail').get_by_role('button', name='替换发布', exact=True).click()
+            confirm = page.locator('.el-message-box')
+            confirm.wait_for(state='visible')
+            confirm.get_by_role('button', name='确认替换', exact=True).click()
+            check(f'发布 {failure} 失败后人工重试可成功',
+                  wait_until(page, lambda: published_ready(drawer, api, version), timeout=30))
+            check(f'人工重试 {failure} 只重试发布，不重复上传或创建版本',
+                  api.uploads == uploaded and len(api.created_bodies) == created
+                  and len(api.publish_calls) == calls_before + 2)
+        check('替换后原发布版本及其全部文件保留为历史',
+              previous in api.versions and api.versions[previous]['files'] == previous_files
+              and not api.summary(api.versions[previous])['published'])
+        if failure is None:
+            edit_version_description(page, drawer, api, version, '已发布版本说明仍可编辑')
+            check('已发布版本说明编辑后当前发布卡片同步且指针不变',
+                  wait_until(page, lambda: version['description'] in drawer.locator('.published-card').inner_text())
+                  and api.published[SHORT_ID] == version['id'])
+            page.wait_for_function("()=>!document.querySelector('.el-message')")
+            page.screenshot(path=str(run / 'panel-automatically-published-edited-1440.png'), full_page=True)
+
+
 def main():
     global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
@@ -631,6 +899,7 @@ def main():
             short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)
             long_row = page.get_by_role('row').filter(has_text=LONG_NAME[:12])
             long_row.wait_for()
+            scene_draft_scenario(page, api, run)
 
             short_row.get_by_role('button', name='场景信息', exact=True).click()
             dialog = page.locator('.el-dialog').filter(has_text='场景信息').first
@@ -656,11 +925,13 @@ def main():
             check('打开面板未经过场景信息弹窗', not dialog.is_visible())
 
             before_publish = api.calls.count('GET /api/v1/scenes')
+            expected_revision = api.scene(SHORT_ID)['lockVersion'] + 1
             drawer.get_by_role('row').filter(has_text=SHORT_DESCRIPTION).get_by_role('button', name='发布', exact=True).click()
             page.get_by_role('button', name='确认发布', exact=True).click()
-            page.get_by_role('row').filter(has_text=SHORT_NAME).get_by_text('4', exact=True).wait_for(timeout=10000)
+            page.get_by_role('row').filter(has_text=SHORT_NAME).get_by_text(str(expected_revision), exact=True).wait_for(timeout=10000)
             check('发布后返回列表刷新修订号',
-                  api.calls.count('GET /api/v1/scenes') > before_publish and api.scene(SHORT_ID)['lockVersion'] == 4)
+                  api.calls.count('GET /api/v1/scenes') > before_publish
+                  and api.scene(SHORT_ID)['lockVersion'] == expected_revision)
             check('发布后记录的当前发布版本是所选版本', api.published.get(SHORT_ID) == SHORT_VERSION)
             check('发布后面板保持选中该版本', selected_version_in_url(page) == SHORT_VERSION)
             check('关闭面板回到场景列表', close_panel(page))
@@ -735,6 +1006,7 @@ def main():
             drawer.get_by_text(SHORT_VERSION).wait_for()
             api.uploads.clear()
             api.created_bodies.clear()
+            publish_before = len(api.publish_calls)
             api.hold_uploads = True
             api.fail_once = {'models/high-0.c.ply'}
             reset_xhr(page)
@@ -776,6 +1048,8 @@ def main():
             check('首批三个均未完成时恰有三个在途，没有第四个',
                   stats['active'] == 3 and stats['peak'] == 3 and stats['sent'] == 3
                   and len(api.held_uploads) == 3 and api.uploads == IMPORT_FILES[:3])
+            check('文件请求尚未完成时不自动发布且旧指针保留',
+                  len(api.publish_calls) == publish_before and api.published[SHORT_ID] == SHORT_VERSION)
             # 仅完成一个文件，继续持有其余请求，检查列表不是等整轮结束才刷新。
             _, deliver = api.held_uploads.pop(0)
             deliver()
@@ -794,6 +1068,8 @@ def main():
             release_held(api)
             check('单个文件失败后其余文件继续传完并显示汇总',
                   wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 1 个，结果未确认 0 个').count() == 1, timeout=30))
+            check('有失败文件时不自动发布且旧版本继续发布',
+                  len(api.publish_calls) == publish_before and api.published[SHORT_ID] == SHORT_VERSION)
             check('每个文件恰好请求一次且并发峰值为三',
                   sorted(api.uploads) == IMPORT_FILES and xhr_stats(page)['peak'] == 3)
             check('异常列表完整列出失败文件、分类与原因',
@@ -810,19 +1086,26 @@ def main():
                       for f in api.created_bodies[0]['files']))
             uploaded_before = list(api.uploads)
             drawer.get_by_role('button', name='继续上传', exact=True).first.click()
-            check('继续上传后全部文件入库',
-                  wait_until(page, lambda: all(f['status'] == 'AVAILABLE' for v in api.versions.values()
-                                               if v['requestKey'] for f in v['files'])
-                             and drawer.get_by_text('全部文件已校验入库，可以发布').count() == 1, timeout=30))
+            imported_version = latest_version(api, SHORT_ID)
+            check('继续上传后全部文件入库并自动发布',
+                  wait_until(page, lambda: published_ready(drawer, api, imported_version), timeout=30))
+            check('成功续传只自动发布一次且不出现确认弹窗',
+                  len(api.publish_calls) == publish_before + 1
+                  and page.locator('.el-message-box:visible').count() == 0)
+            check('自动替换发布后旧版本仍保留为历史',
+                  SHORT_VERSION in api.versions and not api.summary(api.versions[SHORT_VERSION])['published'])
             check('继续上传只发送失败的文件', api.uploads[len(uploaded_before):] == ['models/high-0.c.ply'])
             check('已入库文件没有被重复上传', api.uploads.count('media/poster.jpg') == 1)
             check('创建版本没有因继续上传重复提交', len(api.created_bodies) == 1)
             page.screenshot(path=str(run / 'panel-import-1440.png'), full_page=True)
+            page.screenshot(path=str(run / 'panel-automatically-published-1440.png'), full_page=True)
 
             # 停止：三个在途请求全部中止，不再派发新请求，也不出现成功提示。
             api.hold_uploads = True
             api.uploads.clear()
             api.held_uploads.clear()
+            publish_before = len(api.publish_calls)
+            old_published = api.published[SHORT_ID]
             reset_xhr(page)
             import_directory(drawer, package)
             check('停止前首批三个请求被持有', wait_until(page, lambda: len(api.held_uploads) == 3, timeout=30))
@@ -835,7 +1118,8 @@ def main():
             stats = xhr_stats(page)
             check('停止后三个在途请求全部中止且没有第四个请求',
                   stats['aborts'] == 3 and stats['sent'] == 3 and stats['active'] == 0 and len(api.uploads) == 3)
-            check('停止后不出现成功提示', '全部文件已校验入库' not in drawer.inner_text())
+            check('停止后不自动发布且旧发布版本不变',
+                  len(api.publish_calls) == publish_before and api.published[SHORT_ID] == old_published)
             api.held_uploads.clear()  # 已中止的请求不再 fulfill
 
             # 状态驱动续传：首批三个文件分别为 AVAILABLE、FAILED、仍 UPLOADING，其余 PENDING。
@@ -853,12 +1137,15 @@ def main():
                   sorted(api.uploads) == sorted([IMPORT_FILES[1]] + IMPORT_FILES[3:]))
             check('仍在处理的文件显示为结果未确认且未被断言未入库',
                   issue_rows(drawer, IMPORT_FILES[2], '结果未确认').filter(has_text='本轮开始时服务端仍在处理').count() == 1)
+            check('仍有结果未确认时不自动发布',
+                  len(api.publish_calls) == publish_before and api.published[SHORT_ID] == old_published)
             stopped_files[IMPORT_FILES[2]].update(status='AVAILABLE', failureReason=None)
             api.uploads.clear()
             drawer.get_by_role('button', name='继续上传', exact=True).first.click()
             check('处理中文件入库后再次继续：无新增请求且成功',
-                  wait_until(page, lambda: drawer.get_by_text('全部文件已校验入库，可以发布').count() == 1, timeout=30)
+                  wait_until(page, lambda: published_ready(drawer, api, latest_version(api, SHORT_ID)), timeout=30)
                   and api.uploads == [] and drawer.locator('.el-alert--error').count() == 0)
+            check('无需再传字节的成功续传也只发布一次', len(api.publish_calls) == publish_before + 1)
 
             # 结果未确认：四个文件的 PUT 连接中断且状态查询失败，另外两个正常；六个都必须被尝试并完整列出。
             api.hold_uploads = False
@@ -866,6 +1153,8 @@ def main():
             api.uploads.clear()
             api.unconfirmed_uploads = set(IMPORT_FILES[:4])
             api.state_failures = set(IMPORT_FILES[:4])
+            publish_before = len(api.publish_calls)
+            old_published = api.published[SHORT_ID]
             import_directory(drawer, package)
             check('四个结果未确认时仍完成全部六个文件的请求并显示汇总',
                   wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 0 个，结果未确认 4 个').count() == 1, timeout=30)
@@ -879,6 +1168,8 @@ def main():
             check('其余两个文件已入库，页面不宣称异常文件确定未入库',
                   all(f['status'] == 'AVAILABLE' for f in unconfirmed_version['files'] if f['relativePath'] in IMPORT_FILES[4:])
                   and '确定未入库' not in drawer.inner_text())
+            check('PUT 和状态查询都未确认时不自动发布且旧版本可用',
+                  len(api.publish_calls) == publish_before and api.published[SHORT_ID] == old_published)
             api.unconfirmed_uploads = set()
             api.state_failures = set()
 
@@ -897,6 +1188,7 @@ def main():
             selected_files = [archive, arbitrary]
             expected_bytes = {file.name: file.read_bytes() for file in selected_files}
             created_before = len(api.created_bodies)
+            publish_before = len(api.publish_calls)
             api.fail_once = {archive.name}
             with page.expect_file_chooser() as chooser:
                 drawer.get_by_role('button', name='导入文件', exact=True).click()
@@ -908,6 +1200,7 @@ def main():
             drawer.get_by_role('button', name='开始导入', exact=True).click()
             check('多文件首次上传保留单个失败并允许续传',
                   wait_until(page, lambda: summary_alert(drawer, '本轮请求失败 1 个').count() == 1, timeout=30))
+            check('多文件含失败文件时不自动发布', len(api.publish_calls) == publish_before)
             files_version = latest_version(api, SHORT_ID)
             check('一次多文件选择创建同一个版本且仅使用文件名',
                   len(api.created_bodies) == created_before + 1
@@ -935,11 +1228,32 @@ def main():
                 drawer.get_by_role('button', name='重新选择文件', exact=True).click()
             chooser.value.set_files([str(file) for file in reversed(selected_files)])
             check('刷新重新选择后仅重试失败 ZIP，跳过 AVAILABLE 且不创建新版本',
-                  wait_until(page, lambda: drawer.get_by_text('全部文件已校验入库，可以发布').count() == 1, timeout=30)
+                  wait_until(page, lambda: published_ready(drawer, api, files_version), timeout=30)
                   and api.uploads[uploads_before:] == [archive.name]
                   and len(api.created_bodies) == created_before + 1)
             check('重试 ZIP 字节仍保持原样',
                   api.upload_bodies[-1] == (files_version['id'], archive.name, expected_bytes[archive.name]))
+            check('刷新后恢复多文件成功只自动发布一次且不确认',
+                  len(api.publish_calls) == publish_before + 1
+                  and page.locator('.el-message-box:visible').count() == 0)
+            publish_before = len(api.publish_calls)
+            created_before = len(api.created_bodies)
+            uploads_before = len(api.uploads)
+            with page.expect_file_chooser() as chooser:
+                drawer.get_by_role('button', name='导入文件', exact=True).click()
+            chooser.value.set_files([str(file) for file in selected_files])
+            drawer.get_by_role('button', name='开始导入', exact=True).click()
+            check('首次成功的多文件导入创建一个版本',
+                  wait_until(page, lambda: len(api.created_bodies) == created_before + 1, timeout=30))
+            complete_files_version = latest_version(api, SHORT_ID)
+            check('首次成功的多文件导入自动发布一次且不弹确认',
+                  wait_until(page, lambda: published_ready(drawer, api, complete_files_version), timeout=30)
+                  and len(api.publish_calls) == publish_before + 1
+                  and len(api.uploads) == uploads_before + len(selected_files)
+                  and page.locator('.el-message-box:visible').count() == 0)
+            page.screenshot(path=str(run / 'panel-files-automatically-published-1440.png'), full_page=True)
+            api.upload_receiver = None
+            automatic_publication_scenario(page, drawer, api, package, run)
             check('导入完成后关闭面板回到列表', close_panel(page))
 
             short_row = page.get_by_role('row').filter(has_text=SHORT_NAME)

@@ -354,7 +354,7 @@ def scenario(s, check):
 
 
 def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
-    """Real browser: import a resource directory through the panel, publish, reload and check nothing is covered."""
+    """Real browser: import and automatically publish a directory, reload and check nothing is covered."""
     from playwright.sync_api import sync_playwright
     name = 'ui-' + uuid.uuid4().hex[:8]
     scene = s.api('/api/v1/scenes', 'POST', {'name': name})[1]
@@ -402,11 +402,10 @@ def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
                                return !!top && (top === el || el.contains(top)); }"""):
                         obscured.append(b.inner_text() or b.get_attribute('class'))
                 check(f'browser panel buttons are not covered at {width}px', not obscured and len(buttons) > 0)
-            version_row = drawer.get_by_role('row').filter(has_text='v1')
-            version_row.get_by_role('button', name='发布', exact=True).click()
-            page.get_by_role('button', name='确认发布', exact=True).click()
-            page.get_by_text('该场景尚未发布').wait_for(state='hidden')
-            check('browser publish pins the version', s.api(f'/api/v1/scenes/{scene["id"]}/versions')[1]['published']['versionNo'] == 1)
+            drawer.locator('.published-card .el-tag').wait_for(timeout=60000)
+            check('browser import automatically publishes the READY version without a confirmation',
+                  s.api(f'/api/v1/scenes/{scene["id"]}/versions')[1]['published']['versionNo'] == 1
+                  and page.locator('.el-message-box:visible').count() == 0)
             page.reload()
             page.get_by_role('heading', name='当前发布版本').wait_for()
             check('browser reload keeps the scene and version in the address', 'sceneId=' in page.url and 'versionId=' in page.url)

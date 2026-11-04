@@ -22,8 +22,8 @@
     </el-table>
     <pagination v-show="total>0" :total="total" v-model:page="page" v-model:limit="limit" @pagination="load" />
     <el-dialog v-model="visible" :title="form.id?'场景信息':'新建场景'" width="600px" :close-on-click-modal="false">
-      <el-form label-width="100px">
-        <el-form-item label="名称" required><el-input v-model="form.name" maxlength="200" /></el-form-item>
+      <el-form label-width="100px" @submit.prevent="save">
+        <el-form-item label="名称" required><el-input v-model="form.name" maxlength="200" :disabled="saving" @keydown.enter="submitName" /></el-form-item>
         <el-form-item v-if="form.id" label="场景编号"><span>{{form.id}}</span></el-form-item>
       </el-form>
       <template #footer><el-button @click="visible=false">关闭</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
@@ -39,6 +39,9 @@
 import request from '@/utils/request'
 import VersionPanel from './VersionPanel.vue'
 import { useRoute, useRouter } from 'vue-router'
+import { watch } from 'vue'
+import cache from '@/plugins/cache'
+import useUserStore from '@/store/modules/user'
 const route=useRoute(),router=useRouter()
 const panelScene=computed(()=>String(route.query.sceneId||''))
 function openVersions(row){const query={...route.query,sceneId:row.id};delete query.versionId;router.replace({query})}
@@ -46,17 +49,31 @@ function closeVersions(){const query={...route.query};delete query.sceneId;delet
 import { ElMessage, ElMessageBox } from 'element-plus'
 const deleting=ref(false)
 const items=ref([]),total=ref(0),page=ref(1),limit=ref(20),name=ref(''),loading=ref(false),visible=ref(false),saving=ref(false),form=ref({})
+const draftKey='ar:new-scene-name:'+useUserStore().id
+watch(()=>form.value.name,value=>{
+  if(!form.value.id)cache.local.set(draftKey,value??'')
+},{flush:'sync'})
 async function load(){loading.value=true;try{const r=await request.get('/api/v1/scenes',{params:{name:name.value,limit:limit.value,offset:(page.value-1)*limit.value}});items.value=r.items;total.value=r.total}finally{loading.value=false}}
 function search(){page.value=1;load()}
-function create(){form.value={name:''};visible.value=true}
+function create(){form.value={name:cache.local.get(draftKey)||''};visible.value=true}
 async function edit(row){form.value=await request.get('/api/v1/scenes/'+row.id);visible.value=true}
+function submitName(event){
+  if(event.isComposing||event.keyCode===229)return
+  event.preventDefault()
+  save()
+}
 async function save(){
+  if(saving.value)return
   if(!form.value.name?.trim()) return ElMessage.warning('请填写场景名称')
   const s=form.value
-  const data={name:s.name,expectedVersion:s.lockVersion}
+  const data={name:s.name.trim(),expectedVersion:s.lockVersion}
   saving.value=true
-  try{await request({url:'/api/v1/scenes'+(s.id?'/'+s.id:''),method:s.id?'put':'post',data});visible.value=false;ElMessage.success('场景已保存');await load()}
-  catch(e){if(e.response?.status===409){await load();visible.value=false}}
+  try{
+    await request({url:'/api/v1/scenes'+(s.id?'/'+s.id:''),method:s.id?'put':'post',data})
+    if(!s.id){form.value={};cache.local.remove(draftKey)}
+    visible.value=false;ElMessage.success('场景已保存');await load()
+  }
+  catch(e){if(e.response?.status===409){await load();if(s.id)visible.value=false}}
   finally{saving.value=false}
 }
 async function toggle(row){
