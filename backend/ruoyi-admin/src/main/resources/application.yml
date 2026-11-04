@@ -123,19 +123,36 @@ pagehelper:
   supportMethodsArguments: true
   params: count=countSql
 
-# Springdoc配置
+# Springdoc/Knife4j 接口文档配置，按业务域分组；doc.html 由 knife4j 提供。
 springdoc:
   api-docs:
     path: /v3/api-docs
+    groups:
+      enabled: true
   swagger-ui:
-    enabled: false
+    enabled: true
     path: /swagger-ui.html
     tags-sorter: alpha
+    operations-sorter: alpha
   group-configs:
-    - group: 'default'
-      display-name: '测试模块'
-      paths-to-match: '/**'
-      packages-to-scan: com.ruoyi.web.controller.tool
+    - group: 'ar-client'
+      display-name: '客户端只读接口'
+      packages-to-scan: com.ruoyi.ar
+      paths-to-match: /api/v1/client/**
+    - group: 'ar-admin'
+      display-name: '场景与版本管理'
+      packages-to-scan: com.ruoyi.ar
+      paths-to-match: /api/v1/scenes,/api/v1/scenes/**,/api/v1/scene-versions/**,/api/v1/audits
+    - group: 'system'
+      display-name: '登录与系统管理'
+      packages-to-scan: com.ruoyi.web.controller
+
+# Knife4j：springdoc 2.8.x 下须关闭增强（knife4j.enable=false），仅使用其 doc.html UI；
+# 开启会因 Knife4jOpenApiCustomizer 与新 springdoc 的类型不兼容而启动失败。
+knife4j:
+  enable: false
+  setting:
+    language: zh_cn
 
 # 防盗链配置
 referer:

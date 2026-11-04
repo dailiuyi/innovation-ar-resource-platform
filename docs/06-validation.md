@@ -553,3 +553,23 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 - 两个入口的首页、healthz、captchaImage 均 200；匿名目录各 4 项，详情返回 200，单文件 Range 抽查各返回 206 和 16 B。实际 Chrome 访问 HTTPS 可渲染登录页；没有现成日常账号登录态，未代登录或向云端上传测试数据，不将本地合成接口检查冒充线上真实账号自动发布验收。
 - 回退保留旧镜像 `multi-file-ebf930c` 与发布目录 `compose.before.yaml`；必要时恢复该配置后仅重建 gateway，不动数据库。验收在本地与远端发布目录 `release.json`、`source.json`，登录截图 `public-login.png`。用户手动验收：刷新页面后，用现有账号新建场景按 Enter、验证名称草稿、上传并查看自动发布、修改已发布版本说明。
 - 发布记录更新后 `harness.py check --profile quick` 全部通过，报告 `.local/harness/20261030T124923Z-9w4qz5l6/report.json`；本次文档与源码均未提交/推送。
+
+## 2026-11-04 Knife4j 接口文档与云端更新
+
+用户授权添加 Knife4j 注解并部署。主机 elma-ubuntu-pc，独立分支 `feat/knife4j-docs-20261104`；原 main 工作区的未提交修改原样保留，数据库连接改动、IDE 与根目录参考文件不进入交付。
+
+现有 Knife4j 4.5.0 + springdoc 2.8.9 接入补充了场景、版本、请求模型和登录接口说明。保留 `knife4j.enable=false` 的纯 UI 模式；实测页面与分组可用。文档声明 HTTP Bearer，匿名客户端与登录操作清空认证要求，上传请求体声明 binary；服务器路径 `/prod-api` 对应现行同源网关。文档页面和 JSON 允许匿名访问，管理业务仍需认证。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：通过，50 tests，0 failures/errors/skipped。构建 JBR 25.0.4.1，目标 Java 21；运行容器 Java 21。最终 Jar SHA256 `edc0c3f5b49ff9b563f0806710de438279bc7589d51e5a7d66cef2d88847af3e`。
+- 使用主工作区 `.local/ingestion-venv/bin/python` 执行 `scripts/harness.py doctor --profile quick`、`scripts/harness.py check --profile quick`：通过。系统 Python 缺少验证依赖，改用已有 venv 后通过；未安装或修改系统依赖。
+- 复用 prepare_4dgs_check.py 已准备的 `innovation-ar-resource-platform-infra-check`，以本任务 override 挂载新 Jar/nginx，端口 `127.0.0.1:18082`。PostgreSQL 17.6。真实隔离账号登录成功，Bearer 查询场景成功，未登录管理请求 HTTP 401，匿名客户端目录成功。未运行全量 ingestion 回归，未验证 Unity/手机。
+- Playwright + 本机 Google Chrome：隔离与公网 `/doc.html` 均完整加载，无 pageerror。三个分组 ar-client/ar-admin/system 分别包含 3/10/39 个路径；确认场景创建路径、binary 上传模型、Bearer 定义和匿名操作空 security。
+- 公网 `https://4dgs.elma-gohan.xyz/healthz`、`/doc.html`、`/v3/api-docs/swagger-config` 和上述三个分组全部 HTTP 200。公网日常账号密码登录未执行；没有使用退役 bootstrap。
+
+云端 `innovation`（daily@81.71.154.125），目录 `/home/daily/innovation-ar-resource-platform`：先用 `docker compose --env-file config/compose.env exec -T postgres pg_dump -U innovation -d innovation_ar_resource_platform -Fc` 备份到 `backups/knife4j-20261104/before.dump`（0600）。保存原 Compose 为 `releases/knife4j-20261104/compose-before.yaml`。新镜像 backend/gateway 标签均为 `knife4j-20261104`；backend 基于原运行镜像仅替换已测试 Jar，gateway 基于原运行镜像仅替换 nginx.conf，保留原前端 dist。执行 `docker compose --env-file config/compose.env up -d --no-deps --no-build --pull never backend gateway`；未重启 PostgreSQL/Redis，未修改数据库迁移。
+
+发布文件、Dockerfile 和 release.py 在服务器 `releases/knife4j-20261104/`；本地测试报告、截图与脚本在独立工作区 `.local/`。回退须在仓库目录恢复保存的 Compose，再以同一 up 命令启动 backend/gateway；不恢复数据库快照、不删除卷。旧镜像保留，回退未实际执行。
+
+人工验收：打开 `/doc.html` → 左上选择客户端只读接口或场景与版本管理 → 展开接口查看说明；需要调试管理接口时，先登录获取 token，再在 Authorize 填入 token。

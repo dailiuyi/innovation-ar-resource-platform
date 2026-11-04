@@ -1,6 +1,9 @@
 package com.ruoyi.web.controller.system;
 
 import java.util.Date;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import java.util.List;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +32,7 @@ import com.ruoyi.system.service.ISysMenuService;
  * 
  * @author ruoyi
  */
+@Tag(name = "登录与会话", description = "登录获取 Bearer Token；用户信息和菜单需要登录")
 @RestController
 public class SysLoginController
 {
@@ -53,6 +57,8 @@ public class SysLoginController
      * @param loginBody 登录信息
      * @return 结果
      */
+    @Operation(summary = "账号登录", description = "成功后返回 token；在文档右上角 Authorize 中填入 token")
+    @SecurityRequirements
     @PostMapping("/login")
     public AjaxResult login(@RequestBody LoginBody loginBody)
     {
@@ -69,6 +75,7 @@ public class SysLoginController
      * 
      * @return 用户信息
      */
+    @Operation(summary = "查询当前用户信息")
     @GetMapping("getInfo")
     public AjaxResult getInfo()
     {
@@ -98,6 +105,7 @@ public class SysLoginController
      * 
      * @return 路由信息
      */
+    @Operation(summary = "查询当前用户菜单")
     @GetMapping("getRouters")
     public AjaxResult getRouters()
     {

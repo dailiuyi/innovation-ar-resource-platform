@@ -106,7 +106,9 @@ public class SecurityConfig
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             // 注解标记允许匿名访问的url
             .authorizeHttpRequests((requests) -> {
-                requests.requestMatchers(HttpMethod.POST, "/login").permitAll()
+                // Knife4j/OpenAPI 接口文档（doc.html、/v3/api-docs/**、webjars），允许匿名读取；业务接口仍按原有规则鉴权。
+                requests.requestMatchers("/doc.html", "/v3/api-docs/**", "/webjars/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/login").permitAll()
                     .requestMatchers(HttpMethod.GET, "/captchaImage").permitAll()
                     .requestMatchers(HttpMethod.GET, "/getInfo", "/getRouters", "/system/user/list", "/system/user/profile", "/monitor/logininfor/list", "/monitor/operlog/list", "/monitor/operlog/{id}", "/system/dict/data/type/*").authenticated()
                     .requestMatchers(HttpMethod.POST, "/system/user").authenticated()

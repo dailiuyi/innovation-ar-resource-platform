@@ -119,3 +119,7 @@ curl -s -D - -o /dev/null -H 'Range: bytes=0-31' "$BASE<downloadPath>"   # 期�
 curl -sI "$BASE<downloadPath>"                                           # 期望 200, 带 ETag, 无 body
 python3 scripts/download_scene.py --base-url "$BASE" --scene-id "$SID" --output ./dl   # 整个版本写入 ./dl/<sceneId>/<versionId>/payload/
 ```
+
+### 在线接口文档（2026-11-04）
+
+[Knife4j 接口文档](https://4dgs.elma-gohan.xyz/doc.html) 左上角选择「客户端只读接口」。对应 [OpenAPI JSON](https://4dgs.elma-gohan.xyz/v3/api-docs/ar-client)。文档可匿名读取；管理接口调试须先登录并在 Authorize 填入返回的 token。部署验证与边界见 [验证记录](06-validation.md)。

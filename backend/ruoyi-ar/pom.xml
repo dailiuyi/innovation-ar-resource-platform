@@ -5,6 +5,8 @@
   <dependencies>
     <dependency><groupId>org.springframework</groupId><artifactId>spring-jdbc</artifactId></dependency>
     <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-common</artifactId></dependency>
+    <!-- 仅用 swagger-annotations 提供接口文档元数据，不引入文档 UI -->
+    <dependency><groupId>io.swagger.core.v3</groupId><artifactId>swagger-annotations-jakarta</artifactId></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
   </dependencies>
   <build><plugins><plugin>
