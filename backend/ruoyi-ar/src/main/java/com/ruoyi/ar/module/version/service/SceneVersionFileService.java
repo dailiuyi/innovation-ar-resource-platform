@@ -60,6 +60,13 @@ public class SceneVersionFileService {
         return required(manager.file(versionId, fileId));
     }
 
+    /**
+     * 查询版本下指定文件的元数据与实时就绪状态。
+     *
+     * @param versionId 版本唯一标识 UUID
+     * @param fileId 文件记录唯一标识 UUID
+     * @return 包含文件路径、字节数、SHA-256、状态（PENDING/UPLOADING/AVAILABLE/FAILED）与尝试次数的 Map
+     */
     public Map<String, Object> fileStatus(UUID versionId, UUID fileId) {
         sceneOf(versionId);
         return file(versionId, fileId).response();
@@ -69,7 +76,23 @@ public class SceneVersionFileService {
         return new ArtifactStorage.Descriptor(UUID.fromString(row.fileId()), row.bytes(), row.sha256());
     }
 
-    /** 持版本读锁并登记在途文件；发布/删除中或同文件重复上传返回 409。 */
+    /**
+     * 接收并保存单个文件的二进制输入流。
+     * <p>
+     * <b>执行流程与并发控制</b>：
+     * <ol>
+     *   <li>获取版本的共享读锁（防止在上传时发生整版删除或版本发布）；</li>
+     *   <li>在在途集合登记 {@code fileId}，防止同一文件被并发重复上传；</li>
+     *   <li>开启小事务将文件状态标记为 {@code UPLOADING}；</li>
+     *   <li>事务外部调用存储引擎流式写入磁盘，同时动态计算大小与 SHA-256；</li>
+     *   <li>物理校验通过后原子转正，并在单独事务中将文件标记为 {@code AVAILABLE}。</li>
+     * </ol>
+     *
+     * @param versionId 版本唯一标识 UUID
+     * @param fileId 文件记录唯一标识 UUID
+     * @param input 来自 HTTP 请求的原始二进制字节流
+     * @return 包含更新后文件状态的 Map
+     */
     public Map<String, Object> upload(UUID versionId, UUID fileId, InputStream input) {
         sceneOf(versionId);
         var lock = readLock(concurrency, versionId);
@@ -152,7 +175,17 @@ public class SceneVersionFileService {
         });
     }
 
-    /** 持读锁，拒绝删除中或未就绪的文件；以附件形式返回。 */
+    /**
+     * 管理端下载或预检指定文件（支持 HTTP Range 区间断点续传）。
+     * <p>
+     * 以附件形式（{@code Content-Disposition: attachment}）输出。要求文件必须处于 {@code AVAILABLE} 状态。
+     *
+     * @param versionId 版本唯一标识 UUID
+     * @param fileId 文件记录唯一标识 UUID
+     * @param request HTTP 请求对象
+     * @param response HTTP 响应对象
+     * @throws IOException 当底层存储文件不存在、读取中断或网络管道破损时抛出
+     */
     public void adminDownload(UUID versionId, UUID fileId, HttpServletRequest request, HttpServletResponse response) throws IOException {
         sceneOf(versionId);
         var lock = readLock(concurrency, versionId);
@@ -167,8 +200,22 @@ public class SceneVersionFileService {
     }
 
     /**
-     * 锁前后检查场景发布指针；旧版本 URL 返回 409，不自动切换文件。
-     * 读锁持有至传输结束，期间不再检查发布指针；URL 文件名只校验，不用于落盘。
+     * 终端客户端下载或预检当前发布版本的文件（支持 HTTP Range 断点续传）。
+     * <p>
+     * <b>安全校验</b>：
+     * <ul>
+     *   <li>核验该版本必须是所属场景<b>当前生效的发布版本</b>；若已被后续新版本替换，返回 409 CONFLICT；</li>
+     *   <li>URL 中的 {@code fileName} 必须与数据库中登记的相对路径末段一致；</li>
+     *   <li>读锁持有贯穿整个 Range 数据流输出过程。</li>
+     * </ul>
+     *
+     * @param sceneId 场景唯一标识 UUID
+     * @param versionId 版本唯一标识 UUID
+     * @param fileId 文件记录唯一标识 UUID
+     * @param fileName URL 尾部的文件名
+     * @param request HTTP 请求
+     * @param response HTTP 响应
+     * @throws IOException 当底层存储读取或网络传输异常时抛出
      */
     public void clientDownload(UUID sceneId, UUID versionId, UUID fileId, String fileName, HttpServletRequest request, HttpServletResponse response) throws IOException {
         clientVersion(sceneId, versionId);
@@ -213,8 +260,11 @@ public class SceneVersionFileService {
     }
 
     /**
-     * 恢复 PENDING/UPLOADING/FAILED 文件，完整遗留字节校验通过才补记 AVAILABLE。
-     * 不扫描 AVAILABLE 正文；存储无法盘点时拒绝启动。须在删除恢复之后调用。
+     * 服务启动时恢复非 AVAILABLE（PENDING/UPLOADING/FAILED）状态的文件记录。
+     * <p>
+     * 扫描底层存储磁盘盘点快照，对拥有完整遗留物理文件的记录重新校验 SHA-256 与大小；
+     * 校验完全吻合则自动修补并提交为 {@code AVAILABLE}。
+     * 本方法必须在整版本删除恢复（{@code recoverDeletions}）之后执行。
      */
     public void recoverFiles() {
         Set<UUID> leftovers = new HashSet<>();

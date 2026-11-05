@@ -16,7 +16,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 查询当前发布版本的元数据，不读文件正文。下载时由版本文件 Service 重新校验可见性。 */
+/**
+ * 客户端只读业务服务。
+ * <p>
+ * 查询当前已发布版本的元数据并组装响应，不直接读取存储中的文件二进制正文。
+ * 实际下载请求将流转至版本文件服务（{@code SceneVersionFileService}）进行严格的场景可见性二次核验。
+ */
 @Service
 @ConditionalOnProperty(name = "ar.storage.enabled", havingValue = "true")
 public class ClientSceneService {
@@ -27,13 +32,29 @@ public class ClientSceneService {
         this.manager = manager;
     }
 
-    /** 列表与总数共用可见条件；名称为空时不过滤。 */
+    /**
+     * 查询符合客户端可见性条件的场景目录列表与匹配总数。
+     *
+     * @param name 场景名称过滤字串（模糊匹配），为空时不进行过滤
+     * @param limit 本次查询分页条数上限
+     * @param offset 分页偏移量
+     * @return 包含场景概要列表 {@code items} 与总数 {@code total} 的 Map
+     */
     public Map<String, Object> list(String name, int limit, int offset) {
         var catalog = manager.list(name, limit, offset);
         return Map.of("items", catalog.items(), "total", catalog.total());
     }
 
-    /** 返回发布版本的文件清单和下载地址；场景不可见或无文件时返回 404。 */
+    /**
+     * 获取指定场景当前发布版本的文件清单与下载详情。
+     * <p>
+     * 仅当场景存在、未删除、已启用且包含可用的当前发布版本及有效文件时才返回结果；
+     * 否则统一抛出 404 状态异常，避免向外界泄露场景的未发布草稿细节。
+     *
+     * @param sceneId 场景唯一标识 UUID
+     * @return 包含文件清单、版本号和统计信息的完整响应 Map
+     * @throws ResponseStatusException 若场景不存在、不可见或无有效就绪文件，则抛出 404 异常
+     */
     public Map<String, Object> detail(UUID sceneId) {
         String sceneIdText = sceneId.toString();
         var detail = manager.detail(sceneIdText);

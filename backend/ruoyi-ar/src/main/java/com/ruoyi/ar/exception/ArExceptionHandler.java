@@ -9,13 +9,27 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 统一 AR 控制器错误响应；过滤器鉴权错误和框架登录响应不经过这里。 */
+/**
+ * AR 模块专用全局控制器异常统一处理器。
+ * <p>
+ * 拦截 {@code com.ruoyi.ar} 包下所有控制器抛出的未捕获异常并映射为结构化 JSON 响应。
+ * 约定契约：
+ * <ul>
+ *   <li>{@link ResponseStatusException} 保留原始状态码与 reason 说明；</li>
+ *   <li>Spring Security 拒绝访问统一映射为 403；</li>
+ *   <li>Spring MVC 参数校验与格式错误统一映射为 400；</li>
+ *   <li>其余不可预知异常统一收敛为 500 并记录附带 traceId 的堆栈日志。</li>
+ * </ul>
+ * 注意：底层过滤器链（Filter）中的安全拦截异常与通用框架登录异常不流经本 Handler。
+ */
 @RestControllerAdvice(basePackages = "com.ruoyi.ar")
 @Order(-100)
 public class ArExceptionHandler {
     /**
-     * 业务异常保留状态码；无权限为 403，参数错误为 400，其余为 500。
-     * 500 只向用户返回通用文案，traceId 和堆栈写入日志。
+     * 统一处理 AR 控制器异常并构筑错误响应实体。
+     *
+     * @param e 捕获的异常实例
+     * @return 包含 code、message 和 traceId 的统一响应包
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handle(Exception e) {

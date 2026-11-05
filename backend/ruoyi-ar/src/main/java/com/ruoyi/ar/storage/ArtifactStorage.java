@@ -40,7 +40,7 @@ public interface ArtifactStorage {
 
     /**
      * 锁内接收并校验后提交；完整残留只校验复用，不覆盖、不读取新 input。
-     * 提交中断可能留下暂存或正式文件，交给 recover 恢复；input 由调用方关闭。
+     * 提交中断可能留下暂存或正式文件，交给 recove复；input 由调用方关闭。
      */
     void store(Descriptor expected, InputStream input) throws IOException;
 

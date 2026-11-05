@@ -60,17 +60,35 @@ public class SceneVersionService {
         this.versionMaxBytes = versionMaxBytes;
     }
 
+    /**
+     * 查询当前服务端配置的存储配额限制。
+     *
+     * @return 包含单文件最大字节数、版本最大文件数和版本最大总字节数的 Map
+     */
     public Map<String, Object> config() {
         return Map.of("maxBytes", maxBytes, "versionMaxFiles", versionMaxFiles, "versionMaxBytes", versionMaxBytes);
     }
 
+    /**
+     * 查询单个版本的详情及其下全部关联文件的上传就绪状态。
+     *
+     * @param versionId 版本唯一标识 UUID
+     * @return 包含版本概要字段与文件数组的详情 Map
+     */
     public Map<String, Object> detail(UUID versionId) {
         var row = required(manager.summary(versionId)).response();
         row.put("files", manager.files(versionId));
         return row;
     }
 
-    /** 附带场景修订号，供发布时校验；不同于版本说明的修订号。 */
+    /**
+     * 分页查询指定场景下的版本列表，并附带场景当前的乐观锁版本号及发布指针。
+     *
+     * @param sceneId 场景唯一标识 UUID
+     * @param limit 每页条数限制（1~100）
+     * @param offset 偏移量
+     * @return 包含 {@code items}、{@code total}、{@code sceneLockVersion} 及可选 {@code published} 的响应 Map
+     */
     public Map<String, Object> list(UUID sceneId, int limit, int offset) {
         var sceneRow = required(manager.sceneState(sceneId));
         var result = new LinkedHashMap<String, Object>();
@@ -82,13 +100,28 @@ public class SceneVersionService {
         return result;
     }
 
-    /** created=false 表示复用同一 requestKey 的既有版本。 */
+    /**
+     * 版本创建操作结果载体。
+     *
+     * @param version 版本详情 Map
+     * @param created 是否为新创建（true 为新生成，false 为复用相同 requestKey 的既有幂等版本）
+     */
     public record Created(Map<String, Object> version, boolean created) {
     }
 
     /**
-     * 先校验清单，再锁场景行登记版本、文件和审计，不接收文件正文。
-     * 同一 requestKey：内容相同则复用，不同返回 409；有删除回执则返回 410。
+     * 校验文件清单并在单事务中原子登记版本、文件列表及创建审计（不接收实际文件二进制正文）。
+     * <p>
+     * <b>幂等性契约</b>：
+     * <ul>
+     *   <li>若传入的 {@code requestKey} 已存在且描述、文件路径、大小、SHA-256 集合完全一致，直接复用返回已有版本；</li>
+     *   <li>若相同 {@code requestKey} 对应的内容不同，抛出 409 CONFLICT；</li>
+     *   <li>若该 {@code requestKey} 曾被物理删除且存在删除回执，抛出 410 GONE，要求客户端换用新键。</li>
+     * </ul>
+     *
+     * @param sceneId 场景唯一标识 UUID
+     * @param input 版本创建请求体
+     * @return 包含版本详情与创建标记的 {@link Created} 结果
      */
     public Created create(UUID sceneId, SceneVersionCreateReq input) {
         var files = input.files();
@@ -147,7 +180,16 @@ public class SceneVersionService {
         return stored.equals(new HashSet<>(specs));
     }
 
-    /** 按版本修订号更新说明；删除中的版本不可编辑，文件清单不可改。 */
+    /**
+     * 修改版本描述说明。
+     * <p>
+     * 文件的相对路径、大小与 SHA-256 清单在版本创建后物理锁定不可变；
+     * 处于删除流程（DELETING）中的版本禁止修改说明；必须匹配版本自身的乐观锁版本号。
+     *
+     * @param versionId 版本唯一标识 UUID
+     * @param input 包含新说明及 expectedVersion 的请求体
+     * @return 更新后的版本详情 Map
+     */
     public Map<String, Object> edit(UUID versionId, SceneVersionEditReq input) {
         return tx.execute(s -> {
             UUID sceneId = required(manager.sceneOf(versionId));
@@ -167,8 +209,19 @@ public class SceneVersionService {
     }
 
     /**
-     * 锁版本和场景行，按场景修订号切换发布指针；已发布同一版本则直接返回。
-     * 只检查数据库就绪状态，不搬文件、不重算摘要，旧版本保留。
+     * 将指定版本切换发布为场景的当前生效版本。
+     * <p>
+     * <b>并发与一致性保证</b>：
+     * <ul>
+     *   <li>在版本写锁保护下执行，排他阻止该版本下的并发上传与下载；</li>
+     *   <li>严格核验版本下所有文件均处于 AVAILABLE 就绪状态；</li>
+     *   <li>核验场景当前的乐观锁版本号等于 {@code expectedSceneVersion}，原子更新场景的当前发布指针；</li>
+     *   <li>旧版本保持不动，可随时被重新发布或删除。</li>
+     * </ul>
+     *
+     * @param versionId 待发布的版本唯一标识 UUID
+     * @param expectedSceneVersion 场景当前的乐观锁版本号
+     * @return 发布后的版本详情 Map
      */
     public Map<String, Object> publish(UUID versionId, long expectedSceneVersion) {
         if (required(manager.summary(versionId)).published()) return detail(versionId);
@@ -209,8 +262,16 @@ public class SceneVersionService {
     }
 
     /**
-     * 持版本写锁：先提交删除意图，再删文件，最后删行并保留完成回执。
-     * 当前发布版本不可删；失败可重试，已有完成回执则直接成功。
+     * 执行整版本物理清理与删除。
+     * <p>
+     * <b>三阶段删除流程</b>：
+     * <ol>
+     *   <li><b>提交删除意图</b>：持版本写锁与场景行锁，校验非当前发布版本后，向删除回执表记录意图并置状态为 DELETING；</li>
+     *   <li><b>物理文件清理</b>：逐个删除版本在底层文件存储中的所有物理实体文件；若部分文件删除异常，保留记录供重试；</li>
+     *   <li><b>数据行清理与留痕</b>：所有物理文件清理完毕后，物理删除版本主表与文件表行，并在回执表持久化已完成状态。</li>
+     * </ol>
+     *
+     * @param versionId 待删除的版本唯一标识 UUID
      */
     public void removeVersion(UUID versionId) {
         if (!manager.versionExists(versionId)) {

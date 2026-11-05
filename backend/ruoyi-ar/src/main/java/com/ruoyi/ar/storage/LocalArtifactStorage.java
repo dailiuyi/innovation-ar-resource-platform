@@ -24,11 +24,20 @@ import java.util.UUID;
 import org.apache.commons.io.input.BoundedInputStream;
 
 /**
- * 私有本地卷存储，要求支持文件锁、原子改名和硬链接。
- * staging 保存 .part/.ready，committed 保存正式 .bin，locks 保存文件锁。
- * 文件名只用 UUID，不使用用户路径，不跟随符号链接。
- * 该目录由服务独占管理；读删互斥由业务层版本锁承担，存储锁只串行化写入、恢复和删除。
- * 正文 force(true) 不等于目录项已持久化；这里保证进程中断后的恢复，不承诺掉电恢复。
+ * 私有本地文件系统物理存储实现类。
+ * <p>
+ * <b>目录拓扑结构</b>：
+ * <ul>
+ *   <li>{@code staging/}：临时工作区。包含上传接收中的临时文件（{@code .part}）与校验成功待提交的暂存文件（{@code .ready}）。</li>
+ *   <li>{@code committed/}：正式文件区。包含已入库生效的物理实体（{@code .bin}，通过硬链接原子产生）。</li>
+ *   <li>{@code locks/}：单文件互斥锁文件区（{@code .lock}），利用 OS 文件通道锁（{@link FileLock}）保证并发写入与恢复的安全。</li>
+ * </ul>
+ * <b>设计约束</b>：
+ * <ul>
+ *   <li>文件名强制以 UUID 统一组织，绝不信任或直接落地客户端传入的用户路径；拒绝软链接目录。</li>
+ *   <li>正文刷盘 {@code force(true)} 保证进程突然中断后的完整恢复，不提供断电级硬件容灾。</li>
+ *   <li>读写互斥由业务层版本锁承担，本层文件锁仅用于写、恢复与物理清理的防重。</li>
+ * </ul>
  */
 public final class LocalArtifactStorage implements ArtifactStorage {
 

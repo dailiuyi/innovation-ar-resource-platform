@@ -38,27 +38,39 @@ public final class HttpRange {
     }
 
     /**
-     * 支持 a-b、a-、-n；合法但不可满足返回 416。
-     * 非法或多区间、HEAD、If-Range 不匹配时按完整 200 处理。
+     * 根据请求头计算文件响应范围，不读取文件，也不直接写入响应。
+     * 支持 bytes=a-b、bytes=a- 和 bytes=-n，返回的起止位置均包含在范围内。
+     *
+     * @param request 用于读取请求方法、Range 和 If-Range 请求头
+     * @param size 文件总字节数
+     * @param etag 文件当前的强 ETag；If-Range 存在时须与其完全相等
+     * @return 完整响应为 200，区间响应为 206，合法但无法满足的范围为 416；
+     *         HEAD、无效或多区间、If-Range 不匹配时忽略范围并返回 200
      */
     public static Slice parse(HttpServletRequest request, long size, String etag) {
+        // HEAD 只返回完整文件的响应头，不按 Range 计算部分响应。
         boolean body = !"HEAD".equalsIgnoreCase(request.getMethod());
         String range = body ? request.getHeader("Range") : null;
         if (range == null || range.isBlank()) return full(size);
+        // If-Range 用于避免文件变化后，将不同版本的数据拼接起来。
         String ifRange = request.getHeader("If-Range");
         if (ifRange != null && !ifRange.equals(etag)) return full(size);
+        // 仅接受完整匹配的单区间格式；其他格式按完整文件处理。
         Matcher match = BYTES.matcher(range.trim());
         if (!match.matches()) return full(size);
         String first = match.group(1);
         String last = match.group(2);
+        // bytes=-n：请求末尾 n 个字节；n 超过文件大小时返回整个文件的区间。
         if (first.isEmpty()) {
             if (last.isEmpty()) return full(size);
             long suffix = number(last);
             if (suffix == 0 || size <= 0) return new Slice(416, 0, -1, size);
             return new Slice(206, Math.max(0, size - suffix), size - 1, size);
         }
+        // bytes=a-b 或 bytes=a-：未指定结束位置时，后续裁剪到文件末尾。
         long start = number(first);
         long end = last.isEmpty() ? Long.MAX_VALUE : number(last);
+        // 结束位置早于起始位置视为无效；起始位置超出文件则无法满足。
         if (end < start) return full(size);
         if (size <= 0 || start >= size) return new Slice(416, 0, -1, size);
         return new Slice(206, start, Math.min(end, size - 1), size);

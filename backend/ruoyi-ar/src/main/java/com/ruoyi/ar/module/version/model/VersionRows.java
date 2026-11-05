@@ -6,11 +6,14 @@ import java.sql.Timestamp;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Typed persistence results; response maps retain the existing field and JDBC timestamp contract. */
+/**
+ * 版本与文件领域强类型持久化行记录定义集合。
+ * <p>
+ * 内置的 {@code response()} 方法负责保持对外统一的 JSON 驼峰字段及时间戳格式。
+ */
 public final class VersionRows {
     private VersionRows() {
     }
-
     public record Summary(String id, String sceneId, int versionNo, String description, long lockVersion,
                           boolean published, String uploadStatus, long fileCount, long availableCount,
                           long failedCount, long totalBytes, long creatorId, String creatorName,

@@ -9,9 +9,18 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * 校验可跨平台还原的相对路径，并统一为 Unicode NFC。
- * 路径只用于清单和客户端下载还原，服务端始终用 UUID.bin 落盘。
- * 这是跨平台清单约束，不使用当前操作系统的 Path.normalize() 消除越界片段。
+ * 跨平台相对路径校验与 Unicode NFC 规范化工具。
+ * <p>
+ * <b>背景说明</b>：
+ * 资源入库后的物理文件在服务端一律按 {@code <UUID>.bin} 独立存储，但清单中记录的相对路径
+ * 将在终端（Windows / macOS / Linux / Android / iOS / Unity）下载并依此解压还原本土文件系统树。
+ * 因此本工具实施跨平台最严交集约束：
+ * <ul>
+ *   <li>统一正斜杠 {@code /}，深度上限 32，路径总长 1024 字符，单片段 255 字符。</li>
+ *   <li>禁止任何形式的绝对路径、反斜杠、空片段与目录回溯片段（{@code .}、{@code ..}）。</li>
+ *   <li>拒绝 Windows 历史保留设备名称（如 CON、PRN、AUX、NUL、COM1~9、LPT1~9 及其变体）。</li>
+ *   <li>拒绝非法控制字符与 Windows 不安全特殊字符（{@code <>:"|?*}）。</li>
+ * </ul>
  */
 public final class RelativePath {
     /** 长度按 Java UTF-16 字符单元计数，不是 UTF-8 字节数。 */
