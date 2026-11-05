@@ -1,0 +1,13 @@
+package com.ruoyi.ar.module.version.model;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.*;
+
+/** 编辑说明使用版本修订号，与发布使用的场景修订号独立。 */
+@Schema(name = "EditInput")
+public record SceneVersionEditReq(
+        @Schema(description = "版本说明（最长 2000 字符）", requiredMode = Schema.RequiredMode.REQUIRED)
+        @NotNull @Size(max = 2000) String description,
+        @Schema(description = "版本自身的乐观锁版本号", example = "2", requiredMode = Schema.RequiredMode.REQUIRED)
+        @NotNull @Min(0) Long expectedVersion) {
+}

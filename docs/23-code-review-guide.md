@@ -1,6 +1,6 @@
 # 业务代码阅读与人工 Review 导读
 
-整理日期：2026-11-04。源码基线：`eea5266`（Knife4j 部署版本）。注释导读已于 `659b9a8` 提交；2026-11-04 在 `refactor/ar-package-layers` 按职责分包，本文链接同步指向新位置。这里记录源码中的执行顺序，供人工核对，不代表独立审查已通过。
+整理日期：2026-11-04。早期导读基线为 `eea5266`（Knife4j 部署版本），注释导读于 `659b9a8` 提交。业务按 `module/scene`、`module/version`、`module/client` 集中；版本生命周期、文件传输和启动恢复分开。编辑与 IDEA 审查统一在主目录 `codex/ar-layers-idea-review`，不新建 worktree。本文描述当前执行顺序，不代表独立审查已通过。
 
 ## 从哪里开始读
 
@@ -12,14 +12,19 @@
 | 2 | [VersionPanel.vue](../frontend/src/views/demo/VersionPanel.vue)：picked → startImport → runSession | 整条导入链路的页面编排，自动发布也在这里 |
 | 3 | [scenePackage.js](../frontend/src/utils/scenePackage.js)、[hash.worker.js](../frontend/src/views/demo/hash.worker.js) | 路径/清单预检、摘要、续传检查、三路派发 |
 | 4 | [scene.js](../frontend/src/api/scene.js)、[request.js](../frontend/src/utils/request.js) | HTTP 路径、原始字节上传、Bearer Token、响应处理 |
-| 5 | [SceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/controller/SceneController.java)、[SceneVersionController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/controller/SceneVersionController.java) | HTTP 参数校验、角色要求与状态码；不在控制器编排文件状态 |
-| 6 | [SceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/service/SceneService.java)、[SceneMapper](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/mapper/SceneMapper.java) | 场景写入与审计的事务，场景软删除 |
-| 7 | [SceneVersionService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/service/SceneVersionService.java)：create → upload → finish → publish | 清单固定、数据库事务与存储提交分段、发布指针 |
+| 5 | [场景 Controller](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/scene/controller/SceneController.java)、[版本 Controller](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/version/controller/SceneVersionController.java) | HTTP 参数校验、角色要求与状态码；不在控制器编排文件状态 |
+| 6 | [场景 Service](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/scene/service/SceneService.java) → [Manager](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/scene/manager/SceneManager.java) → [Mapper](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/scene/mapper/SceneMapper.java) / [XML](../backend/ruoyi-ar/src/main/resources/mapper/scene/SceneMapper.xml) | Service 控制事务；基础 insert/selectById 来自 BaseMapper，其余带业务条件的 SQL 在 XML |
+| 7 | [版本生命周期 Service](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/version/service/SceneVersionService.java)、[文件 Service](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/version/service/SceneVersionFileService.java) | create/edit/publish/remove 与 upload/finish/download 分开；均经 Manager 持久化 |
 | 8 | [LocalArtifactStorage](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/storage/LocalArtifactStorage.java) | 文件锁、大小/SHA256 校验、暂存与正式文件 |
-| 9 | [ClientSceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/controller/ClientSceneController.java)、[ClientSceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/service/ClientSceneService.java)、[HttpRange](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/support/HttpRange.java) | 匿名可见条件、下载前复核、Range 响应 |
-| 10 | SceneVersionService：removeVersion → completeDeletion → afterPropertiesSet | 删除意图、部分失败、启动续做与文件对账 |
+| 9 | [ClientSceneController](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/client/controller/ClientSceneController.java) → [ClientSceneService](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/client/service/ClientSceneService.java) → [ClientSceneManager](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/client/manager/ClientSceneManager.java) → [ClientSceneMapper](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/client/mapper/ClientSceneMapper.java) | 匿名可见条件、分页与详情查询组合；下载跨模块调用版本文件 Service |
+| 10 | [SceneVersionRecovery](../backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/version/service/SceneVersionRecovery.java) → recoverDeletions → recoverFiles | 同步启动恢复；先删除后盘点，不依赖请求线程的登录上下文 |
 
-目录与依赖边界见 [ruoyi-ar 模块说明](../backend/ruoyi-ar/README.md)。请求 DTO 已独立到 dto 包；场景和审计列表由 Controller 调用 SceneService，再访问 SceneMapper。
+目录与依赖边界见 [ruoyi-ar 模块说明](../backend/ruoyi-ar/README.md)。三个业务模块均按 Controller → Service → Manager → Mapper 分层。版本的创建/编辑/发布/删除在生命周期 Service，上传/下载/文件恢复在文件 Service，恢复入口只编排这两个 Service。二者共用唯一 VersionConcurrency，不各自创建锁表。版本复用既有查询类型，不为拆分增加一套无用实体；输入改 Req 且保留原 schema 名。基础 CRUD 可由 MyBatis-Plus 生成，自定义 SQL 只放 XML，Service 不拼 SQL 或 Wrapper；HTTP JSON、状态和事务/文件边界保持。
+
+2026-11-05 Mapper 阅读入口：场景 `SceneMapper extends BaseMapper<SceneDO>`，Manager 用基础 insert/selectById，MapStruct 将 UUID DO 转为原 VO。`@TableLogic` 保证基础查询隐藏已删除行，但实际删除仍走 XML softDelete，同时检查修订号、停用并更新时间，不能直接换成通用 deleteById。
+
+版本持久化拆成 [SceneVersionMapper.xml](../backend/ruoyi-ar/src/main/resources/mapper/version/SceneVersionMapper.xml)（元数据、汇总、发布、审计）、[VersionFileMapper.xml](../backend/ruoyi-ar/src/main/resources/mapper/version/VersionFileMapper.xml)（文件清单、上传、恢复）、[VersionDeletionMapper.xml](../backend/ruoyi-ar/src/main/resources/mapper/version/VersionDeletionMapper.xml)（删除意图与回执）。Manager 在同一 Service 事务里组合，不能把“分 Mapper”理解为“分事务”；record 投影不强行套 BaseMapper。
+
 
 ## 请求如何穿过系统
 
@@ -29,12 +34,20 @@ flowchart LR
     B --> C[网关去掉管理 API 前缀]
     C --> D[SecurityConfig 登录校验]
     D --> E[Controller 参数与角色校验]
-    E --> F[SceneService / SceneVersionService]
-    F --> G[(PostgreSQL 元数据与审计)]
+    E --> S[scene.Service]
+    S --> SM[scene.Manager]
+    SM --> SP[scene.Mapper XML]
+    SP --> G[(PostgreSQL 元数据与审计)]
+    E --> F[版本生命周期 / 文件 Service]
+    F --> VM[SceneVersionManager]
+    VM --> M[版本 Mapper XML]
+    M --> G
     F --> H[ArtifactStorage]
+    F --> L[共享 VersionConcurrency]
     H --> I[私有卷中的 UUID 文件]
     J[匿名客户端] --> K[client Controller / Service]
-    K --> G
+    K --> CM[客户端 MyBatis Mapper]
+    CM --> G
     K --> F
 ```
 
@@ -98,13 +111,13 @@ stateDiagram-v2
     FAILED --> AVAILABLE: 启动恢复完整遗留字节
 ```
 
-以上是文件状态。版本 uploadStatus 由 `SUMMARY` 查询临时聚合：先看未完成删除回执（DELETING/DELETE_FAILED），再看 UPLOADING、FAILED、全部 AVAILABLE 时 READY，否则 PENDING。版本是否发布由场景指针决定，与 READY 独立。页面传输进度是字节发送进度，不能替代服务端文件状态。
+以上是文件状态。版本 uploadStatus 由 [SceneVersionMapper.xml](../backend/ruoyi-ar/src/main/resources/mapper/version/SceneVersionMapper.xml) 的 `versionSummary` 片段临时聚合：先看未完成删除回执（DELETING/DELETE_FAILED），再看 UPLOADING、FAILED、全部 AVAILABLE 时 READY，否则 PENDING。版本是否发布由场景指针决定，与 READY 独立。页面传输进度是字节发送进度，不能替代服务端文件状态。
 
 ## 匿名读取与下载
 
-`ClientSceneService.VISIBLE` 要求场景启用且未软删除、有发布指针、版本内没有非 AVAILABLE 文件、没有未完成删除。列表/详情只查数据库，详情按路径返回文件清单与下载 URL，不打开模型正文。
+[ClientSceneMapper.xml](../backend/ruoyi-ar/src/main/resources/mapper/client/ClientSceneMapper.xml) 的 `visible` 片段要求场景启用且未软删除、有发布指针、版本内没有非 AVAILABLE 文件、没有未完成删除。Manager 组合列表与计数、场景与文件查询；Service 判断 404 并组装下载 URL 和响应。详情按路径返回文件清单，不打开模型正文。
 
-`clientDownload` 在读锁前后检查场景与版本关系，并检查文件归属、URL 文件名、删除状态和文件就绪状态。旧版本不再是当前发布版本时返回 409，客户端需重新取详情；不会把旧 URL 改指向新版本字节。已开始传输的请求不持续检查场景指针，读锁保护的是 URL 对应版本的文件。
+`SceneVersionFileService.clientDownload` 在共享读锁前后检查场景与版本关系，并检查文件归属、URL 文件名、删除状态和文件就绪状态。客户端 Controller 只调用该 Service。旧版本不再是当前发布版本时返回 409，客户端需重新取详情；不会把旧 URL 改指向新版本字节。已开始传输的请求不持续检查场景指针，读锁持续保护 URL 对应版本的文件，直到流式输出结束。
 
 `stream` 核对实际长度，登记 SHA256 用作 ETag；不在下载时重算摘要。`HttpRange` 支持单区间，合法不可满足返回 416，非法格式/多区间/If-Range 不匹配按完整 200 响应。HEAD 只写响应头；GET 以区间偏移和长度打开正文并分块输出。此路径不解析 4DGS 内容，也不证明 Unity 或手机播放可用。
 
@@ -116,7 +129,7 @@ stateDiagram-v2
 
 部分文件已删后失败，不恢复这些文件；记录失败原因、保留版本和文件行供重试。删除全部字节后数据库事务失败，也可以按原 UUID 再删并完成提交。已完成回执让重复 DELETE 成功，未知版本且无回执返回 404。
 
-`afterPropertiesSet` 在数据库初始化后执行：先续做未完成删除，再盘点存储，按 UUID 游标每批查 100 条 PENDING/UPLOADING/FAILED。有完整 .bin/.ready 且校验通过才补为 AVAILABLE；只有 .part 不算完成，仍 UPLOADING 的记为 FAILED。盘点失败拒绝启动；单版本删除失败会记录并留待后续重试。AVAILABLE 不在此对账查询中，因此重启不是全量完整性扫描。
+`SceneVersionRecovery.afterPropertiesSet` 在数据库初始化后同步执行：先调用 `SceneVersionService.recoverDeletions` 续做删除，再调用 `SceneVersionFileService.recoverFiles` 盘点存储，按 UUID 游标每批查 100 条 PENDING/UPLOADING/FAILED。有完整 .bin/.ready 且校验通过才补为 AVAILABLE；只有 .part 不算完成，仍 UPLOADING 的记为 FAILED。盘点失败拒绝启动；单版本删除失败记录并留待后续重试。状态与审计在文件 Service 的 finish 事务内一起提交，沿用原操作者并标记系统执行。AVAILABLE 不在此对账查询中，重启不是全量完整性扫描。
 
 ## 人工 Review 时重点核对
 
@@ -126,13 +139,13 @@ stateDiagram-v2
 | 创建响应丢失后会不会重复建版本？刷新网页后如何继续？ | startImport、create、sameRequest、删除回执查询 |
 | 文件何时正式可读，何时数据库才记为 AVAILABLE？ | uploadLocked、finish、store、publish、recoverLocked |
 | 取消、网关超时和服务端失败是否区分？ | cancel、uploadOne、reconcile、uploadIssues |
-| 读写锁覆盖到哪里，数据库行锁又覆盖到哪里？ | lockRead/lockWrite、upload、publish、removeVersion、clientDownload |
-| 部分删除后怎么继续，是否还会对外下载？ | completeDeletion、PENDING_DELETION、VISIBLE |
+| 读写锁覆盖到哪里，数据库行锁又覆盖到哪里？ | VersionConcurrency、VersionChecks.readLock/writeLock、upload、publish、removeVersion、clientDownload、XML lockScene |
+| 部分删除后怎么继续，是否还会对外下载？ | SceneVersionService.completeDeletion、XML deleting/pendingDeletions、客户端 visible |
 | 发布切换时下载 URL 是否仍对应同一版本？ | clientVersion、clientDownload、客户端详情 downloadPath |
 | 哪些异常返回业务错误，哪些在过滤器处理？ | ArExceptionHandler、SecurityConfig |
 
-这些问题是阅读检查点，不是已确认缺陷。锁规则按单应用实例理解；版本锁表按需增长、不回收。当前任务没有修改这些实现，也没有对全部并发路径作独立审查结论。
+这些问题是阅读检查点，不是已确认缺陷。锁规则按单应用实例理解；共享版本锁表按需增长、不回收。本轮调整职责归属，不改变原互斥与状态规则；专项故障回归不等于对全部并发路径作出独立审查结论。
 
 ## 本轮验证
 
-验证命令、结果和限制记录在 [验证记录](06-validation.md) 的“2026-11-04 业务注释与人工 Review 导读”。本次分包仅在本地隔离实例验证，未部署云端；注释阶段与分包阶段的证据分别记录。
+最新命令、证据和限制记录在 [验证记录](06-validation.md) 的“2026-11-05 MyBatis-Plus 接入与 Mapper 职责整理”。此前注释、分包、迁回工作区、框架清理与 SQL 迁移各自保留历史证据，不混作当前源码的验收结果。未部署云端，人工阅读先看场景 BaseMapper 的两处调用，再从版本 Manager 跟到三份 Mapper/XML。

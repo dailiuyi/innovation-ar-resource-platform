@@ -76,39 +76,10 @@
       </el-form>
 
       <el-row :gutter="10" class="mb8">
-         <el-col :span="1.5">
-            <el-button
-               type="danger"
-               plain
-               icon="Delete"
-               :disabled="multiple"
-               @click="handleDelete"
-               v-hasPermi="['monitor:operlog:remove']"
-            >删除</el-button>
-         </el-col>
-         <el-col :span="1.5">
-            <el-button
-               type="danger"
-               plain
-               icon="Delete"
-               @click="handleClean"
-               v-hasPermi="['monitor:operlog:remove']"
-            >清空</el-button>
-         </el-col>
-         <el-col :span="1.5">
-            <el-button
-               type="warning"
-               plain
-               icon="Download"
-               @click="handleExport"
-               v-hasPermi="['monitor:operlog:export']"
-            >导出</el-button>
-         </el-col>
          <right-toolbar v-model:showSearch="showSearch" @queryTable="getList"></right-toolbar>
       </el-row>
 
-      <el-table ref="operlogRef" v-loading="loading" :data="operlogList" @selection-change="handleSelectionChange" :default-sort="defaultSort" @sort-change="handleSortChange">
-         <el-table-column type="selection" width="50" align="center" />
+      <el-table ref="operlogRef" v-loading="loading" :data="operlogList" :default-sort="defaultSort" @sort-change="handleSortChange">
          <el-table-column label="日志编号" align="center" prop="operId" />
          <el-table-column label="系统模块" align="center" prop="title" :show-overflow-tooltip="true" />
          <el-table-column label="操作类型" align="center" prop="businessType">
@@ -154,7 +125,7 @@
 
 <script setup name="Operlog">
 import OperlogDetail from './detail'
-import { list, delOperlog, cleanOperlog } from "@/api/monitor/operlog"
+import { list } from "@/api/monitor/operlog"
 
 const { proxy } = getCurrentInstance()
 const { sys_oper_type, sys_common_status } = useDict("sys_oper_type", "sys_common_status")
@@ -164,9 +135,6 @@ const detailVisible = ref(false)
 const loading = ref(true)
 const detailRow = ref({})
 const showSearch = ref(true)
-const ids = ref([])
-const single = ref(true)
-const multiple = ref(true)
 const total = ref(0)
 const title = ref("")
 const dateRange = ref([])
@@ -211,12 +179,6 @@ function resetQuery() {
   proxy.$refs["operlogRef"].sort(defaultSort.value.prop, defaultSort.value.order)
 }
 
-/** 多选框选中数据 */
-function handleSelectionChange(selection) {
-  ids.value = selection.map(item => item.operId)
-  multiple.value = !selection.length
-}
-
 /** 排序触发事件 */
 function handleSortChange(column, prop, order) {
   queryParams.value.orderByColumn = column.prop
@@ -228,34 +190,6 @@ function handleSortChange(column, prop, order) {
 function handleDetail(row) {
   detailRow.value = row
   detailVisible.value = true
-}
-
-/** 删除按钮操作 */
-function handleDelete(row) {
-  const operIds = row.operId || ids.value
-  proxy.$modal.confirm('是否确认删除日志编号为"' + operIds + '"的数据项?').then(function () {
-    return delOperlog(operIds)
-  }).then(() => {
-    getList()
-    proxy.$modal.msgSuccess("删除成功")
-  }).catch(() => {})
-}
-
-/** 清空按钮操作 */
-function handleClean() {
-  proxy.$modal.confirm("是否确认清空所有操作日志数据项?").then(function () {
-    return cleanOperlog()
-  }).then(() => {
-    getList()
-    proxy.$modal.msgSuccess("清空成功")
-  }).catch(() => {})
-}
-
-/** 导出按钮操作 */
-function handleExport() {
-  proxy.download("monitor/operlog/export",{
-    ...queryParams.value,
-  }, `config_${new Date().getTime()}.xlsx`)
 }
 
 getList()

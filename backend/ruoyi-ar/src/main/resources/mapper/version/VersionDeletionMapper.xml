@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.ar.module.version.mapper.VersionDeletionMapper">
+    <select id="deleting" resultType="boolean">
+        select exists(select 1 from ar_version_deletion
+                      where version_id=cast(#{id} as uuid) and completed_at is null)
+    </select>
+
+    <select id="deletedRequest" resultType="boolean">
+        select exists(select 1 from ar_version_deletion
+                      where scene_id=cast(#{sceneId} as uuid) and request_key=cast(#{requestKey} as uuid))
+    </select>
+
+    <select id="deletionCompleted" resultType="boolean">
+        select exists(select 1 from ar_version_deletion
+                      where version_id=cast(#{id} as uuid) and completed_at is not null)
+    </select>
+
+    <select id="deletionExists" resultType="boolean">
+        select exists(select 1 from ar_version_deletion where version_id=cast(#{id} as uuid))
+    </select>
+
+    <insert id="requestDeletion">
+        insert into ar_version_deletion(version_id,scene_id,request_key,actor_id,actor_name)
+        values(cast(#{id} as uuid),cast(#{sceneId} as uuid),cast(#{requestKey} as uuid),#{actor},#{actorName})
+    </insert>
+
+    <update id="retryDeletion">
+        update ar_version_deletion set failure_reason=null,actor_id=#{actor},actor_name=#{actorName}
+        where version_id=cast(#{id} as uuid)
+    </update>
+
+    <select id="deletionActor" resultType="com.ruoyi.ar.module.version.model.VersionRows$Actor">
+        select scene_id::text as "sceneId",actor_id as "actorId",actor_name as "actorName"
+        from ar_version_deletion where version_id=cast(#{id} as uuid) and completed_at is null
+    </select>
+
+    <update id="failDeletion">
+        update ar_version_deletion set failure_reason=#{reason}
+        where version_id=cast(#{id} as uuid) and completed_at is null
+    </update>
+
+    <update id="completeDeletion">
+        update ar_version_deletion set completed_at=now(),failure_reason=null where version_id=cast(#{id} as uuid)
+    </update>
+
+    <select id="pendingDeletions" resultType="string">
+        select version_id::text from ar_version_deletion where completed_at is null order by version_id
+    </select>
+</mapper>

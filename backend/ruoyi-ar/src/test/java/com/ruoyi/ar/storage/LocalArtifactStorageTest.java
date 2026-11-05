@@ -342,6 +342,24 @@ class LocalArtifactStorageTest {
         }
         assertThrows(IOException.class, () -> storage.open(expected.id(), DATA.length, 1));
         assertThrows(IOException.class, () -> storage.open(expected.id(), -1, 1));
+        assertThrows(IOException.class, () -> storage.open(expected.id(), 1, Long.MAX_VALUE));
+        assertThrows(IOException.class, () -> storage.open(expected.id(), 0, -1));
+    }
+
+    @Test void rangeSkipCannotEscapeItsDeclaredLengthAndCloseReleasesFile() throws Exception {
+        var storage = new LocalArtifactStorage(root, 1024);
+        var expected = descriptor(UUID.randomUUID(), DATA);
+        storage.store(expected, new ByteArrayInputStream(DATA));
+        InputStream slice = storage.open(expected.id(), 2, 5);
+        try (slice) {
+            assertEquals(2, slice.skip(2));
+            assertEquals(DATA[4] & 0xff, slice.read());
+            assertEquals(2, slice.skip(Long.MAX_VALUE));
+            assertEquals(-1, slice.read());
+        }
+        InputStream unfinished = storage.open(expected.id(), 0, DATA.length);
+        unfinished.close();
+        assertThrows(IOException.class, unfinished::read);
     }
 
     @Test void invalidDescriptorCannotIntroducePaths() {

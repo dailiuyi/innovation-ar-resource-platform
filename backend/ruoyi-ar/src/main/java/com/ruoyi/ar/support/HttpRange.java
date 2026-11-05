@@ -3,7 +3,6 @@ package com.ruoyi.ar.support;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -11,7 +10,13 @@ import java.util.regex.Pattern;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
-/** 处理强 ETag 和单区间下载；权限、文件归属和就绪状态由调用方校验。 */
+import org.apache.commons.io.IOUtils;
+import org.springframework.http.ContentDisposition;
+
+/**
+ * 处理强 ETag 和单区间下载；权限、文件归属和就绪状态由调用方校验。
+ * 保留项目的 200/206/416 策略：多区间忽略、超大数字饱和处理，不直接套用 Spring 的区间解析。
+ */
 public final class HttpRange {
     private static final Pattern BYTES = Pattern.compile("(?i)bytes=(\\d*)-(\\d*)");
     private static final int BUFFER = 64 * 1024;
@@ -23,6 +28,7 @@ public final class HttpRange {
         }
     }
 
+    /** 延迟打开指定范围；HEAD、空正文与 416 不调用，返回流由 write 关闭。 */
     @FunctionalInterface
     public interface StreamOpen {
         InputStream open(long offset, long length) throws IOException;
@@ -82,10 +88,8 @@ public final class HttpRange {
         response.setHeader("Cache-Control", "no-store, no-transform");
         response.setHeader("Content-Type", contentType);
         if (filename != null && !filename.isBlank()) {
-            String fallback = filename.replaceAll("[^\\x20-\\x7E]", "_").replace("\"", "'");
-            String encoded = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
-            response.setHeader("Content-Disposition",
-                    "attachment; filename=\"" + fallback + "\"; filename*=UTF-8''" + encoded);
+            response.setHeader("Content-Disposition", ContentDisposition.attachment()
+                    .filename(filename, StandardCharsets.UTF_8).build().toString());
         }
         if (slice.status() == 416) {
             response.setStatus(416);
@@ -101,14 +105,9 @@ public final class HttpRange {
         }
         if (!sendBody || length == 0) return;
         try (InputStream in = open.open(slice.start(), length); OutputStream out = response.getOutputStream()) {
-            byte[] buffer = new byte[BUFFER];
-            long remaining = length;
-            while (remaining > 0) {
-                int read = in.read(buffer, 0, (int) Math.min(buffer.length, remaining));
-                if (read < 0) throw new IOException("Short content read");
-                out.write(buffer, 0, read);
-                remaining -= read;
-            }
+            // 复用限长复制；底层文件意外变短时仍须报错，不能把截断正文当作完整响应。
+            long copied = IOUtils.copyLarge(in, out, 0, length, new byte[BUFFER]);
+            if (copied != length) throw new IOException("Short content read");
         }
     }
 }

@@ -80,9 +80,22 @@ class HttpRangeTest {
         assertEquals(100, slice.length());
     }
 
+    @Test void onlyMatchingStrongIfRangeAllowsPartialContent() {
+        assertSlice(HttpRange.parse(request("GET", "bytes=2-4", ETAG), DATA.length, ETAG), 206, 2, 4);
+        for (String ifRange : new String[]{"\"different\"", "W/" + ETAG, "Wed, 21 Oct 2015 07:28:00 GMT"}) {
+            assertSlice(HttpRange.parse(request("GET", "bytes=2-4", ifRange), DATA.length, ETAG), 200, 0, 99);
+        }
+    }
+
     private record Output(Map<String, String> headers, int[] status, ByteArrayOutputStream body) { }
 
     private static Output send(HttpRange.Slice slice, String filename, boolean sendBody) throws IOException {
+        return send(slice, filename, sendBody,
+                (offset, length) -> new ByteArrayInputStream(DATA, (int) offset, (int) length));
+    }
+
+    private static Output send(HttpRange.Slice slice, String filename, boolean sendBody,
+                               HttpRange.StreamOpen open) throws IOException {
         var out = new Output(new HashMap<>(), new int[]{200}, new ByteArrayOutputStream());
         var stream = new ServletOutputStream() {
             @Override public boolean isReady() { return true; }
@@ -102,8 +115,7 @@ class HttpRangeTest {
                 }
                 return null;
             });
-        HttpRange.write(response, slice, ETAG, "application/octet-stream", filename, sendBody,
-            (offset, length) -> new ByteArrayInputStream(DATA, (int) offset, (int) length));
+        HttpRange.write(response, slice, ETAG, "application/octet-stream", filename, sendBody, open);
         return out;
     }
 
@@ -135,8 +147,37 @@ class HttpRangeTest {
     @Test void attachmentOnlyWhenFilenameGiven() throws IOException {
         assertFalse(send(parse(null), null, true).headers().containsKey("Content-Disposition"));
         assertFalse(send(parse(null), " ", true).headers().containsKey("Content-Disposition"));
-        var named = send(parse(null), "模型 a.ply", true).headers().get("Content-Disposition");
-        assertTrue(named.startsWith("attachment; filename=\""));
-        assertTrue(named.contains("filename*=UTF-8''" + java.net.URLEncoder.encode("模型 a.ply", StandardCharsets.UTF_8).replace("+", "%20")));
+        for (String filename : new String[]{"模型 a+b[1].ply", "café's texture.png"}) {
+            String header = send(parse(null), filename, true).headers().get("Content-Disposition");
+            assertTrue(header.startsWith("attachment;"));
+            String encoded = header.substring(header.indexOf("filename*=UTF-8''") + "filename*=UTF-8''".length());
+            // RFC 5987 的 + 是字面量，不是表单空格；独立解码后应完整保留文件名。
+            assertEquals(filename, java.net.URLDecoder.decode(encoded.replace("+", "%2B"), StandardCharsets.UTF_8));
+            assertTrue(header.chars().allMatch(c -> c >= 32 && c < 127));
+        }
+    }
+
+    @Test void noBodyResponsesNeverOpenStorage() throws IOException {
+        HttpRange.StreamOpen forbidden = (offset, length) -> { throw new AssertionError("unexpected body read"); };
+        send(parse("bytes=200-"), null, true, forbidden);
+        send(parse(null), null, false, forbidden);
+        send(HttpRange.parse(request("GET", null, null), 0, ETAG), null, true, forbidden);
+    }
+
+    @Test void truncatedStorageFailsAndClosesStream() {
+        boolean[] closed = {false};
+        var truncated = new ByteArrayInputStream(new byte[]{1, 2}) {
+            @Override public void close() throws IOException { closed[0] = true; super.close(); }
+        };
+        assertThrows(IOException.class,
+                () -> send(parse("bytes=0-4"), null, true, (offset, length) -> truncated));
+        assertTrue(closed[0]);
+    }
+
+    @Test void responseDoesNotReadBeyondDeclaredSlice() throws IOException {
+        var input = new ByteArrayInputStream(DATA);
+        var out = send(parse("bytes=0-4"), null, true, (offset, length) -> input);
+        assertArrayEquals(Arrays.copyOfRange(DATA, 0, 5), out.body().toByteArray());
+        assertEquals(DATA[5] & 0xff, input.read());
     }
 }

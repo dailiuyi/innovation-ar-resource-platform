@@ -11,10 +11,10 @@
 
 ## 后端修改
 
-- Maven：Java 21，PostgreSQL 驱动、Flyway，增加 `ruoyi-ar`；构建与运行依赖中移除 quartz、generator。保留上游源码供对照，但不打入应用运行依赖。
+- Maven：Java 21，PostgreSQL 驱动、Flyway，增加 `ruoyi-ar`；移除 quartz、generator 及无入口的框架闭环与 POI/OSHI/Velocity 依赖。2026-11-05 MyBatis-Plus 3.5.18 Boot 3 starter 替换原 MyBatis starter，PageHelper 排除旧 starter 但保留原分页功能。
 - 数据：独立 `db/demo` 迁移替代 MySQL 初始化；系统表保留框架结构，移除上游演示账号和密码种子，初始化单个固定管理角色。
 - Mapper：时间函数、日期参数转换、反引号、字符状态比较、祖级列表匹配和分页方言适配 PostgreSQL。当前实际启用的账号、菜单、日志路径已执行验证，未声称上游所有闲置模块均已验证。
-- Mapper 扫描：框架继续扫描 `com.ruoyi.**.mapper`，AR 包仅扫描带 `@Mapper` 的接口，避免把存储等普通接口注册为数据库 Mapper。
+- Mapper 扫描：继续使用 `com.ruoyi.**.mapper`；MyBatis-Plus 自动配置加载 XML、别名和 UUID 类型处理器，删除手写 SqlSessionFactory。AR Mapper 均在模块 mapper 包，存储等普通接口不作为 Mapper 注册。基础 CRUD 与复杂 XML 共用同一事务资源。
 - 账号：`DemoAccountService` 固定角色、统一密码规则，使用共享角色行锁防止并发停用最后一个管理员；首次日常账号创建后停用引导账号。
 - 安全：SecurityConfig 采用方法与路径白名单；关闭注册、文件上传、部门角色配置、在线代码生成、任务调度等入口。凭证版本存入 LoginUser，并在请求中检查数据库状态。
 - 响应：未登录返回 HTTP 401，禁止访问返回 HTTP 403。AR 模块独立错误处理及场景修改事务；其余业务响应沿用框架语义。

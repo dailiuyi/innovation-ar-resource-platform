@@ -17,13 +17,11 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",
-    "@vueup/vue-quill": "1.2.0",
     "@vueuse/core": "14.1.0",
     "axios": "1.13.2",
     "clipboard": "2.0.11",
     "echarts": "5.6.0",
     "element-plus": "2.13.1",
-    "file-saver": "2.0.5",
     "fuse.js": "7.1.0",
     "js-beautify": "1.15.4",
     "js-cookie": "3.0.5",
@@ -44,11 +42,5 @@
     "vite": "6.4.1",
     "vite-plugin-compression": "0.5.1",
     "vite-plugin-svg-icons": "2.0.1"
-  },
-  "overrides": {
-    "quill": "2.0.2"
-  },
-  "resolutions": {
-    "quill": "2.0.2"
   }
 }

@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.ar.module.version.mapper.SceneVersionMapper">
+    <!-- 删除状态优先于上传状态；READY 与当前发布指针独立。 -->
+    <sql id="versionSummary">
+        select v.id::text as id, v.scene_id::text as "sceneId", v.version_no as "versionNo",
+               v.description, v.lock_version as "lockVersion",
+               coalesce(s.published_version_id=v.id,false) as published,
+               case when exists (
+                   select 1 from ar_version_deletion d where d.version_id=v.id and d.completed_at is null
+               ) then case when (
+                   select d.failure_reason from ar_version_deletion d where d.version_id=v.id
+               ) is null then 'DELETING' else 'DELETE_FAILED' end
+               when c.uploading>0 then 'UPLOADING' when c.failed>0 then 'FAILED'
+               when c.available=c.total then 'READY' else 'PENDING' end as "uploadStatus",
+               c.total as "fileCount", c.available as "availableCount", c.failed as "failedCount",
+               c.bytes as "totalBytes", v.creator_id as "creatorId", v.creator_name as "creatorName",
+               v.created_at as "createdAt", v.updated_at as "updatedAt"
+        from ar_scene_version v
+        join ar_scene s on s.id=v.scene_id and s.deleted_at is null
+        cross join lateral (
+            select count(*) as total, count(*) filter (where f.status='AVAILABLE') as available,
+                   count(*) filter (where f.status='FAILED') as failed,
+                   count(*) filter (where f.status='UPLOADING') as uploading,
+                   coalesce(sum(f.expected_bytes),0)::bigint as bytes
+            from ar_version_file f where f.version_id=v.id
+        ) c
+    </sql>
+
+    <!-- 必须实际获取行锁；不能复用 MyBatis 本地缓存中的查询结果。 -->
+    <select id="lockScene" resultType="string" useCache="false" flushCache="true">
+        select id::text from ar_scene
+        where id=cast(#{id} as uuid) and deleted_at is null for update
+    </select>
+
+    <select id="sceneOf" resultType="string">
+        select v.scene_id::text from ar_scene_version v
+        join ar_scene s on s.id=v.scene_id and s.deleted_at is null
+        where v.id=cast(#{id} as uuid)
+    </select>
+
+    <select id="published" resultType="boolean">
+        select exists(select 1 from ar_scene where published_version_id=cast(#{id} as uuid))
+    </select>
+
+    <insert id="audit">
+        insert into ar_audit(scene_id,actor_id,actor_name,action,detail)
+        values(cast(#{sceneId} as uuid),#{actor},#{actorName},#{action},cast(#{detail} as jsonb))
+    </insert>
+
+    <select id="summary" resultType="com.ruoyi.ar.module.version.model.VersionRows$Summary">
+        <include refid="versionSummary" />
+        where v.id=cast(#{id} as uuid)
+    </select>
+
+    <select id="list" resultType="com.ruoyi.ar.module.version.model.VersionRows$Summary">
+        <include refid="versionSummary" />
+        where v.scene_id=cast(#{sceneId} as uuid)
+        order by v.version_no desc limit #{limit} offset #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) from ar_scene_version where scene_id=cast(#{id} as uuid)
+    </select>
+
+    <select id="sceneState" resultType="com.ruoyi.ar.module.version.model.VersionRows$Scene">
+        select lock_version as "lockVersion",published_version_id::text as "publishedVersionId"
+        from ar_scene where id=cast(#{id} as uuid) and deleted_at is null
+    </select>
+
+    <select id="publishedVersion" resultType="com.ruoyi.ar.module.version.model.VersionRows$Published">
+        select v.id::text as id,v.version_no as "versionNo",v.description,
+               s.published_at as "publishedAt",s.published_by_name as "publishedByName"
+        from ar_scene s join ar_scene_version v on v.id=s.published_version_id
+        where s.id=cast(#{id} as uuid)
+    </select>
+
+    <!-- 创建与编辑 -->
+    <select id="existingRequest" resultType="string">
+        select id::text from ar_scene_version
+        where scene_id=cast(#{sceneId} as uuid) and request_key=cast(#{requestKey} as uuid)
+    </select>
+
+    <select id="nextVersionNo" resultType="int">
+        select coalesce(max(version_no),0)+1 from ar_scene_version where scene_id=cast(#{id} as uuid)
+    </select>
+
+    <insert id="insertVersion">
+        insert into ar_scene_version(id,scene_id,version_no,request_key,description,creator_id,creator_name)
+        values(cast(#{id} as uuid),cast(#{sceneId} as uuid),#{versionNo},
+               cast(#{requestKey} as uuid),#{description},#{actor},#{actorName})
+    </insert>
+
+    <select id="sameDescription" resultType="boolean">
+        select description=#{description} from ar_scene_version where id=cast(#{id} as uuid)
+    </select>
+
+    <update id="edit">
+        update ar_scene_version set description=#{description},lock_version=lock_version+1,updated_at=now()
+        where id=cast(#{id} as uuid) and lock_version=#{expectedVersion}
+    </update>
+
+    <update id="publish">
+        update ar_scene
+        set published_version_id=cast(#{versionId} as uuid),published_at=now(),
+            published_by_id=#{actor},published_by_name=#{actorName},lock_version=lock_version+1,updated_at=now()
+        where id=cast(#{sceneId} as uuid) and deleted_at is null and lock_version=#{expectedVersion}
+    </update>
+
+    <!-- 整版删除与幂等回执 -->
+    <select id="versionExists" resultType="boolean">
+        select exists(select 1 from ar_scene_version where id=cast(#{id} as uuid))
+    </select>
+
+    <select id="version" resultType="com.ruoyi.ar.module.version.model.VersionRows$Version">
+        select scene_id::text as "sceneId",request_key::text as "requestKey",version_no as "versionNo",description
+        from ar_scene_version where id=cast(#{id} as uuid)
+    </select>
+
+    <delete id="deleteVersion">
+        delete from ar_scene_version where id=cast(#{id} as uuid)
+    </delete>
+
+    <!-- 下载可见性与启动恢复 -->
+    <select id="clientPublishedVersion" resultType="string">
+        select s.published_version_id::text
+        from ar_scene s join ar_scene_version v on v.scene_id=s.id
+        where s.id=cast(#{sceneId} as uuid) and v.id=cast(#{versionId} as uuid)
+          and s.enabled and s.deleted_at is null and s.published_version_id is not null
+    </select>
+
+</mapper>

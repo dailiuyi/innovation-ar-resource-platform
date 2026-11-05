@@ -1,0 +1,86 @@
+package com.ruoyi.ar.module.scene.controller;
+
+import com.ruoyi.ar.module.scene.model.AuditVO;
+import com.ruoyi.ar.module.scene.model.Page;
+import com.ruoyi.ar.module.scene.model.SceneEnabledReq;
+import com.ruoyi.ar.module.scene.model.SceneReq;
+import com.ruoyi.ar.module.scene.model.SceneVO;
+import com.ruoyi.ar.module.scene.service.SceneService;
+
+import java.util.UUID;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+
+/** 管理场景信息和审计查询，业务规则由 SceneService 处理。 */
+@Tag(name = "场景管理", description = "场景的增删改查、启停与审计日志查询（需登录）")
+@RestController
+@RequestMapping("/api/v1")
+@Validated
+public class SceneController {
+    private final SceneService service;
+
+    public SceneController(SceneService service) {
+        this.service = service;
+    }
+
+    @Operation(summary = "分页查询场景", description = "name 为大小写不敏感的子串过滤（空串表示不过滤），limit 1~100，按创建时间倒序")
+    @GetMapping("/scenes")
+    public Page<SceneVO> list(@Parameter(description = "名称过滤（子串，不区分大小写）", example = "街区")
+                              @RequestParam(defaultValue = "") @Size(max = 200) String name,
+                              @Parameter(description = "每页条数（1~100）", example = "20")
+                              @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
+                              @Parameter(description = "偏移量", example = "0")
+                              @RequestParam(defaultValue = "0") @Min(0) int offset) {
+        return service.list(name, limit, offset);
+    }
+
+    @Operation(summary = "查询单个场景", description = "不存在或已软删除返回 404")
+    @GetMapping("/scenes/{id}")
+    public SceneVO detail(@Parameter(description = "场景 ID", required = true) @PathVariable UUID id) {
+        return service.find(id.toString());
+    }
+
+    @Operation(summary = "软删除场景", description = "同时置为停用。expectedVersion 是乐观锁版本号，不匹配返回 409。成功返回 204")
+    @DeleteMapping("/scenes/{id}")
+    @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void delete(@Parameter(description = "场景 ID", required = true) @PathVariable UUID id,
+                       @Parameter(description = "乐观锁版本号", required = true) @RequestParam @Min(0) long expectedVersion) {
+        service.delete(id.toString(), expectedVersion);
+    }
+
+    @Operation(summary = "新建场景", description = "返回 201 与新建后的场景")
+    @PostMapping("/scenes")
+    @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+    public SceneVO create(@Valid @RequestBody SceneReq s) {
+        return service.create(s);
+    }
+
+    @Operation(summary = "重命名场景", description = "请求体的 expectedVersion 必填，与库中版本不一致返回 409")
+    @PutMapping("/scenes/{id}")
+    public SceneVO update(@Parameter(description = "场景 ID", required = true) @PathVariable UUID id,
+                          @Valid @RequestBody SceneReq s) {
+        return service.update(id.toString(), s);
+    }
+
+    @Operation(summary = "启用/停用场景", description = "停用后匿名客户端看不到该场景。reason 必填，写入审计日志")
+    @PutMapping("/scenes/{id}/enabled")
+    public SceneVO enabled(@Parameter(description = "场景 ID", required = true) @PathVariable UUID id,
+                           @Valid @RequestBody SceneEnabledReq s) {
+        return service.enabled(id.toString(), s.enabled(), s.expectedVersion(), s.reason());
+    }
+
+    @Operation(summary = "分页查询审计日志", description = "按自增 id 倒序（最新在前）")
+    @GetMapping("/audits")
+    public Page<AuditVO> audits(@Parameter(description = "每页条数（1~100）", example = "20")
+                                @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
+                                @Parameter(description = "偏移量", example = "0")
+                                @RequestParam(defaultValue = "0") @Min(0) int offset) {
+        return service.audits(limit, offset);
+    }
+}

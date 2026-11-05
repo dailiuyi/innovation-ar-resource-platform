@@ -10,9 +10,11 @@ import java.util.regex.Pattern;
 
 /**
  * 校验可跨平台还原的相对路径，并统一为 Unicode NFC。
- * 路径只用于清单和导出，服务端始终用 UUID.bin 落盘。
+ * 路径只用于清单和客户端下载还原，服务端始终用 UUID.bin 落盘。
+ * 这是跨平台清单约束，不使用当前操作系统的 Path.normalize() 消除越界片段。
  */
 public final class RelativePath {
+    /** 长度按 Java UTF-16 字符单元计数，不是 UTF-8 字节数。 */
     public static final int MAX_PATH = 1024;
     public static final int MAX_SEGMENT = 255;
     public static final int MAX_DEPTH = 32;
@@ -27,7 +29,7 @@ public final class RelativePath {
         if (raw == null || raw.isEmpty()) throw new IllegalArgumentException("相对路径不能为空");
         if (raw.indexOf('\0') >= 0) throw new IllegalArgumentException("相对路径不能包含空字符");
         if (raw.length() > MAX_PATH) throw new IllegalArgumentException("相对路径过长");
-        if (raw.startsWith("/") || raw.startsWith("\\") || raw.startsWith("//")
+        if (raw.startsWith("/") || raw.startsWith("\\")
                 || (raw.length() >= 2 && Character.isLetter(raw.charAt(0)) && raw.charAt(1) == ':')) {
             throw new IllegalArgumentException("相对路径不能为绝对路径");
         }
@@ -37,16 +39,10 @@ public final class RelativePath {
             throw new IllegalArgumentException("相对路径格式不合法");
         }
         String[] parts = path.split("/", -1);
-        if (parts.length == 0 || parts.length > MAX_DEPTH) throw new IllegalArgumentException("相对路径层级不合法");
-        StringBuilder out = new StringBuilder();
-        for (int i = 0; i < parts.length; i++) {
-            validateSegment(parts[i]);
-            if (i > 0) out.append('/');
-            out.append(parts[i]);
-        }
-        String result = out.toString();
-        if (result.length() > MAX_PATH) throw new IllegalArgumentException("相对路径过长");
-        return result;
+        if (parts.length > MAX_DEPTH) throw new IllegalArgumentException("相对路径层级不合法");
+        for (String part : parts) validateSegment(part);
+        if (path.length() > MAX_PATH) throw new IllegalArgumentException("相对路径过长");
+        return path;
     }
 
     /** 规范化后检查重复、大小写冲突和文件/目录同名冲突，保留输入顺序。 */
@@ -55,54 +51,22 @@ public final class RelativePath {
         Set<String> seen = new HashSet<>();
         Set<String> seenLower = new HashSet<>();
         for (String raw : paths) result.add(normalizeOne(raw));
-        List<String> sorted = new ArrayList<>(result);
-        sorted.sort(String::compareTo);
-        for (String path : sorted) {
+        for (String path : result) {
             if (!seen.add(path)) throw new IllegalArgumentException("相对路径重复");
             if (!seenLower.add(path.toLowerCase(Locale.ROOT)))
                 throw new IllegalArgumentException("相对路径存在规范化或大小写冲突");
         }
-        List<String> folded = new ArrayList<>();
-        for (String path : result) folded.add(path.toLowerCase(Locale.ROOT));
-        folded.sort(String::compareTo);
-        for (int i = 0; i < folded.size(); i++) {
-            String prefix = folded.get(i);
-            for (int j = i + 1; j < folded.size(); j++) {
-                String next = folded.get(j);
-                if (!next.startsWith(prefix)) break;
-                if (next.startsWith(prefix + "/")) throw new IllegalArgumentException("文件与目录路径冲突");
+        // 检查每个目录前缀是否已登记为文件；相似名称（a 与 a.b）不是目录冲突。
+        for (String path : seenLower) {
+            for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+                if (seenLower.contains(path.substring(0, slash)))
+                    throw new IllegalArgumentException("文件与目录路径冲突");
             }
         }
         return result;
     }
 
-    /**
-     * 生成安全的单段导出文件名，最长 255 字符。
-     * 清洗后仍不可用时采用 export-文件ID前8位，并尽量保留合法扩展名。
-     */
-    public static String safeExportPath(String fileName, java.util.UUID fileId) {
-        if (fileName == null || fileId == null) throw new IllegalArgumentException("相对路径不能为空");
-        try {
-            return normalizeOne(fileName);
-        } catch (IllegalArgumentException ignored) {
-        }
-        String segment = fileName.replace('\\', '_');
-        StringBuilder cleaned = new StringBuilder();
-        for (int i = 0; i < segment.length(); i++) {
-            char c = segment.charAt(i);
-            cleaned.append(c < 32 || c == 127 || "<>:\"|?*".indexOf(c) >= 0 ? '_' : c);
-        }
-        segment = cleaned.toString().replaceAll("^[ ]+", "").replaceAll("[. ]+$", "");
-        if (segment.isEmpty() || ".".equals(segment) || "..".equals(segment) || RESERVED.matcher(segment).matches()) {
-            int dot = fileName.lastIndexOf('.');
-            String ext = "";
-            if (dot > 0 && fileName.substring(dot).matches("\\.[A-Za-z0-9]{1,20}")) ext = fileName.substring(dot);
-            segment = "export-" + fileId.toString().substring(0, 8) + ext;
-        }
-        if (segment.length() > MAX_SEGMENT) segment = segment.substring(0, MAX_SEGMENT);
-        return segment;
-    }
-
+    /** 提取已通过清单校验的 POSIX 相对路径末段；不访问文件系统。 */
     public static String fileName(String relativePath) {
         int index = relativePath.lastIndexOf('/');
         return index < 0 ? relativePath : relativePath.substring(index + 1);

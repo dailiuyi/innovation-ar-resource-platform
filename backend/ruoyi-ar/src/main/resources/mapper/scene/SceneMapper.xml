@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.ar.module.scene.mapper.SceneMapper">
+
+    <resultMap id="SceneResult" type="com.ruoyi.ar.module.scene.model.SceneDO">
+        <id property="id" column="id" javaType="java.util.UUID" />
+        <result property="name" column="name" />
+        <result property="enabled" column="enabled" />
+        <result property="lockVersion" column="lockVersion" />
+        <result property="createdAt" column="createdAt" />
+        <result property="updatedAt" column="updatedAt" />
+    </resultMap>
+
+    <resultMap id="AuditResult" type="com.ruoyi.ar.module.scene.model.AuditVO">
+        <constructor>
+            <idArg name="id" column="id" javaType="_long" />
+            <arg name="sceneId" column="sceneId" javaType="java.lang.String" />
+            <arg name="actorId" column="actorId" javaType="_long" />
+            <arg name="actorName" column="actorName" javaType="java.lang.String" />
+            <arg name="action" column="action" javaType="java.lang.String" />
+            <arg name="detail" column="detail" javaType="java.lang.String" />
+            <arg name="createdAt" column="createdAt" javaType="java.sql.Timestamp" />
+        </constructor>
+    </resultMap>
+
+    <sql id="SceneColumns">
+        id, name, enabled, lock_version as "lockVersion",
+        created_at as "createdAt", updated_at as "updatedAt"
+    </sql>
+
+    <sql id="AuditColumns">
+        id, scene_id::text as "sceneId", actor_id as "actorId", actor_name as "actorName",
+        action, detail::text as detail, created_at as "createdAt"
+    </sql>
+
+    <!-- 按子串忽略大小写匹配，% 和 _ 不作为通配符。 -->
+    <sql id="SceneSearch">
+        deleted_at is null and position(lower(#{name}) in lower(name)) > 0
+    </sql>
+
+    <select id="list" resultMap="SceneResult">
+        select <include refid="SceneColumns" /> from ar_scene
+        where <include refid="SceneSearch" />
+        order by created_at desc, id limit #{limit} offset #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) from ar_scene where <include refid="SceneSearch" />
+    </select>
+
+    <update id="rename">
+        update ar_scene set name = #{name}, lock_version = lock_version + 1, updated_at = now()
+        where deleted_at is null and id = cast(#{id} as uuid) and lock_version = #{version}
+    </update>
+
+    <update id="enabled">
+        update ar_scene set enabled = #{enabled}, lock_version = lock_version + 1, updated_at = now()
+        where deleted_at is null and id = cast(#{id} as uuid) and lock_version = #{version}
+    </update>
+
+    <!-- 只做软删除，不清理版本文件。 -->
+    <update id="softDelete">
+        update ar_scene set deleted_at = now(), enabled = false,
+            lock_version = lock_version + 1, updated_at = now()
+        where id = cast(#{id} as uuid) and deleted_at is null and lock_version = #{version}
+    </update>
+
+    <insert id="audit">
+        insert into ar_audit(scene_id, actor_id, actor_name, action, detail)
+        values(cast(#{id} as uuid), #{actor}, #{actorName}, #{action}, cast(#{detail} as jsonb))
+    </insert>
+
+    <select id="audits" resultMap="AuditResult">
+        select <include refid="AuditColumns" /> from ar_audit
+        order by id desc limit #{limit} offset #{offset}
+    </select>
+
+    <select id="auditCount" resultType="long">
+        select count(*) from ar_audit
+    </select>
+</mapper>

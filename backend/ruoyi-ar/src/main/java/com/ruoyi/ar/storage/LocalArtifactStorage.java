@@ -21,10 +21,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
+import org.apache.commons.io.input.BoundedInputStream;
+
 /**
  * 私有本地卷存储，要求支持文件锁、原子改名和硬链接。
  * staging 保存 .part/.ready，committed 保存正式 .bin，locks 保存文件锁。
  * 文件名只用 UUID，不使用用户路径，不跟随符号链接。
+ * 该目录由服务独占管理；读删互斥由业务层版本锁承担，存储锁只串行化写入、恢复和删除。
+ * 正文 force(true) 不等于目录项已持久化；这里保证进程中断后的恢复，不承诺掉电恢复。
  */
 public final class LocalArtifactStorage implements ArtifactStorage {
 
@@ -187,10 +191,24 @@ public final class LocalArtifactStorage implements ArtifactStorage {
         Path path = file(committed, id, ".bin");
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Artifact missing");
         long size = Files.size(path);
-        if (offset < 0 || length < 0 || offset > size || offset + length > size) throw new IOException("Invalid range");
+        // 用减法比较剩余长度，避免 offset + length 溢出后放过越界请求。
+        if (offset < 0 || length < 0 || offset > size || length > size - offset) throw new IOException("Invalid range");
         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
-        channel.position(offset);
-        return new BoundedInputStream(Channels.newInputStream(channel), length);
+        try {
+            channel.position(offset);
+            return BoundedInputStream.builder()
+                    .setInputStream(Channels.newInputStream(channel))
+                    .setMaxCount(length)
+                    .setPropagateClose(true)
+                    .get();
+        } catch (IOException | RuntimeException error) {
+            try {
+                channel.close();
+            } catch (IOException cleanup) {
+                error.addSuppressed(cleanup);
+            }
+            throw error;
+        }
     }
 
     @Override
@@ -264,35 +282,4 @@ public final class LocalArtifactStorage implements ArtifactStorage {
         T run() throws IOException;
     }
 
-    /** 限制 Range 读取长度；关闭时一并关闭底层流。 */
-    static final class BoundedInputStream extends InputStream {
-        private final InputStream in;
-        private long remaining;
-
-        BoundedInputStream(InputStream in, long remaining) {
-            this.in = in;
-            this.remaining = remaining;
-        }
-
-        @Override
-        public int read() throws IOException {
-            if (remaining <= 0) return -1;
-            int value = in.read();
-            if (value >= 0) remaining--;
-            return value;
-        }
-
-        @Override
-        public int read(byte[] buffer, int offset, int length) throws IOException {
-            if (remaining <= 0) return -1;
-            int count = in.read(buffer, offset, (int) Math.min(length, remaining));
-            if (count > 0) remaining -= count;
-            return count;
-        }
-
-        @Override
-        public void close() throws IOException {
-            in.close();
-        }
-    }
 }

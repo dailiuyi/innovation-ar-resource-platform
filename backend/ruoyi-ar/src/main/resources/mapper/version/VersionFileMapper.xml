@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.ar.module.version.mapper.VersionFileMapper">
+    <sql id="fileColumns">
+        id::text as "fileId", version_id::text as "versionId", relative_path as "relativePath",
+        expected_bytes as bytes, expected_sha256 as sha256, status, failure_reason as "failureReason", attempts
+    </sql>
+
+    <select id="files" resultType="com.ruoyi.ar.module.version.model.VersionRows$File">
+        select <include refid="fileColumns" /> from ar_version_file
+        where version_id=cast(#{id} as uuid) order by relative_path,id
+    </select>
+
+    <select id="file" resultType="com.ruoyi.ar.module.version.model.VersionRows$File">
+        select <include refid="fileColumns" /> from ar_version_file
+        where version_id=cast(#{versionId} as uuid) and id=cast(#{id} as uuid)
+    </select>
+
+    <insert id="insertFiles">
+        insert into ar_version_file(id,version_id,relative_path,expected_bytes,expected_sha256,storage_key,
+                                    creator_id,creator_name,last_actor_id,last_actor_name) values
+        <foreach collection="files" item="f" separator=",">
+            (cast(#{f.id} as uuid),cast(#{f.versionId} as uuid),#{f.path},#{f.bytes},#{f.sha256},
+             #{f.id} || '.bin',#{f.actor},#{f.actorName},#{f.actor},#{f.actorName})
+        </foreach>
+    </insert>
+
+    <!-- 上传状态与校验结果 -->
+    <update id="startUpload">
+        update ar_version_file
+        set status='UPLOADING',failure_reason=null,verified_bytes=null,verified_sha256=null,
+            attempts=attempts+1,last_actor_id=#{actor},last_actor_name=#{actorName},updated_at=now()
+        where id=cast(#{id} as uuid)
+    </update>
+
+    <select id="uploadActor" resultType="com.ruoyi.ar.module.version.model.VersionRows$Actor">
+        select v.scene_id::text as "sceneId",f.last_actor_id as "actorId",f.last_actor_name as "actorName"
+        from ar_version_file f join ar_scene_version v on v.id=f.version_id where f.id=cast(#{id} as uuid)
+    </select>
+
+    <update id="finishUpload">
+        update ar_version_file
+        set status=#{status},verified_bytes=case when #{available} then expected_bytes else null end,
+            verified_sha256=case when #{available} then expected_sha256 else null end,
+            failure_reason=#{reason},updated_at=now()
+        where id=cast(#{id} as uuid)
+    </update>
+
+    <select id="fileCount" resultType="long">
+        select count(*) from ar_version_file where version_id=cast(#{id} as uuid)
+    </select>
+
+    <select id="fileIds" resultType="string">
+        select id::text from ar_version_file where version_id=cast(#{id} as uuid) order by id
+    </select>
+
+    <delete id="deleteFiles">
+        delete from ar_version_file where version_id=cast(#{id} as uuid)
+    </delete>
+
+    <select id="recoveryFiles" resultType="com.ruoyi.ar.module.version.model.VersionRows$File">
+        select <include refid="fileColumns" /> from ar_version_file
+        where id&gt;cast(#{cursor} as uuid) and status in ('PENDING','UPLOADING','FAILED')
+          and not exists(select 1 from ar_version_deletion d
+                         where d.version_id=ar_version_file.version_id and d.completed_at is null)
+        order by id limit 100
+    </select>
+</mapper>

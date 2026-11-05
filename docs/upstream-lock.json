@@ -1,4 +1,5 @@
 {
+  "inventoryScope": "modifiedFiles/addedFiles 记录初次集成快照，不是当前文件清单；2026-11-04 清理和分层后的目录见 backend/README.md，保留上游 commit 溯源。",
   "backend": {
     "repository": "https://github.com/yangzongzhuan/RuoYi-Vue",
     "branch": "springboot3",
@@ -69,6 +70,6 @@
       "src/views/demo/profile.vue",
       "src/views/demo/scenes.vue"
     ],
-    "lockfileSha256": "775ff9a59bb42e2d984a9503fad2f4489c2f16349762d8bec91c885a3553d391"
+    "lockfileSha256": "cbe0d5320e9146e44ec86dc485bf2e8e5150e39061d629726d50eb67f8cd443a"
   }
 }

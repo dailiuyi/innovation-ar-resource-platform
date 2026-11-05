@@ -34,14 +34,10 @@ class RelativePathTest {
         if (!nfd.equals(nfc)) {
             assertThrows(IllegalArgumentException.class, () -> RelativePath.normalizeAll(List.of(nfd, nfc)));
         }
+        assertThrows(IllegalArgumentException.class,
+                () -> RelativePath.normalizeAll(List.of("a.b", "A/c.bin", "a")));
+        var siblings = List.of("a.b", "a/c.bin", "a/d.bin", "ab");
+        assertEquals(siblings, RelativePath.normalizeAll(siblings));
     }
 
-    @Test void safeExportPathKeepsValidNamesAndRewritesReserved() {
-        var id = java.util.UUID.fromString("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
-        assertEquals("keep.bin", RelativePath.safeExportPath("keep.bin", id));
-        assertEquals("scene/models/a.bin", RelativePath.safeExportPath("scene/models/a.bin", id));
-        assertEquals("export-aaaaaaaa.txt", RelativePath.safeExportPath("CON.txt", id));
-        assertEquals("report_2026.txt", RelativePath.safeExportPath("report:2026.txt", id));
-        assertEquals("dir/a.bin", RelativePath.normalizeOne("dir/a.bin"));
-    }
 }

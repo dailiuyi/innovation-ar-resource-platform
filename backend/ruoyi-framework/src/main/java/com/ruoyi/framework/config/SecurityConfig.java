@@ -14,7 +14,6 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.logout.LogoutFilter;
 import org.springframework.web.filter.CorsFilter;
-import com.ruoyi.framework.config.properties.PermitAllUrlProperties;
 import com.ruoyi.framework.security.filter.JwtAuthenticationTokenFilter;
 import com.ruoyi.framework.security.handle.AuthenticationEntryPointImpl;
 import com.ruoyi.framework.security.handle.LogoutSuccessHandlerImpl;
@@ -51,12 +50,6 @@ public class SecurityConfig
      */
     @Autowired
     private CorsFilter corsFilter;
-
-    /**
-     * 允许匿名访问的地址
-     */
-    @Autowired
-    private PermitAllUrlProperties permitAllUrl;
 
 	/**
 	 * 身份验证实现
@@ -104,7 +97,7 @@ public class SecurityConfig
                 }))
             // 基于token，所以不需要session
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            // 注解标记允许匿名访问的url
+            // 显式路由白名单；未列出的路径和方法全部拒绝。
             .authorizeHttpRequests((requests) -> {
                 // Knife4j/OpenAPI 接口文档（doc.html、/v3/api-docs/**、webjars），允许匿名读取；业务接口仍按原有规则鉴权。
                 requests.requestMatchers("/doc.html", "/v3/api-docs/**", "/webjars/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()

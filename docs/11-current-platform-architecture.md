@@ -20,7 +20,7 @@
 | 管理后台 | Vue 3.5.26、Vite 6.4.1、Element Plus 2.13.1、Axios 1.13.2 | 登录、账号、场景和日志页面 |
 | 网关 | Nginx 1.28.0 Alpine | 提供前端静态资源，将 `/prod-api/` 和匿名客户端读取 `/api/v1/client/` 转发到后端 |
 | 后端 | Java 21、Spring Boot 3.5.16、RuoYi 3.9.2 | HTTP 接口、鉴权、业务事务和文件存储抽象 |
-| 数据访问 | MyBatis 3.0.5、Druid 1.2.28 | PostgreSQL 查询、写入和事务管理 |
+| 数据访问 | MyBatis-Plus 3.5.18、Druid 1.2.28 | 基础 CRUD 由 BaseMapper 生成，自定义 SQL 保留 XML，Service 通过 Spring 控制事务 |
 | 数据库 | PostgreSQL 17.6 | 账号、菜单、日志、场景和业务审计 |
 | 数据库迁移 | Flyway | 按版本初始化和演进数据库结构 |
 | 登录状态 | Spring Security、Bearer Token、Redis 7.4.5 | 保存短期登录状态并校验账号凭证版本 |
@@ -71,6 +71,10 @@ flowchart TB
 ```
 
 `ruoyi-admin` 负责应用启动、环境变量和 Flyway 迁移。`ruoyi-framework` 配置 Spring Security、Bearer Token、异常响应和 MyBatis 扫描。`ruoyi-system` 管理固定角色账号、菜单、登录日志与操作日志。`ruoyi-ar` 提供场景接口、场景业务审计和 `ArtifactStorage` 存储抽象。
+
+2026-11-04 AR 业务目录统一为 `module/scene`、`module/version`、`module/client`，模块内 Controller → Service → Manager → Mapper，模块间只调 Service。2026-11-05 引入 MyBatis-Plus：场景基础 insert/selectById 由 BaseMapper 提供，其余自定义 SQL 保留 XML；版本持久化按版本/发布、文件、删除回执拆分。共享文件存储、异常与协议工具保留独立根包；Service 事务边界、客户端响应和版本共享并发锁不变。
+
+同次框架整理移除了无业务入口的公告/在线用户/注册与服务器监控代码、被安全白名单拒绝的管理/导出端点，以及 Excel/POI、OSHI 和代码生成依赖；前端同步去掉死调用和无权限动作。账号、菜单、日志读取、验证码、字典和底层必要依赖保留，17 个现有迁移逐字节不变；详细范围见 [后端说明](../backend/README.md)。这不是日常数据库清理或部署。
 
 当前安全配置只允许已经实现的接口通过。登录和验证码接口允许匿名访问；账号、日志、场景及场景审计接口要求管理员登录；`/api/v1/client/` 下恰好三个只读路由（目录、描述 GET，文件 GET/HEAD）逐条允许匿名，该前缀下其他路径和所有写方法不放行；其他请求默认拒绝。若依框架接口继续使用 `code/msg` 响应，`/api/v1` 业务接口使用真实 HTTP 状态和 `code/message/traceId` 错误结构。
 

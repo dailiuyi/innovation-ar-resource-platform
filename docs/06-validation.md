@@ -646,3 +646,109 @@ python scripts/verify_database.py --pg-bin 'C:/Program Files/PostgreSQL/17/bin'
 验证：`python3 .local/comment-cleanup/verify_tokens.py` 确认 19 个文件的非注释 token 与基线一致，比较包含所有字符串、SQL 和注解。`JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-ar` 执行 44 项测试，0 失败/错误/跳过，报告 `.local/java-check/adcb5513858f/report.json`。本轮 doctor/quick 均通过，quick 报告 `.local/harness/20261104T081215Z-2glsq7ol/report.json`。`git diff --check` 通过。
 
 未修改业务代码或 Knife4j 元数据；未执行 HTTP/浏览器验证，未合并 main、推送或部署。`.idea/` 和 README.md.bak 原样保留。
+
+## 2026-11-04 迁回主工作区供 IDEA 审查
+
+用户明确不再新建 worktree，要求在原主工作区另开分支修改。本轮在原目录从 `codex/mybatis-persistence-layer` 切出 `codex/ar-layers-idea-review`，保留未提交改动；把此前完成的 `module/scene` 12 个源码/XML 文件迁回主目录，合入 MapStruct 1.6.3 处理器配置，移除已被替代的旧场景 Controller、Service、Mapper、两个请求 DTO 和两个查询类型。原版本/客户端 MyBatis 迁移保留，不在这次迁移中启动版本职责拆分或重写其 SQL。
+
+迁移前将业务模块、相关文档及 `.idea/`、README.md.bak 私有备份到 `.local/idea-review-relocation/before-relocation.tar.gz`，验证归档结构；同时保存原 binary patch。核对 17 个版本/客户端及用户文件与备份逐字节相同。旧 worktree 未修改、未删除，仅保留此前源码和验证快照；后续编辑入口统一为原 IDEA 项目目录的新分支。没有丢弃用户文件或恢复旧 JDBC。
+
+当前整合结果的实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：50 项通过，0 失败/错误/跳过。JBR 25.0.4.1，目标 Java 21；报告 `.local/java-check/94b6652ff827/report.json`，Jar SHA256 `9481a2ca8980cc03702bb6bf3a4063076aacc4d6adc8d050a4ccbbd320bf8f89`。
+- `.local/ingestion-venv/bin/python .local/idea-review-relocation/smoke.py`：100/100 PostgreSQL/HTTP 检查通过，报告 `.local/idea-review-relocation/http-report.json`。使用 infra-check 的 PostgreSQL 17.6 新数据库 `ar_idea_a26af09ed2f1`、独立存储、Redis database 14 和随机回环端口本地后端，不重启原 backend/gateway 或日常服务。覆盖版本入库、上传互斥、发布、Range/HEAD、删除失败重试和硬停止后恢复；场景专项确认 VO/分页字段、校验与乐观锁、审计快照及 AR 异常映射。额外注入审计写入失败，确认 Service 事务同时回滚 Manager 的场景更新。
+- 旧场景类导入已无调用者。模块说明与 Review 导读均指向主目录的新场景模块，不把旧 worktree 的独立基线当作当前组合源码证据。
+- 最终仓库门禁命令为 `.local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick` 和 `check --profile quick`；执行状态、日志与报告路径索引在 `.local/idea-review-relocation/quick-final.json`。
+
+临时后端已停止，端口关闭；报告、数据库、存储和私有日志保留，临时验收脚本移除。未执行浏览器/网关、Unity/手机播放或磁盘写满/断电验收，合成字节不证明播放能力。未提交、合并、推送或部署。人工审查：在原 IDEA 项目 Reload from Disk、重新加载 Maven，打开 `backend/ruoyi-ar/src/main/java/com/ruoyi/ar/module/scene`，按 Controller → Service → Manager → Mapper XML 阅读；无需打开旧 worktree。
+
+## 2026-11-04 清除 Mapper Java 内嵌 SQL
+
+用户指出 SceneVersionMapper 仍有大量 SQL，不符合已确认的 XML 规范。本轮在原主目录 `codex/ar-layers-idea-review` 直接修改，无新 worktree：版本 Mapper 的全部 SQL、汇总/文件列片段和行锁查询缓存配置迁入 `resources/mapper/ar/SceneVersionMapper.xml`；客户端 Mapper 剩余文件查询及构造器映射迁入现有 ClientSceneMapper.xml。Java 接口只保留原方法声明、参数注解与 `@Mapper`，不再有 SQL 常量或 SQL/结果映射注解；没有新增 Manager、实体、Service 拆分或兼容路径。
+
+保留原 UUID 文本/cast、jsonb、record/Timestamp/null 映射、批量插入、更新行数及删除回执语义；`lockScene` 在 XML 显式 `useCache=false`、`flushCache=true`，保持实际获取行锁的行为。Service、Controller、模型、事务及存储代码未改。模块 README 和 Review 导读同步指向 XML 的 `versionSummary` 片段，不再引用已移除的 Java SQL 常量。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：50 项通过，0 失败/错误/跳过，报告 `.local/java-check/92f9366eb184/report.json`。JBR 25.0.4.1，编译目标 Java 21；Jar SHA256 `cb4dc81e3d14741217a901519bbbec9b4ed82153126735d30a7d417075f1d7bc`。
+- `.local/ingestion-venv/bin/python .local/mapper-xml/smoke.py`：106/106 真实 PostgreSQL/HTTP 检查通过，报告 `.local/mapper-xml/http-report.json`。使用 infra-check 的 PostgreSQL 17.6、新数据库 `ar_xml_9e540b73ab7f`、独立存储和 Redis database 13、本地临时后端；没有重启现有 backend/gateway 或日常服务。覆盖版本查询/创建/编辑/上传/发布/删除/审计、批量文件登记、Range/HEAD、客户端文件构造器映射与匿名下载、并发幂等创建和版本号分配、删除失败重试及硬停止后的删除续做和文件恢复。
+- 定向检查 ruoyi-ar 的 Java Mapper 包，没有 SQL 注解、SQL 常量及内嵌查询字符串。该检查不是永久源码断言测试；SQL 真正执行和结果映射由上述 PostgreSQL/HTTP 检查证明。
+- 最终门禁入口为 `.local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick` 与 `check --profile quick`，命令、结果及报告索引保存于 `.local/mapper-xml/quick-final.json`。
+
+临时后端已停止、端口关闭；数据库、存储、报告和私有日志保留，临时验收脚本清理。未执行浏览器、网关、真实模型播放、Unity/手机或断电/磁盘写满验收；未提交、推送、合并或部署。人工阅读：在 IDEA 打开原 Mapper 接口，用同名 XML 查看 SQL；`lockScene` 查看 XML 查询属性，版本聚合查看 `versionSummary`，客户端文件映射查看 `clientFile`。
+
+## 2026-11-04 版本模块职责拆分
+
+用户批准删除 SceneVersionService 的明确冗余并按职责拆分。本轮仍在原主目录 `codex/ar-layers-idea-review` 编辑，不新建 worktree，不修改数据库结构。旧 585 行 Service 迁入 `module/version`：SceneVersionService（289 行）负责版本查询、创建、编辑、发布、整版删除及删除恢复；SceneVersionFileService（248 行）负责上传、下载、状态提交和文件恢复；SceneVersionRecovery 只在数据库初始化后同步调用前者 recoverDeletions、后者 recoverFiles。两个业务 Service 经 SceneVersionManager 持久化，所有入口共用唯一 VersionConcurrency，VersionChecks 只共享业务错误与非阻塞锁获取。
+
+删除字符串 FileSpec.key，以既有 record 的字段相等性直接比较清单集合；UUID 文本转换集中到持久化边界，版本号分配/清单写入、删除回执完成和审计序列化集中到 Manager。保留原分段 TransactionTemplate、锁前后复核、事务外存储 IO、流式响应结束才释放读锁、恢复操作者与系统标记；不增加锁回收、队列、通用框架、Service 接口/impl 或每操作一套实体。公共 MIME 规则移到 FileContentType，由客户端元数据与文件 Service 共用，避免文件 Service 反向依赖客户端 Service 或扩大旧包级 helper 可见性。
+
+Controller、原查询 record、四个请求 Req、Mapper/XML 和版本边界测试同步迁入版本模块，旧路径移除，无 shim。四个请求保留 CreateInput/FileInput/EditInput/PublishInput schema 名及原校验。客户端下载只调用新文件 Service。通过归档与当前 XML 的结构比较，39 条 SQL、结果类型结构和缓存属性除 namespace/Java 类型全限定包名外完全一致；SQL 仍只在 `resources/mapper/version/SceneVersionMapper.xml`。源码导读、模块说明及当前分发建议中的 Service 名称已同步；历史测量记录不追改。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：50 项通过，0 失败/错误/跳过，报告 `.local/java-check/81951e126377/report.json`。JBR 25.0.4.1，编译目标 Java 21；Jar SHA256 `4f25b570ee932f084153f719d3efaf4d92cfba79963f95a0df952c7953992fc1`。MIME 和版本边界原行为断言保留，只迁移测试位置/调用，没有增加转发、字段复制或源码文本永久测试。
+- `.local/ingestion-venv/bin/python .local/version-split/smoke.py`：最终 119/119 PostgreSQL/HTTP 检查通过，报告 `.local/version-split/http-report.json`。使用 infra-check 的 PostgreSQL 17.6、新数据库 `ar_split_4138f5bb65eb`、独立存储和 Redis database 12、本地随机回环端口后端，不重启原 backend/gateway 或日常服务。覆盖原版本入库、说明、上传校验/重试、Range/HEAD、发布替换、物理删除/回执、并发上传与硬停止恢复。
+- 拆分专项：延迟发送上传最后一字节时，另一个 Service 的发布/删除返回 409，且没有提前写删除意图；完成上传后可发布。保持 21 MiB 旧版本匿名响应未读完时发布其他版本，旧版本 DELETE 返回 409，新请求旧 URL 返回 409；在途响应仍完整返回原字节，读完后物理删除成功。验证共享锁不是各 Service 的独立副本，且覆盖完整传输。
+- 清单逆序的幂等重试仍返回原版本，并发同 requestKey 不重复创建，不同 requestKey 版本号由场景行锁串行分配。注入 VERSION_CREATE 审计失败，确认 Manager 已写入的版本和文件行随 Service 事务回滚，重试从版本号 1 开始。隔离夹具设置另一名禁用操作者的持久化记录后重启，确认恢复审计保留原 actor_id/actor_name，标记 SYSTEM_RECONCILIATION，且 VERSION_DELETE 在 FILE_RECONCILE 之前。
+- 首次临时 smoke 在前 78 项通过后，因脚本误将 `finish_held` 返回的整数状态码按 tuple 解包而中断；证据保存在 `.local/version-split/http-first-attempt.json`。按实际 helper 契约修正脚本后重跑完整流程，生产代码未为此修改，未放宽断言。首次临时后端也已停止。
+- 最终仓库门禁为 `.local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick` 和 `check --profile quick`；执行结果、日志与报告索引在 `.local/version-split/quick-final.json`。
+
+临时后端已停止、端口关闭；原源码私有归档、测试数据库、存储和报告保留，临时脚本/协作快照清理。原有用户文件与未提交工作未还原或覆盖。没有浏览器/网关、Unity/手机或真实模型播放验收，也未做磁盘写满/断电注入；合成字节和专项并发检查不等于全部竞态的独立审查。未提交、推送、合并或部署。人工阅读：在 IDEA 进入 module/version/controller，分别跟到生命周期与文件 Service，再看 Manager、共享并发状态和 Mapper XML；启动恢复从 SceneVersionRecovery 开始。
+
+## 2026-11-04 AR 分层收口与 RuoYi 冗余清理
+
+用户授权直接重构，仍在原工作区 `codex/ar-layers-idea-review`，未新建 worktree。客户端 Controller/Service/Mapper/查询类型及 XML 迁入 `module/client`、`mapper/client`；ClientSceneManager 组合分页与详情查询，Service 保留 404、响应和 URL 组装。场景、版本、客户端三模块的持久化统一经 Manager → Mapper，跨模块下载只调用版本文件 Service；共享 storage/config/exception/support 不再增空层。客户端详情复用一次 UUID 文本转换，文件响应列表按已知数量预分配。
+
+以安全白名单、调用和 XML/Bean 引用为依据，删除 40 个框架 Java/XML 文件：不可达的配置/通用文件/首页控制器，Excel 工具和导出注解，服务器监控模型及 OSHI，公告/已读/在线用户/注册闭环，以及无用途的生成/调度常量、异常、匿名扫描器。保留日志列表和字典读取，移除拒绝路由上的维护/导出方法；POI、OSHI、Velocity 的 POM 声明同步移除。前端清除对应无权限日志动作、无用途的选择状态、废弃 API、上传/富文本/Excel 导入组件、下载插件及全局注册，移除 vue-quill、file-saver 和仅服务它们的依赖。未改当前账号/鉴权/菜单/文件业务规则，未删除框架数据表；与私有备份比较，17 个历史 Flyway 迁移逐字节相同。
+
+源码归档与删除清单保存在 `.local/ar-framework-cleanup/`。后端 README 从上游演示介绍替换为实际模块说明；AR README、代码导读、当前架构同步更新。upstream-lock 保留来源 commit 和初次集成历史清单，显式标明其不是当前目录，并更新本次 npm 锁文件摘要。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：clean package，50 项测试通过，0 失败/错误/跳过；报告 `.local/java-check/77de85ce5d11/report.json`。Jar SHA256 `2fda312705472199f66c4972431e8a909ba28dd79c112cd0e490f3df2280bc8e`。检查打包库，已无 POI、OSHI、XMLBeans、Velocity；不是依赖旧 target 的增量编译结果。
+- `npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund`（frontend）：只同步依赖删除后的锁文件；随后 `.local/ingestion-venv/bin/python scripts/agent_check.py --profile frontend` 统一执行所需 npm ci、生产构建、成品包测试及 quick。通过，报告 `.local/harness/20261104T105555Z-9ggn6j13/report.json`，`sourceUnchanged=true`；未重复安装或构建。
+- `.local/ingestion-venv/bin/python .local/ar-framework-cleanup/smoke.py --serve`：170/170 真实 PostgreSQL/HTTP 检查通过，报告 `.local/ar-framework-cleanup/http-report.json`。使用 infra-check PostgreSQL **17.6** 的新数据库 `ar_cleanup_c985fcd02f7e`、独立存储、Redis database 12 和随机回环端口原生后端，未重启现有容器或云端服务。
+- HTTP 覆盖：账号密码 6/64 边界及错误拒绝、修改/重置密码后撤销旧会话、菜单/个人资料/日志/字典读取、废弃路径仍拒绝、三个 OpenAPI 分组；版本创建/上传/摘要失败重试/发布替换/21 MiB/Range/HEAD/删除回执、并发上传、物理删除失败重试和硬停止后恢复。客户端专项验证 `%/_` 字面名称搜索、大小写、分页总数、未发布/停用隐藏、排序文件清单、编码文件名的匿名完整/Range/HEAD 下载及元数据。
+- 真实 Chrome + Vite `127.0.0.1:43174` 指向上述后端：通过登录、登录日志搜索/重置/翻页/排序操作、操作日志搜索和详情弹窗，确认无已删除动作；6 项交互断言通过。报告 `.local/ar-framework-cleanup/browser-report.json`，截图 `loginlogs.png`、`operation-detail.png` 已查看。验证过程中修正了工具选择器并重试截图，未为此修改应用或放宽断言；不将选择器错误算成应用错误。
+- 文档收尾后的最终门禁入口为 `.local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick` 和 `check --profile quick`，结果、日志及报告路径索引在 `.local/ar-framework-cleanup/quick-final.json`。
+
+原有 `GET /monitor/operlog/{id}` 在安全配置/静态契约有声明，但实际 Controller 没有该方法；当前详情弹窗读取列表行，本轮实测可用。本轮未新增该接口，也未把静态声明当作已实现证明。浏览器仅验收登录与日志页面；未声明全部后台页面、网关、Unity/手机或真实模型播放通过。
+
+验收结束已关闭浏览器、临时 Vite 和原生后端，确认后端端口关闭；数据库、存储、私有日志和证据保留，临时 smoke 脚本移除。没有提交、推送、合并或部署。人工检查：IDEA 重新加载 Maven，按 `module/scene`、`module/version`、`module/client` 阅读；页面验收路径为“账号管理 → 登录日志/操作日志 → 搜索、翻页、详细”。
+
+## 2026-11-05 MyBatis-Plus 接入与 Mapper 职责整理
+
+用户授权使用 MyBatis-Plus 继续梳理 Mapper。本轮仍在原工作区 `codex/ar-layers-idea-review`，不新建 worktree。使用官方 Boot 3 starter **3.5.18** 替换原 MyBatis starter，排除 PageHelper 带入的旧 starter；删除 132 行手写 SqlSessionFactory/别名扫描配置，由 Plus 自动配置加载原 XML、别名和 PostgreSQL UUID 类型处理器。PageHelper 继续负责若依现有分页，没有额外开启 Plus 分页插件。依据：[官方安装说明](https://baomidou.com/en/getting-started/install/)。
+
+SceneMapper 继承 BaseMapper，Manager 的基础 insert/selectById 不再重复写 XML。复用已有 SceneDO，改为 UUID 主键的可写持久化 Bean；默认启用、修订号和时间仍由数据库生成，MapStruct 保持原 VO 字符串 ID、Timestamp 和 JSON 字段。`@TableLogic` 使基础查询隐藏软删除；改名、启停、软删除仍为原修订号条件 XML，不以通用 updateById/deleteById 替代。版本和客户端是裁剪/跨表投影，不为 Plus 增加无用实体、IService 或实现层。
+
+版本 Mapper 按职责拆成 SceneVersionMapper、VersionFileMapper、VersionDeletionMapper；文件和删除回执方法迁入对应 XML，Manager 仍在 Service 的原事务里组合。XML 结构比较确认 **39 条语句、2 个片段**的内容、结果类型、参数和缓存属性全部保持，尤其 lockScene 仍显式刷新缓存获取行锁；证据 `.local/mybatis-plus/sql-preservation.json`。模块说明、后端 README、架构、上游适配与阅读导读同步更新。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-admin --package`：最终 clean package，**50 项测试通过**，0 失败/错误/跳过。报告 `.local/java-check/cce26043f1ff/report.json`；JBR 25.0.4.1，编译目标 Java 21，Jar SHA256 `6686b4ff1ffdf27b794a4a0883dc6ff317a7766f0f17bfc3b96892a605ca65a3`。
+- 检查最终 Jar：Plus 3.5.18、MyBatis 3.5.19、mybatis-spring 3.0.6、PageHelper 6.1.1；没有旧 MyBatis starter/autoconfigure，也没有恢复已移除的 POI/OSHI/Velocity。
+- `.local/ingestion-venv/bin/python .local/mybatis-plus/smoke.py`：最终 **173/173 PostgreSQL/HTTP 检查通过**，报告 `.local/mybatis-plus/http-report.json`。使用 infra-check PostgreSQL **17.6** 的新数据库 `ar_plus_1726819c0025`、独立存储、Redis database 11 和随机回环端口原生后端，不重启已有容器或云端服务。
+- Plus 专项：UUID 参数/结果、数据库默认值、VO 契约、XML 列表与基础详情一致、修订号冲突、软删除隐藏且保留行；注入审计失败，确认生成 insert 和自定义 update 都随 Service 事务回滚。版本 Mapper 拆分后注入 VERSION_CREATE 审计失败，确认版本/文件行共同回滚；并发相同请求键只创建一版。延迟上传最后一字节，发布/删除均 409 且不提前写删除回执，释放共享锁后可发布。
+- 回归覆盖账号密码边界及旧会话失效、菜单/个人资料/日志/字典查询、PageHelper 分页和三个 OpenAPI 分组；入库、摘要/大小失败重试、发布替换、21 MiB、Range/HEAD、匿名内容、整版删除失败重试、硬停止后的删除与文件恢复。
+- 首次启动因原生 UUID 缺少类型处理器失败，已保留 `.local/mybatis-plus/startup-before-uuid-handler.json` 和私有日志；补充 UuidTypeHandler 后实际启动和查询通过。第二次 smoke 因临时夹具 LIKE 字符串中的 `%` 被 psycopg 当作占位符而中断，证据 `.local/mybatis-plus/fixture-percent-failure.json`；修正为 position 夹具后完整重跑，未为脚本错误修改生产行为或放宽断言。
+- 最终仓库门禁：`.local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick` 与 `check --profile quick`，执行结果及报告路径索引见 `.local/mybatis-plus/quick-final.json`。
+
+临时后端已停止并确认端口关闭；测试数据库、存储、日志和报告保留，临时 smoke 脚本移除。此轮未修改前端、没有重新做浏览器/网关验收；上一轮日志页面浏览器证据只对应其当时 Jar。未验证真实模型播放、Unity/手机或断电/磁盘写满。没有提交、推送、合并或部署。IDEA 审查路径：重新加载 Maven → SceneManager 的 insert/selectById → SceneDO/UuidTypeHandler → 版本 Manager 的三份 Mapper/XML。
+
+## 2026-11-05 support / storage 复用与边界补齐
+
+范围仅为 `ruoyi-ar` 的三个 support 类、两个 storage 类及相应测试。在原工作区 `codex/ar-layers-idea-review` 修改，不新增 worktree。复用已有 Commons IO **2.22.0** 的限长输入流与正文复制、Spring Web **6.2.19** 的附件头编码；不新增依赖。保留自定义 Range 策略、路径安全约束、MIME 白名单和物理文件恢复协议。删除没有生产调用的 safeExportPath，简化路径规范化及目录前缀冲突检查，补充锁、流所有权、盘点与掉电边界注释。
+
+先用独立 Java 程序复现范围越界：10 字节文件调用 `open(id, 1, Long.MAX_VALUE)`，旧实现因加法溢出接受请求并读出 9 字节；改为减法校验后同例抛 IOException。MIME 库探针实测 WAV 为 audio/x-wav、HTML 为 text/html，因此没有直接替换当前白名单。附件头改由 Spring 序列化，UTF-8 文件名语义不变，备用名字符串不要求与旧实现一致。
+
+实际验证：
+
+- `JAVA_HOME=/opt/idea/jbr PATH=/opt/idea/jbr/bin:$PATH python3 scripts/check_java.py --module ruoyi-ar --offline`：**48 项测试通过**，0 失败/错误/跳过，报告 `.local/java-check/5d292e842c61/report.json`。包含原上传校验、完整残留恢复、锁冲突、删除、Range 与路径测试，并覆盖范围溢出、限长 skip、底层关闭、短读失败、无正文不打开存储、If-Range 和附件名独立解码。
+- `/opt/idea/jbr/bin/java --class-path … .local/support-storage/StorageHttpSmoke.java .local/support-storage`：使用当前 target/classes、已有依赖和临时嵌入式 **Tomcat 10.1.55**，**30 项存储/真实 HTTP 检查通过**。完整命令保存在 `.local/support-storage/commands.json`，结果 `.local/support-storage/smoke-report.json`，逐项清单 `checks.txt`，当前五个源码 SHA256 和修复前复现在 `source-evidence.json`。
+- smoke 实际写入并核对 **2 MiB + 17 字节**随机正文；重复上传不读新输入、摘要失败与重试、ready 恢复、part 不晋升、锁争用、删除幂等及其他文件保留。通过真实 Servlet/回环 HTTP 验证完整下载、闭区间/后缀/超大端点、HEAD、416、多区间忽略、If-Range、ETag、中文含加号的附件名及正文摘要。
+- 第一次 smoke 使用系统 Java 17，因当前类编译目标 Java 21 而未启动；改用与 Maven 相同的 JBR **25.0.4.1** 后通过，没有修改源码或降低编译目标。Tomcat 关闭时提示未开放 ThreadLocal/RMI 泄漏检查所需模块；未关闭检查或宣称已验证泄漏检测。
+- quick doctor/check 的命令与最终结果索引保存在 `.local/support-storage/quick-final.json`。
+
+临时 HTTP 服务已停止并实测回环端口关闭；仅移除本轮临时 Java 探针源码，保留测试数据、修复前编译快照和报告。不涉及 Controller/Service/Mapper、数据库、鉴权或前端改动；本轮没有启动完整 Spring Boot 应用、没有重跑数据库/网关/浏览器验收，不能沿用此前 173 项 HTTP 报告作为本轮全链路证明。未提交、推送、合并或部署。
