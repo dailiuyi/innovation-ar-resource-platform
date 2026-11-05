@@ -20,6 +20,18 @@
 
 下表 SHA256 在 2026-09-20 文档整理时计算，仅标识保留文件内容，不是业务源码指纹。
 
+2026-11-05 换行核对：14 个保留文件在仓库中均为 LF 字节；直接按磁盘字节计算为 0/14 匹配，把同一文本在内存中规范化为 CRLF 后 14/14 全部匹配。因此本表应按 CRLF 规范化核对，索引值无需改写，也不因此修改任何 JSON。原表未记录 2026-09-20 计算时的换行环境，不能据此断言当时由某台 Windows 生成；该差异不表示文件损坏、被改写或来源不明，也不追加证明任何业务检查通过。只读复核命令（不写文件，预期输出 `14 / 14`）：
+
+```bash
+python3 - <<'PY'
+import re, hashlib, pathlib
+base = pathlib.Path('docs/evidence')
+rows = [m.groups() for m in (re.match(r'\| \[([^\]]+)\]\(([^)]+)\) \| `([0-9a-f]{64})` \|', line) for line in (base / 'README.md').read_text(encoding='utf-8').splitlines()) if m]
+crlf = lambda p: p.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+print(sum(hashlib.sha256(crlf((base / rel).resolve())).hexdigest() == exp for _, rel, exp in rows), '/', len(rows))
+PY
+```
+
 | 保留文件 | SHA256 |
 |---|---|
 | [validation-account-delete.json](../validation-account-delete.json) | `65066516b3700777ae87f807ee6ffd75bb9380324f105208dd74b070e4e08fdc` |

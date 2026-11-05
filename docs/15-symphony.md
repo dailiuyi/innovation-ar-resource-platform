@@ -4,7 +4,7 @@
 
 新增 [专项优先与固定审查入口](16-fast-review.md)。Java 执行镜像目标为 `innovation-symphony:0.0.3-java-v2`（JDK 21/Maven）；是否已切换运行容器以当前状态和验证记录为准。Java 变更须先运行实际测试再交付，宿主审查通过后交付同版人工实例。
 
-Symphony 在独立 Docker 容器中运行，读取 GitHub Issues，使用 Codex 执行任务。它是开发工具，不是 Spring Boot 业务服务，也不改变入库系统的单服务边界。
+Symphony 在独立 Docker 容器中运行，读取 GitHub Issues，通过 Codex App Server 与路由适配器执行任务。它是开发工具，不是 Spring Boot 业务服务，也不改变入库系统的单服务边界。本页模型标签与容器配置仅适用于这套仓库控制器，不是桌面 OMP 会话的 good/fast 模型角色配置。
 
 ## 当前配置
 
@@ -50,7 +50,7 @@ Symphony 在独立 Docker 容器中运行，读取 GitHub Issues，使用 Codex 
 ./scripts/symphony.ps1 Stop
 ```
 
-首次安装的镜像与 `.local/symphony/smoke.md` 已准备好。无凭据、无任务的运行方式：
+首次本机安装曾准备镜像与 `.local/symphony/smoke.md`；这些忽略文件不会随 clone 提供，使用前须按“安装来源与恢复”和 [环境手册](18-symphony-environment.md) 核对本机材料。准备就绪后的无凭据、无任务运行方式：
 
 ```powershell
 ./scripts/symphony.ps1 StartOffline
@@ -170,11 +170,13 @@ quick profile 包含无网络、无凭据的假 App Server 协议测试；Linux 
 
 `ingestion` profile 与 `review.py` 原生运行时仍依赖 Windows、PostgreSQL 17、JDK 21、Edge 和 `.local` 环境，Linux 容器不能据此声称该 profile 通过。Linux 宿主的入库/真实样包验收使用 [Harness 的固定隔离 Compose 流程](13-harness.md)（`127.0.0.1:18082`）；两条路径都不能用 quick/frontend 代替真实业务验收，也不得操作日常实例。
 
-管理页面 HTTP 200 只证明服务启动；Codex 登录状态不证明模型请求成功；二者都不等同于真实 Issue 到 PR 的验收。当前安装结果见 [验证记录](06-validation.md)。
+管理页面 HTTP 200 只证明服务启动；Codex 登录状态不证明模型请求成功；二者都不等同于真实 Issue 到 PR 的验收。既有安装结果见 [验证记录](06-validation.md)，不代表当前机器、镜像、回退容器或 `.local` 文件已重新核对。
 
 ## 安装来源与恢复
 
-官方发行包：[Symphony v0.0.3](https://github.com/openai/symphony/releases/tag/v0.0.3)。基础镜像配方保存在 `.local/symphony/Dockerfile`，验证依赖扩展配方见 [symphony.Dockerfile](../deploy/symphony.Dockerfile)，官方源码在 `.local/symphony/source/`，下载文件在 `.local/symphony/downloads/`。这是一份本机安装，新的机器需要重新准备基础镜像和登录，不能仅 clone 仓库就直接启动。
+官方发行包：[Symphony v0.0.3](https://github.com/openai/symphony/releases/tag/v0.0.3)。现行基础镜像配方为仓库中的 [symphony-base.Dockerfile](../deploy/symphony-base.Dockerfile)，入口 `./scripts/symphony.ps1 BuildBase`；它要求 `.local/symphony/downloads/symphony-v0.0.3-linux_x86_64` 已存在且官方 SHA256 匹配，再复制到最小构建上下文。验证依赖扩展配方见 [symphony.Dockerfile](../deploy/symphony.Dockerfile)，环境版本、自检及恢复步骤统一见 [环境手册](18-symphony-environment.md)。
+
+首次本机安装记录中的 `.local/symphony/Dockerfile`、`.local/symphony/source/` 和下载目录属于本地历史材料，不是现行基础配方的主入口，也不保证仍存在。新的机器需要准备经校验的发行包、构建镜像并配置登录；不能仅 clone 仓库就直接启动。后文带日期的备份、回退容器和工作区路径同样是历史记录，恢复前须核对实际存在与适用版本，不删除 data 或覆盖后续任务。
 
 ### 预装验证依赖与下载缓存
 

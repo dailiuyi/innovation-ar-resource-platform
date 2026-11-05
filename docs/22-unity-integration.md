@@ -10,7 +10,7 @@
 2. 选一个场景，问服务器“这个场景有哪些文件”，拿到每个文件的下载地址、大小和校验码（SHA256）。
 3. 按地址把文件下载到手机或电脑本地，校验码对得上就交给你们的 4DGS 播放组件。
 
-接口有三个，都只读：场景列表、场景详情、文件下载。文件很大（一个标准档约 69 MB），所以下载支持“断了接着下”（HTTP Range）。服务器只保存上传目录里的文件清单，不保存描述文件：哪些文件属于哪个画质档位、分段顺序和时间、坐标变换、封面/音频用途，都由 Unity 侧按文件相对路径自行决定。服务器不负责播放、不判断设备性能、不改模型坐标。
+接口有三个只读路由：场景列表、场景详情、文件下载（GET/HEAD，共四个 HTTP 操作）。文件很大，所以下载支持 HTTP Range。服务器保存上传目录的文件清单及普通文件，不保存或解释结构化 `descriptor` 字段；JSON（包括名为 `resource.json` 的普通文件）仍可照常上传下载，不获得特殊语义。哪些文件属于哪个画质档位、分段顺序和时间、坐标变换、封面/音频用途，都由 Unity 侧按文件相对路径自行决定。服务器不负责播放、不判断设备性能、不改模型坐标。
 
 “接口”可以理解为：你访问一个网址，服务器返回一段 JSON 文字或一个文件。先用浏览器或命令行试一次，就能看出它长什么样：
 
@@ -56,7 +56,7 @@ Unity 侧读到的场景，都是管理员先在后台上传并发布的。要�
 
 ## 1. 平台提供什么，不提供什么
 
-提供：场景目录、当前发布版本的完整文件清单（相对路径、大小、SHA256、content type、下载地址）、文件的 HTTP Range 下载、强 ETag。不提供：档位、分段时间、变换、文件用途等描述，这些由 Unity 侧定义。
+提供：场景目录、当前发布版本的完整文件清单（相对路径、大小、SHA256、content type、下载地址）、文件的 HTTP Range 下载、强 ETag。文件清单和内容固定，管理端文字说明 `description` 可编辑。不提供结构化的档位、分段时间、变换、文件用途解释，这些由 Unity 侧定义。HTTP 路由、头部、错误体和状态码统一以 [客户端接口对接文件](21-client-api.md) 为准；本页只补充 Unity 落地指导。
 
 ## 2. 总体流程
 
@@ -126,17 +126,14 @@ IEnumerable<FileEntry> FilesFor(SceneDetail d, IEnumerable<string> neededPaths) 
 
 ## 6. 下载与断点续传
 
-不要用一次性 `UnityWebRequest.Get` 把几十到几百 MB 读进内存。用 `DownloadHandlerFile` 直接写文件（`appendToFile` 可续写），再用 `ComputeHash` 流式校验。要点：
+不要用一次性 `UnityWebRequest.Get` 把几十到几百 MB 读进内存。用 `DownloadHandlerFile` 直接写文件（`appendToFile` 可续写），再用 `ComputeHash` 流式校验。HTTP 响应处理遵循 [客户端接口](21-client-api.md) 第 3–5 节，不在本页另定一套状态码规则：
 
 1. 目标文件 `<name>.part` 与 `<name>.etag` 放在 `Application.persistentDataPath/<sceneId>/<versionId>/` 下，按 `relativePath` 保留子目录。
-2. 首次：普通 GET，保存响应头 `ETag`。
-3. 续传：`SetRequestHeader("Range", $"bytes={partLength}-")` 和 `If-Range: <保存的 ETag>`。
-   - 返回 `206`：检查 `Content-Range` 起点等于 `partLength`，追加写入。
-   - 返回 `200`：服务器忽略了 Range 或版本内容变了，**清空 .part 从头写**。
-   - 返回 `416`：.part 异常，删除重下。
+2. 首次普通 GET 并保存响应头 `ETag`；续传设置 `Range: bytes=<partLength>-` 和 `If-Range: <保存的 ETag>`。
+3. 按上述 HTTP 规则决定追加或截断重写，不能把返回的完整正文追加到旧 `.part`；`416` 无 JSON 正文，也不能单凭该状态认定文件已完整。
 4. 下完比对 SHA256 与 `FileEntry.sha256`，一致才重命名为正式文件；不一致删除 `.part` 和 `.etag` 后重下该文件。
-5. 全部文件完成后再写 `ready` 标记（同目录原子写），Unity 只加载有 `ready` 标记的目录。
-6. 409：当前版本已被替换。停止，保留旧目录（可继续使用），重新拉详情走新 `versionId` 目录；不要混用。
+5. 全部所需文件完成后再写 `ready` 标记（同目录原子写），Unity 只加载有 `ready` 标记的目录。
+6. `409` 既可能是发布版本被替换，也可能是文件未就绪、存储缺失或长度不符。停止下载并刷新详情，保留旧目录、不混用版本；只有 `versionId` 改变才转入新版本目录，未改变时不能假定换目录或重复请求就能恢复。具体处理见 [客户端接口](21-client-api.md) 第 5 节。
 
 `DownloadHandlerFile` 的 `removeFileOnAbort` 在续传场景要设为 `false`。
 
@@ -146,7 +143,7 @@ IEnumerable<FileEntry> FilesFor(SceneDetail d, IEnumerable<string> neededPaths) 
 
 - 分段文件和起止时间由 Unity 侧定义（平台不提供）。播放时按顺序预取下一段，当前段播放结束前就应已就绪。
 - 每段文件走第 6 节同样的流程，可以只读到本地缓存再交给播放组件，也可以用 Range 分块边读边解码——这取决于你们的 4DGS 组件是否支持流式输入，**待验证**。
-- 段内时间与模型内部时间的换算由播放组件负责，平台不改写模型。此前参考播放器（4DV 的 PlayCanvas viewer）在旧描述基线上验证过跨段时间连续推进；该适配自 2026-10-29 去掉描述后不可用，结果只作历史参考。
+- 段内时间与模型内部时间的换算由播放组件负责，平台不改写模型。此前参考播放器（4DV 的 PlayCanvas viewer）在旧描述基线上验证过跨段时间连续推进；旧适配不作为现行入口，结果只见 [真实样包历史记录](20-4dgs-sample-validation.md)。
 
 ## 8. 变换、音频、封面
 
@@ -157,15 +154,15 @@ IEnumerable<FileEntry> FilesFor(SceneDetail d, IEnumerable<string> neededPaths) 
 
 ## 9. 错误与重试
 
-- 按 HTTP 状态码处理，不解析 `message`（见 21 号文档第 5 节表格）。
-- 超时、断网：保留 `.part` 和 `ETag`，指数退避后续传，不要自动拉全量文件列表。
+- HTTP 错误体、状态码和重试边界统一见 [客户端接口](21-client-api.md) 第 5 节；先看状态码，正文可选，不解析 `message` 决定行为。
+- 网络中断时保留 `.part` 与 `ETag`，按该规则续传；不因单文件失败自动拉全量文件列表。
 - 平台没有限流，但也不要对列表接口做秒级轮询；场景列表只在进入页面时刷新。
 
 ## 10. 联调清单
 
-1. 手机浏览器能打开 `https://4dgs.elma-gohan.xyz/api/v1/client/scenes`，返回场景列表 JSON；打不开先检查云端 Compose 和 elma-gohan 的 nginx 中继，已不使用开发机隧道。
+1. 手机浏览器能打开 `https://4dgs.elma-gohan.xyz/api/v1/client/scenes`，返回场景列表 JSON；打不开时按 [基础设施手册](10-local-infrastructure.md) 的部署记录检查目标环境，不自行重启旧本机服务或恢复隧道。
 2. `GET /scenes` 能返回至少一个场景；用 `curl` 先对照 21 号文档第 7 节。
-3. 发布测试资源后，按文件清单下载所需文件并核对 SHA256。2026-10-30 仅迁移账号，原本机 dance_color 等模型未迁入云端，需要重新导入发布后再做客户端验收。
+3. 经授权在目标验收环境导入并发布测试资源，按文件清单下载所需文件并核对 SHA256。账号迁移不等于模型迁移，不能假定云端已有原本机样包；部署与数据保留状态见 [基础设施手册](10-local-infrastructure.md)。
 4. 手动断网后续传：`.part` 后继续，最终 SHA256 一致。
 5. 管理端发布新版本后，旧 `versionId` 的下一个请求应得到 409，客户端按第 6 节处理。
 6. 在 Unity 中加载并显示首帧；记录 GPU/内存占用（样例参数分析见项目外的《4DGS模型高斯参数与内存显存规格分析报告》）。
@@ -173,11 +170,13 @@ IEnumerable<FileEntry> FilesFor(SceneDetail d, IEnumerable<string> neededPaths) 
 
 ## 11. 本轮已验证与未验证
 
+下表保存所列日期/接口版本的既有验证结论，不表示本轮重新测试或 Unity 已完成接入；旧播放器细节见 [真实样包验收记录](20-4dgs-sample-validation.md)。
+
 | 项 | 状态 |
 |---|---|
 | 匿名目录/详情/文件、Range、If-Range、HEAD | 0.4.0 在隔离实例上已验证；0.5.0（2026-10-29）在隔离实例上实测目录、详情与单段 Range |
 | Python 参考下载器：断点续传、版本变化 409、损坏文件重下 | 0.5.0 整版下载在隔离实例上实测完成并逐文件核对 SHA-256；续传、409、损坏重下由 `scripts/test_download_scene.py` 假接口覆盖 |
-| 桌面 Chrome 参考播放器：wedding 标准/高清、dance_color 标准跨段 | 旧描述基线上已验证；2026-10-29 去掉描述后参考播放器不可用 |
+| 桌面 Chrome 参考播放器：wedding 标准/高清、dance_color 标准跨段 | 旧描述基线上已验证；2026-10-29 去掉描述后旧适配不可用，不是当前 scripts 中的可运行入口 |
 | Unity 编辑器/手机下载与加载 | **未验证** |
 | 手机端解码、帧率、音频、坐标系对齐 | **未验证** |
 | HTTPS | 已启用（Let's Encrypt，经 elma-gohan 反代） |

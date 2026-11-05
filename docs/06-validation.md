@@ -1,5 +1,9 @@
 # V0.1 验证记录
 
+本文按阶段保留历史结论；各段“当前”“未完成”只对应所记日期与源码。后续记录可能补充验收，但不追改当时结果。正式证据与保留快照的区别见 [证据索引](evidence/README.md)。本机 `.local` 路径仅是查证线索，不保证其他检出环境可访问。
+
+日期导航（按页面顺序，各日期组首条）：[2026-09-20](#2026-09-20-新-agent-的流程识别与交接文档)、[2026-09-19](#2026-09-19-symphony-模型与思考深度路由)、[2026-09-18](#2026-09-18-docker-内网更新)、[2026-09-17](#2026-09-17-场景发布指针)、[2026-09-16](#2026-09-16-场景删除验收)；[早期候选设计历史](#以下为原云存储与昼夜候选设计的历史记录)（含 GH-1/3/4/7 与后续 09-19/09-20 条目）；[2026-09-25](#2026-09-25-项目更名与-compose-数据迁移)、[2026-10-27](#2026-10-27-公网分发方案文档提交检查)、[2026-10-29](#2026-10-29-本机回环-compose-首次部署)、[2026-10-30](#2026-10-30-任意多文件与-zip-导入)、[2026-11-04](#2026-11-04-knife4j-接口文档与云端更新)、[2026-11-05](#2026-11-05-mybatis-plus-接入与-mapper-职责整理)。
+
 ## 2026-09-20 新 Agent 的流程识别与交接文档
 
 - 本轮仅补充仓库说明，不修改程序、不更新运行容器。AGENTS、README、知识索引共同链接 [Agent 工作流入口](17-agent-workflow.md)，明确口头需求、Issue 准备、受控编码、PR 审查和显式重试的职责与阶段产物。
@@ -37,8 +41,6 @@
 - Windows 发布回归 12 项（符号链接测试因权限跳过 1 项）；Linux 发布回归 12 项全部通过、路由协议 18 项全部通过。测试夹具显式隔离生产 DeepSeek 密钥挂载，未进行真实模型推理。大二进制字节、远端并发变化、错误 blob、输入变化、重复请求、认证失败不重试、禁止手工 blob 回退及线程映射均有覆盖。
 - 实际通过同一发布器的宿主 gh 传输补交 `scripts/verify_ingestion.py` 与 `docs/06-validation.md`，提交 `5b8ff6636f60472771777e5bc8fc5b75376f7157`；远端 13 个 PR 文件的 Git blob SHA 均与保留工作区相同。证据：`.local/symphony/publish-fix-20260920/receipt.json`、`file-verification.json`。新增系统工具留在宿主工作区，不混入 GH-9 的界面功能 PR。
 - 宿主 Windows ingestion、真实后端/数据库、Edge 登录点击、三视口人工观感、独立审查和同提交 preview 均待完成；PR 保持 draft，未合并或部署。本轮没有重装前端依赖或重跑构建。系统工具测试与上传哈希不代表 GH-9 业务验收通过。
-
-本文按阶段保留历史结论；各段“当前”“未完成”只对应所记日期与源码。后续记录可能补充验收，但不追改当时结果。正式证据与保留快照的区别见 [证据索引](evidence/README.md)。本机 `.local` 路径仅是查证线索，不保证其他检出环境可访问。
 
 
 ## GH-9 场景列表入口拆分与列宽（2026-09-20）
@@ -752,3 +754,18 @@ SceneMapper 继承 BaseMapper，Manager 的基础 insert/selectById 不再重复
 - quick doctor/check 的命令与最终结果索引保存在 `.local/support-storage/quick-final.json`。
 
 临时 HTTP 服务已停止并实测回环端口关闭；仅移除本轮临时 Java 探针源码，保留测试数据、修复前编译快照和报告。不涉及 Controller/Service/Mapper、数据库、鉴权或前端改动；本轮没有启动完整 Spring Boot 应用、没有重跑数据库/网关/浏览器验收，不能沿用此前 173 项 HTTP 报告作为本轮全链路证明。未提交、推送、合并或部署。
+
+## 2026-11-05 文档核对与清理
+
+- 范围与原因：按已批准方案修订 13 份 Markdown——现行手册 7 份（`development-workflow.md`、`11-current-platform-architecture.md`、`12-resource-ingestion.md`、`13-harness.md`、`15-symphony.md`、`21-client-api.md`、`22-unity-integration.md`），导航/证据/任务 6 份（`index.md`、`06-validation.md`、`evidence/README.md` 与三份 active 任务）。目的是把功能、基础设施、HTTP 与验收主归属收敛到对应手册，给历史记录补阶段边界；不改写历史日期基线，不把未验证项升级为已完成或已确认。
+- 未改：业务源码、脚本、契约、测试、历史 JSON/证据快照、图片、根 README/AGENTS；未删除文件、未安装依赖、未启动服务或容器、未部署、未操作生产/日常实例。
+- 实际只读检查：全部 `docs/**/*.md` 与 `docs/**/*.html` 的本地链接和锚点为 340 条内部链接、0 断链、06 日期导航 12/12 锚点匹配；17 条外链与 50 个代码围栏、2463 个行内代码片段按规则排除，证据 `.local/docs-cleanup-20261105/links.json`。保留 JSON 摘要按原表核对：14 个文件原始字节 0/14、内存 LF→CRLF 后 14/14，均无 CR/BOM，证据 `.local/docs-cleanup-20261105/hashes.json`。CLI 证据 `.local/docs-cleanup-20261105/cli-smoke.json`：10 条 `--help` 退出码 0、stderr 为空；`13-harness.md` 命令块的 3 条 argv 仅做参数解析并 3/3 通过，未执行 prepare/stop/verify/模型/安装。
+- 边界：链接、摘要与 help 均为静态或参数级核对。help 成功不表示环境就绪；CRLF 匹配只说明文本规范一致，不证明 2026-09-20 的生成环境或业务通过；本段不构成业务、数据库、HTTP、浏览器、手机/Unity、部署或人工观感验收。
+- 最终 quick（在全部 Markdown 修改结束后运行）：
+
+  ```bash
+  .local/ingestion-venv/bin/python scripts/harness.py doctor --profile quick
+  .local/ingestion-venv/bin/python scripts/harness.py check --profile quick
+  ```
+
+  结果索引 `.local/docs-cleanup-20261105/verification.json`，链接上述三份证据与真实 harness 报告，并记录 `sourceUnchanged`、skipped/blocked 与退出状态；本文不预写通过结论，以该索引和实际报告为准。

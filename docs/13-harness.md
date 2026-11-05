@@ -32,16 +32,42 @@ python scripts/harness.py check --profile ingestion
 | Profile | 检查范围 | 前置条件 |
 |---|---|---|
 | quick（默认） | Harness 故障回归、审查工具回归、Symphony 模型路由协议回归、OpenAPI/Schema/示例、生成源一致性、AGENTS/README/docs 递归本地链接 | Python 3.11+、Git、requirements-review 中的契约验证依赖 |
-| frontend | quick + 成品包解析消费者行为测试（`scripts/test_scene_package.mjs`）+ Vue 生产构建 | Node、npm、已通过 npm ci 安装的前端依赖 |
+| frontend | quick + 成品包解析消费者行为测试（`scripts/test_scene_package.mjs`）+ Vue 生产构建 | Node、npm，以及首次或失效依赖准备所需的网络/缓存；控制器自动安装或核对后复用依赖，不要求预先手工 npm ci |
 | ingestion | quick + 成品包解析测试 + 已测试 Jar 上的 Windows 隔离入库 API/Edge 验收（版本导入、逐文件上传与恢复、发布、整版删除） | Windows、项目 .local 中 PostgreSQL 17/JDK 21、Redis、Node、前端依赖、psycopg、Playwright、Edge，以及同源码由 `scripts/check_java.py --module ruoyi-admin --package` 产出的 `backend/ruoyi-admin/target/ruoyi-admin.jar` |
 
 `doctor` 只探测所选 profile 的必要环境，不安装依赖、不启动应用、不连接日常数据库。Python 同时搜索当前解释器和 `.local/python`；缺依赖时按输出提示准备。版本和路径沿用已有入库脚本的约定。Node 还会对现有回归脚本进行路径访问探测；如沙箱拒绝读取项目父目录，应申请对应命令的沙箱外权限，不修改业务代码绕过限制。
 
 `ingestion` 不再自行构建后端：不复制源码，也不运行 Maven，只复用同一源码已由 `check_java.py --package` 执行并通过全部测试后产出的 Jar（缺失则 doctor 阻塞）。旧的 `export-path-migration`（只验证已完成的 V013 历史行为，脚本 `verify_export_path_migration.py` 保留为独立历史脚本）和 `backend-package` 步骤随旧 Windows 流程移除。测试使用随机回环端口、新数据库、新存储目录和合成账号。不会启动 Docker、重建网关或操作现有 Demo 账号。
 
-Linux 上的真实验收不走 Windows profile，而是用 `scripts/prepare_4dgs_check.py` 启动固定的隔离 Compose 实例（项目 `innovation-ar-resource-platform-infra-check`，`127.0.0.1:18082`，不使用日常 18081/43174 或 `config/compose.env`），再运行 `scripts/verify_ingestion.py --base-url http://127.0.0.1:18082 --admin-base-url http://127.0.0.1:18082/prod-api --credentials-file <runtime.json 中的 credentialsFile> [--browser-executable /opt/google/chrome/chrome]`（等价于 `run_http_checks`）。`prepare` 只用已有镜像、已测试 Jar 和已交付的前端 dist，凭据 0600 且不打印，`stop` 只 `compose stop` 并保留数据。quick 和合成 UI 检查都不是该全链验收。
+Linux 上的真实验收不走 Windows profile，而是用 `scripts/prepare_4dgs_check.py` 启动固定的隔离 Compose 实例（项目 `innovation-ar-resource-platform-infra-check`，`127.0.0.1:18082`），再对它执行 HTTP 和可选浏览器检查。它不使用日常 18081、Vite 43174 或 `config/compose.env`；固定端口和项目不能供多个任务同时占用。已有资源不属于本次证据目录时会拒绝接管，不得为通过准备而停止其他实例或删除卷。
 
-真实样包与参考播放器闭环原由 `scripts/verify_4dgs.py --runtime <runtime.json> --samples-root <样本目录> --sample-descriptors <描述目录> --viewer-root <参考播放器副本> --browser-executable /opt/google/chrome/chrome --report-dir <.local 下目录>` 执行；该脚本与参考播放器适配仍读取已删除的 `descriptor`/`variants`，自 2026-10-29 起对 0.5.0 接口不可用，按用户决定保留原状、不维护。以下为原用法记录：只接受固定的隔离实例；退出码 0 全部通过、1 有检查失败、2 输入或运行时不可用、4 已执行项全部通过但有被阻塞项（报告 `verify-4dgs.json` 的 `blocked`）。`prepare_4dgs_check.py prepare` 同时给测试后端开启仅含文件读写事件的 JFR（`JAVA_TOOL_OPTIONS`，写入后端日志卷，正常停止时转储），可选 `--reference-viewer DIR` 只读挂入参考播放器副本。无头 Chrome 默认回退到 SwiftShader 软件渲染，需 `--use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist` 才使用本机 NVIDIA GPU，`verify_4dgs.py` 同时记录两种渲染器。详见 [真实样包验收记录](20-4dgs-sample-validation.md)。
+准备前确认已获隔离实例操作授权，并具备 Docker Engine/Compose、验收 Python 依赖及所需浏览器。Jar 必须来自同源码通过测试的 `scripts/check_java.py --module ruoyi-admin --package`；dist 必须来自前述 frontend 控制器的成功交付且输入/产物仍匹配。`prepare` 不替你执行这两项测试/交付，但优先复用 backend/gateway 的 `infra-v1` 镜像，其次复用 `4dgs-check` 标签；两者都缺时会构建隔离标签，可能下载基础镜像或构建依赖。不能把内部 `compose up --no-build` 理解为整个准备过程绝不构建；运行前核对相应授权与镜像准备条件。
+
+以下命令从仓库根目录运行。将 `RUN_DIR` 改为本任务在 `.local/` 下的私有目录，后续准备、验收与停止都保留同一值；示例使用已有 Jar/dist，不在此重复构建。浏览器路径按已准备的实际文件替换；省略 `--browser-executable` 只执行 HTTP，不得声称浏览器验收通过。
+
+```bash
+RUN_DIR=.local/harness/ingestion-linux-001
+python3 scripts/prepare_4dgs_check.py prepare \
+  --report-dir "$RUN_DIR" \
+  --jar backend/ruoyi-admin/target/ruoyi-admin.jar \
+  --frontend-dist frontend/dist
+
+# prepare 成功后核对 runtime.json 的 baseUrl/adminBaseUrl/credentialsFile，
+# 下列 credentials.json 是上述 RUN_DIR 对应的私有文件，不打印其内容。
+python3 scripts/verify_ingestion.py \
+  --base-url http://127.0.0.1:18082 \
+  --admin-base-url http://127.0.0.1:18082/prod-api \
+  --credentials-file "$RUN_DIR/credentials.json" \
+  --browser-executable /opt/google/chrome/chrome \
+  --report-dir "$RUN_DIR/http-browser"
+
+# 完成后由持有该实例的任务停止；不删除容器、数据卷或证据。
+python3 scripts/prepare_4dgs_check.py stop --report-dir "$RUN_DIR"
+```
+
+`prepare` 写入该目录的 `runtime.json`、所有权标记与 0600 凭据，不打印口令；会核对后端 Jar、前端交付并重建本隔离网关容器以更新挂载。`stop` 仅对归属本任务的项目执行 `compose stop`，保留数据和证据。测试后端还开启仅含文件读写事件的 JFR，正常停止时转储到后端日志卷。命令示例不是实际运行或验收通过证明；quick 和合成 UI 检查也不是该全链验收。
+
+旧真实样包/参考播放器命令及结果统一见 [真实样包验收记录](20-4dgs-sample-validation.md)。旧适配依赖已删除的 `descriptor`/`variants`，自 2026-10-29 起不适用 0.5.0；当前 `scripts/` 不包含旧 `prepare_reference_viewer.py`、`verify_4dgs.py` 或参考播放器目录，不能把历史命令当作现行入口。`prepare` 留有可选 `--reference-viewer DIR` 参数，不代表已提供可用播放器，也不构成恢复或维护旧播放器的授权。
 
 ## 报告与完成判定
 

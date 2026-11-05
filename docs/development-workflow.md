@@ -1,6 +1,6 @@
 # Development and acceptance workflow
 
-当前日常应用运行在开发机 Docker Compose，通过 nginx 中继与反向 SSH 隧道提供公网 HTTPS；新功能先在本地开发或隔离实例验证，不因文档中的启动示例自动更新日常实例。Windows 原生 Demo 命令仍保留，适用范围见下文。
+日常部署、Vite 开发和隔离验收是不同环境。日常拓扑、2026-10-30 云端切换与源端数据保留记录以 [基础设施手册](10-local-infrastructure.md) 为主；新功能先在本地开发或隔离实例验证，文档中的命令示例不构成更新日常实例的授权。Windows 原生 Demo 命令仍保留，适用范围见下文。
 
 ## Development loop
 
@@ -8,10 +8,10 @@
 Work locally. Docker is a packaging step after the change is settled, not part of the edit cycle.
 
 1. Inner loop: edit source, use Vite and the appropriate isolated backend/runtime, check the result, repeat.
-2. Package Docker only when the UI and APIs are stable, the LAN demo must show the new build, or a container-shaped acceptance is required.
+2. Package Docker only when the UI and APIs are stable and an authorized deployment or container-shaped acceptance requires it.
 3. Do not rebuild images, `docker cp` into a container, or recreate Compose services for copy, button, layout, or other small edits.
 
-前端内循环使用 Vite（`npm --prefix frontend run dev`）。`local_demo.py` 的数据库和进程管理依赖 Windows `.exe`/PowerShell，仅在相应原生环境使用；Java 修改先由 `scripts/check_java.py` 产出已测试 Jar，再重启对应隔离后端，不为每次编辑重建日常镜像。Linux 入库与真实样包流程见 [Harness](13-harness.md) 的 `prepare_4dgs_check.py` 入口。
+前端内循环使用 Vite（`npm --prefix frontend run dev`）。`local_demo.py` 的数据库和进程管理依赖 Windows `.exe`/PowerShell，仅在相应原生环境使用；Java 修改先由 `scripts/check_java.py` 产出已测试 Jar，再重启对应隔离后端，不为每次编辑重建日常镜像。Linux 入库的完整准备、验收与停止流程见 [Harness](13-harness.md)“使用”节；旧播放器的真实样包播放命令仅见 [历史记录](20-4dgs-sample-validation.md)，不是当前启动入口。
 
 以下是 Windows 原生工具示例，不是 Linux 日常 Compose 启动命令：
 
@@ -35,18 +35,11 @@ python -c "import time; time.sleep(10**9)"
 
 Do not report the local demo as up merely because `local_demo.py` printed `started`. Confirm `http://127.0.0.1:18080/captchaImage` and `http://127.0.0.1:43174/` after the starter is still running. `python scripts/local_demo.py stop` remains the stop path.
 
-日常 Compose 网关现为 `http://81.71.154.125:18081`，公网 `https://4dgs.elma-gohan.xyz` 经 `elma-gohan.xyz` 的 nginx 直接转入云端；不再依赖开发机和反向隧道。2026-10-30 仅迁移账号，本机原 `192.168.0.12:18081` 的 gateway/backend 已停止，数据库和文件卷保留，隧道服务已停用；不得自行重启旧服务或切回旧路由。Vite 为 `127.0.0.1:43174`，Linux 隔离验收为 `127.0.0.1:18082`，不能混用数据库、账号与配置。Compose 前端在镜像构建时固化；Redis 使用 tmpfs，仅 Redis 重启会丢失其中的登录会话，重建 backend/gateway 本身不等于清空 Redis。
+环境地址与云端/源端状态统一查 [基础设施手册](10-local-infrastructure.md)，不得自行重启旧本机服务、恢复隧道或切回旧路由，也不得清理保留的数据卷。Vite 使用 `127.0.0.1:43174`，Linux 隔离验收使用 `127.0.0.1:18082`，不能混用日常数据库、账号与配置。Compose 前端在镜像构建时固化；Redis 使用 tmpfs，重启会丢失其中的登录会话，重建 backend/gateway 本身不等于清空 Redis。
 
-For copy, button, or layout-only changes: edit `frontend/src` and any Playwright selector that clicks the old control (`scripts/verify_browser.py`, `scripts/verify_ingestion.py`). Update the matching sentence in `docs/` if it names that control. A removed label is done when the source and selectors no longer name it. Full login-and-click checks are for behavior changes. `bootstrap` is retired on the LAN demo; do not enable it or mint sessions to satisfy a browser check. If you cannot log in, say so and stop.
+For copy, button, or layout-only changes: edit `frontend/src` and any Playwright selector that clicks the old control (`scripts/verify_browser.py`, `scripts/verify_ingestion.py`). Update the matching sentence in `docs/` if it names that control. A removed label is done when the source and selectors no longer name it. Full login-and-click checks are for behavior changes. `bootstrap` is retired on the daily instance; do not enable it or mint sessions to satisfy a browser check. If you cannot log in, report the blocker rather than bypassing authentication.
 
-When the user asks to publish a settled change to the LAN demo, rebuild only what changed. Frontend-only:
-
-```powershell
-docker compose --env-file config/compose.env build gateway
-docker compose --env-file config/compose.env up -d gateway
-```
-
-Do not `up --build gateway` in a way that recreates `backend`.
+日常发布统一按 [基础设施手册](10-local-infrastructure.md) 核对目标配置、已验收镜像及校验结果，并取得明确部署授权；云端运行 Compose 不含构建步骤，不在部署主机照抄本地 build 命令。数据库迁移前先备份并获授权，不因小范围 UI 编辑重建日常实例。
 
 ## Build, Test, and Development Commands
 

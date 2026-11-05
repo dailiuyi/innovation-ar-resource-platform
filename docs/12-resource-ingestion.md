@@ -7,7 +7,7 @@
 实际迁移随应用 Flyway 执行：`V014__remove_scene_geography.sql` 删除地址、经纬度和坐标系；`V015__scene_product_versions.sql` 是**破坏性清洁切换**，明确清空旧成品业务记录（`ar_audit`、旧草稿/文件/ZIP 表和 `ar_scene`）后删除旧表，不涉及任何 `sys_*` 账号和菜单表，也不能对日常库自动执行；`V017__remove_version_descriptor.sql` 删除 `ar_scene_version.descriptor` 列（该列数据不可恢复，执行前须备份并获批准；日常库 18081 已于 2026-10-29 经授权备份后执行，见 [验证记录](06-validation.md)）。根目录 `database/migrations` 仍是历史候选设计。
 
 - `ar_scene`：只保留名称、启停、修订号及时间/删除信息，加当前发布指针 `published_version_id`、`published_at`、`published_by_*`（复合外键保证不跨场景发布）。
-- `ar_scene_version`：不可变版本，含场景内版本号、`request_key`、说明、说明修订号。同场景同请求键幂等。
+- `ar_scene_version`：文件清单与内容固定的版本，含场景内版本号、`request_key`、可编辑说明和说明修订号。同场景同请求键幂等。
 - `ar_version_file`：每文件相对路径、预期大小/SHA256、服务端 UUID 加 `.bin` 的存储标识、状态、已验证大小/摘要、尝试次数、失败原因、创建人和最后操作人。同版本相对路径唯一。
 - `ar_version_deletion`：整版删除意图、失败原因和最小幂等回执，不向已删除版本保留外键，也不复制文件内容。
 - 文件内容只写入 `ArtifactStorage`，不进数据库。相对路径只用于清单和还原，不能指定服务器落盘路径。
@@ -23,7 +23,7 @@
 
 ## 版本内容：固定文件清单
 
-一个内容版本就是一次选择的固定文件清单（相对路径、字节数、SHA256）加可编辑说明。平台没有 `resource.json` 描述（2026-10-29 删除）：档位、分段、时间、变换和媒体用途由 Unity 客户端按相对路径决定，服务端不解释文件用途、不解码模型。
+一个内容版本就是一次选择的固定文件清单（相对路径、字节数、SHA256）加可编辑说明 `description`。平台不保存或解释结构化 `descriptor` 字段（2026-10-29 删除）：档位、分段、时间、变换和媒体用途由 Unity 客户端按相对路径决定，服务端不解释文件用途、不解码模型。JSON（包括名为 `resource.json` 的普通文件）仍可上传下载，不获得特殊语义。
 
 - “导入资源目录”登记目录下每个文件，去掉所选顶层目录名并保留子目录；“导入文件”允许选择任意类型的一个或多个文件，以文件名作为相对路径，一次选择创建一个版本。空选择、零字节文件和规范化后重名的文件拒绝。
 - ZIP 与其他文件一样原样上传，不扫描包内清单、不在服务端解压。Unity 下载并校验文件后自行解压；平台清单只登记 ZIP 本身，不包含包内文件。本入口及续传支持于 2026-10-30，决定依据为用户确认的多文件/ZIP 导入需求。
@@ -44,7 +44,7 @@
 | PUT `/scene-versions/{versionId}/files/{fileId}/content` | `application/octet-stream` 原始文件流 |
 | GET / HEAD `/scene-versions/{versionId}/files/{fileId}/content` | 管理员读取已完成文件，支持强 ETag、Range、If-Range |
 
-操作人从登录身份取得。关键变更写入 `ar_audit`，动作为 `VERSION_CREATE`、`VERSION_EDIT`、`VERSION_PUBLISH`、`VERSION_DELETE_REQUEST`、`VERSION_DELETE`、`VERSION_DELETE_FAILED`，以及场景动作和上传结果动作，可在“场景操作记录”查看。错误沿用 `AR_<status>`/`message`/`traceId`。
+操作人从登录身份取得。关键变更写入 `ar_audit`，动作为 `VERSION_CREATE`、`VERSION_EDIT`、`VERSION_PUBLISH`、`VERSION_DELETE_REQUEST`、`VERSION_DELETE`、`VERSION_DELETE_FAILED`，以及场景动作和上传结果动作，可在“场景操作记录”查看。业务 JSON 错误沿用 `AR_<status>`/`message`/`traceId`；文件 Range 416 无正文，不能要求所有失败都有 JSON。
 
 ## 创建、上传与恢复
 
@@ -77,9 +77,9 @@
 - 目录和详情只读数据库，不打开模型文件，不计算摘要。`fileName` 是实际 basename 的 URI 编码，只用于保留文件后缀并与记录比对，不参与磁盘路径；不符 404。含 `%` 或 `;` 的文件名无法进入 URL，创建版本时直接返回 400。
 - 判定顺序：场景可见、版本归属、文件 `AVAILABLE` 且无删除意图；`versionId` 不再等于当前发布指针返回 **409**，客户端须重新获取详情，不能混用新旧版本；错误归属或不存在 404；记录存在但存储缺失或长度不符 409。下载前不重算 SHA256，强 ETag 为登记摘要。已开始的旧版本字节流允许完成，其后的旧版本请求 409。
 - 响应读锁持有到流结束，整版删除取写锁，不会截断正在读取的文件。`Content-Type` 只按扩展名：json 为 `application/json`，jpg/jpeg/png/webp、wav、webm 对应 MIME，模型和未知为 `application/octet-stream`，不嗅探内容。客户端响应不带 `attachment` 文件名，`Cache-Control: no-store, no-transform`；管理员下载保留 `attachment`。
-- Range：合法但越界返回 416 与 `Content-Range: bytes */size`（超大数字不抛 500）；无效、`end<start` 或多段 Range 忽略并返回完整 200；If-Range 不匹配返回完整 200；HEAD 不发送正文，长度为完整长度。永久回归为 `HttpRangeTest`。
+- Range、If-Range、HEAD 和状态码处理统一见 [客户端接口](21-client-api.md)；合法但无法满足的 Range 返回 416 与 `Content-Range: bytes */size`，无正文；HEAD 忽略 Range 且不发送正文。永久回归为 `HttpRangeTest`。
 
-完整下载参考工具 `scripts/download_scene.py --base-url URL --scene-id UUID --output DIR`（Python 标准库，匿名）下载当前发布版本的全部文件，目录为 `<DIR>/<sceneId>/<versionId>/`：`payload/` 是相对路径的根，`.download-state.json` 在写任何字节之前原子建立并记录固定清单与已完成集合，`.transfer/` 存放 `.part`、验证器和锁，`ready.json` 在全部文件校验后才原子写入。同名 `.tmp` 只有带本次任务状态时才接管；非空且无法确认归属的临时目录直接拒绝，不删除。同命令可在被杀或断网后继续：已完成且长度匹配的文件不再请求、不重哈希；其余沿用 `artifact_transfer.download` 的 Range + If-Range，206 校验起点后追加，200 截断重写，摘要不符删除该 `.part`、不就绪、下次只重下该文件。锁为操作系统文件锁（`fcntl`/`msvcrt`），残留的空锁文件不会阻塞。409 表示发布版本已变化：工具停止（退出码 3）、不自动重试、保留旧目录，重新运行才会把新清单取到新的版本目录。它是联调参考，不是 Android/iOS 下载 SDK；按需选择文件由客户端实现。
+完整下载参考工具 `scripts/download_scene.py --base-url URL --scene-id UUID --output DIR`（Python 标准库，匿名）下载当前发布版本的全部文件，目录为 `<DIR>/<sceneId>/<versionId>/`：`payload/` 是相对路径的根，`.download-state.json` 在写任何字节之前原子建立并记录固定清单与已完成集合，`.transfer/` 存放 `.part`、验证器和锁，`ready.json` 在全部文件校验后才原子写入。同名 `.tmp` 只有带本次任务状态时才接管；非空且无法确认归属的临时目录直接拒绝，不删除。同命令可在被杀或断网后继续：已完成且长度匹配的文件不再请求、不重哈希；其余沿用 `artifact_transfer.download` 的 Range + If-Range，206 校验起点后追加，200 截断重写，摘要不符删除该 `.part`、不就绪、下次只重下该文件。锁为操作系统文件锁（`fcntl`/`msvcrt`），残留的空锁文件不会阻塞。遇 409 工具停止（退出码 3）、不自动重试并保留旧目录；该退出码/提示沿用“版本变化”的命名，但服务端也可能因文件不可用返回 409。重新取详情后只有 `versionId` 改变才进入新版本目录，未改变不能假定重跑即可恢复，见 [客户端接口](21-client-api.md)。它是联调参考，不是 Android/iOS 下载 SDK；按需选择文件由客户端实现。
 
 ## 后台
 
@@ -91,6 +91,8 @@
 
 “版本名”经用户澄清即现有“版本说明”，未新增字段；导入前可填，发布后仍可修改，不改变版本号、固定文件清单或发布指针。自动发布由后台页面衔接，后端创建、上传、发布 API 契约保持分离；关闭页面不构成服务端自动发布承诺。
 
+
+以下带日期的检查与部署条目是历史记录，不代表本轮或当前日常实例已重新验收；部署状态与源端数据保护要求以 [基础设施手册](10-local-infrastructure.md) 为主。
 
 2026-10-29 验证：`check_java.py --module ruoyi-admin --package` 在 JDK 21 容器执行 50 项测试，零失败、错误、跳过；frontend profile 通过；`verify_scene_list_ui.py` 的合成接口浏览器检查 89 项通过；隔离实例的 `verify_ingestion.py` HTTP/浏览器检查 81 项通过，包含旧分段锁同桶的不同文件并发、同文件在途 409、完成后幂等，以及目录导入 READY 和发布。证据在本地 `.local/harness/upload-ui`、`.local/harness/upload-lock-before`、`.local/harness/upload-lock-after`，不代表日常实例验收或真实服务端取消证明。
 
@@ -134,13 +136,12 @@
 
 ## 验收
 
-- 契约与链接：`python scripts/generate_contracts.py` 后 `python scripts/harness.py check --profile quick`。
-- 隔离实例：`scripts/prepare_4dgs_check.py prepare` 启动固定 `innovation-ar-resource-platform-infra-check` 项目的 `127.0.0.1:18082`，再以 `scripts/verify_ingestion.py --base-url ... --admin-base-url ... --credentials-file ...` 运行 HTTP（可选浏览器）检查；用法和限制见 [Harness](13-harness.md)。Windows 原生运行时（`review.py`、harness ingestion）继续提供数据库和私有存储故障注入。
-- 阶段 4 隔离实例门禁：`.local/stage4_gate.py`（匿名读写边界、Range、`download_scene.py` 的中断/续传/409 行，不入库）；`scripts/test_download_scene.py`、`scripts/test_artifact_transfer.py` 是无需服务的永久回归，`HttpRangeTest`、`ClientSceneServiceTest` 在 `ruoyi-ar` 中。
-- 阶段 5 真实样包：`scripts/import_scene_package.py --base-url URL --scene-id UUID --package-root DIR --state-file FILE --credentials-file FILE [--version-id UUID] [--report FILE]` 复用创建/上传 API 导入包根下的每个普通文件（拒绝符号链接和空目录；状态文件必须在包根之外）：每文件预哈希一次，请求键与版本号记在状态文件，同命令或 `--version-id` 重跑时重新哈希核对同一清单、跳过 AVAILABLE、不重发处理中文件、重传 FAILED/PENDING 文件；口令和令牌只在内存。原 `prepare_4dgs_samples.py` 已删除。
-- 注意：下面两项参考播放器与 `verify_4dgs.py` 仍读取已删除的 `descriptor`/`variants`，对 0.5.0 接口不可用；按 2026-10-29 用户决定保留原状、不维护，说明仅作历史记录。
-- `scripts/prepare_reference_viewer.py --source <参考仓库 local-viewer/public> --origin URL --output DIR` 校验固定构建 20261016/230726（主包、引擎、目录模块、样式、Worker、manifest 和 WASM；主包第 46 行须导入 `Drq6wweV.js`）后复制 `viewer/`、`viewer-static/`（不含模型），把内置场景模块 `Drq6wweV.js` 换成 `scripts/reference_viewer/catalog-adapter.js`（只读本平台匿名目录/详情，完全替换内置清单，所选档位同时作为所有设备入口且不设置高清入口），改写源站和本地构建后缀，并生成同源联调页 `viewer/platform.html` 与入口页 `viewer/index.html`。来源目录没有入口页和 Service Worker，入口页由 `scripts/reference_viewer/index.html` 模板写出（最小外壳，不是上游原文件，不联网获取），不安装 Service Worker；页面 CSP 需要 `'unsafe-eval'`（主包代码要求），外部访问由 `connect-src 'self'` 封死，同一 CSP 记入标记文件。源目录缺失或构建不符时明确失败，不回退内置清单。`prepare_4dgs_check.py prepare --reference-viewer DIR` 把副本只读挂入隔离网关（每次 prepare 重建网关容器以挂载新目录/配置），`/viewer/<sceneId>` 指向 `index.html` 并带跨源隔离和 CSP 响应头，不进入生产镜像。
-- `scripts/verify_4dgs.py`（参数见 `--help`）在固定隔离实例上运行：`run_http_checks`、三份真实样包的导入/发布/匿名读取与逐文件 SHA-256 核对、Range/HEAD、按档位完整下载、后端 JFR 文件读写归因与重启恢复检查，以及真实 Chrome 播放（经联调页选场景和档位；读取 `__S4D_BENCH__.snapshot()` 的播放器时间与渲染状态，记录并分类网络请求、控制台错误和截图）。JFR 由 `prepare_4dgs_check.py` 通过测试后端的 `JAVA_TOOL_OPTIONS` 开启，只含 `jdk.FileRead/FileWrite`，正常停止时转储。`scripts/test_prepare_reference_viewer.py`、`scripts/test_verify_4dgs.py`、`node --test scripts/test_reference_catalog_adapter.mjs` 是无需服务的永久回归（其中的参考播放器源目录是结构夹具，不证明播放）。本次真实运行的结果和未完成项见 [真实样包验收记录](20-4dgs-sample-validation.md)。
+- 契约与链接：按 [Harness](13-harness.md) 运行 quick；只有契约本身变化时才修改生成源并重新生成，不以验证时重生成掩盖漂移。
+- 隔离实例：Linux 的完整 prepare、HTTP/浏览器 verify 与 stop 命令集中在 [Harness](13-harness.md)“使用”节，必须提供 `.local/` 下的 `--report-dir` 和同源码已测试 Jar、有效 frontend dist；核对缺镜像时的构建副作用与授权。不要将本页导入示例用于日常实例。Windows 原生运行时（`review.py`、harness ingestion）继续提供数据库和私有存储故障注入。
+- 无需服务的永久回归为 `scripts/test_download_scene.py`、`scripts/test_artifact_transfer.py`；`HttpRangeTest`、`ClientSceneServiceTest` 在 `ruoyi-ar` 中。阶段 4 的 `.local/stage4_gate.py` 仅是当时隔离实例门禁记录，不是 clone 后保证存在的仓库入口。
+- 真实样包导入联调：`scripts/import_scene_package.py --base-url http://127.0.0.1:18082 --scene-id UUID --package-root DIR --state-file FILE --credentials-file FILE [--version-id UUID] [--report FILE]`。该脚本只支持**隔离 HTTP 网关根 URL**，不带 `/prod-api`（脚本自动追加），不支持 HTTPS；这不是允许将公网凭据改用明文传输。凭据使用本任务隔离实例的私有文件，状态与报告放 `.local/` 且位于包根之外，不打印口令或令牌。
+- 导入脚本复用创建/上传 API，导入包根下的每个普通文件，拒绝符号链接和空目录。每文件预哈希一次，状态记录 `requestKey` 与 `versionId`（不是 `versionNo`）；同命令或 `--version-id` 续传时重新哈希核对同一清单，跳过 AVAILABLE、不重发 UPLOADING、重传 FAILED/PENDING。口令和令牌只在内存；脚本不自动发布，页面自动发布行为见“后台”节。
+- 旧 `prepare_reference_viewer.py`、`verify_4dgs.py` 与参考播放器目录当前不在 `scripts/` 中，不能作为可执行验收入口。其旧描述基线上的准备、播放、JFR 与真实样包结果统一见 [真实样包验收记录](20-4dgs-sample-validation.md)；这些历史命令不适用当前 0.5.0，不在本轮恢复或维护。
 - 合成模型字节不是可渲染 4DGS 内容，只验证管理与传输契约；浏览器播放、Android/iOS 真机、手机网络和音画主观效果不在这些检查内。
 
 阶段与证据见 [任务记录](tasks/active/2026-10-29-4dgs-resource-refactor.md)。[保留证据索引](evidence/README.md)中的旧入库 JSON 是历史快照，不代表当前代码。

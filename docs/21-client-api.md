@@ -1,24 +1,24 @@
 # 客户端接口对接文件
 
-适用：Unity / 任何 HTTP 客户端读取已发布的 4DGS 场景。版本 `4DGS Scene Resource API 0.5.0`（相对 0.4.0 为不兼容变更：去掉 `descriptor`、`defaultVariant`、`variants`、`posterUrl`）；机器可读定义见 [OpenAPI](../contracts/openapi.yaml)（只看带 `客户端` 标签的三个操作）。本文只描述已实现的行为。
+适用：Unity / 任何 HTTP 客户端读取已发布的 4DGS 场景。版本 `4DGS Scene Resource API 0.5.0`（相对 0.4.0 为不兼容变更：去掉 `descriptor`、`defaultVariant`、`variants`、`posterUrl`）；机器可读定义见 [OpenAPI](../contracts/openapi.yaml)（带 `客户端` 标签的三个路由、四个 HTTP 操作：列表 GET、详情 GET、文件 GET/HEAD）。本文只描述已实现的行为。
 
 ## 1. 基本信息
 
 | 项 | 值 |
 |---|---|
-| Base URL | `https://4dgs.elma-gohan.xyz`。2026-10-30 起由 elma-gohan 的 nginx（HTTPS）直接转发到云端 `81.71.154.125:18081`，不依赖开发机或反向 SSH 隧道；本次只迁移账号，原模型没有迁移 |
+| Base URL | `https://4dgs.elma-gohan.xyz`；部署拓扑、2026-10-30 账号迁移与源端数据保留记录见 [基础设施手册](10-local-infrastructure.md)，不据此推断本轮服务健康或模型数据已迁移 |
 | 前缀 | `/api/v1/client/`，与管理后台同源 |
 | 认证 | 无。不要发送 `Authorization`、Cookie。三个路由只开放 GET，文件路由另开放 HEAD |
 | 传输 | HTTPS（Let's Encrypt 证书）；JSON 为 UTF-8，文件为二进制流。不需要为 Android/iOS 放行明文流量 |
-| 错误体 | 所有错误统一为 `{"code":"AR_<状态码>","message":"…","traceId":"…"}`，按 HTTP 状态码判断，`message` 仅用于日志 |
+| 错误体 | AR 业务 JSON 错误采用 `{"code":"AR_<状态码>","message":"…","traceId":"…"}`。先按 HTTP 状态码处理，正文可选，`message` 仅用于日志；文件 `416` 无正文，HEAD、网关自身错误和传输中断不保证有业务 JSON |
 | 缓存 | 文件响应为 `Cache-Control: no-store, no-transform`；客户端自行缓存，用版本号和 SHA256 判断 |
 
 ## 2. 数据模型
 
 - **场景（scene）**：一个独立 4DGS 重建成品，有 `id`（UUID）、`name`。
-- **版本（version）**：场景在任一时刻只有一个“当前发布版本”，不可变。发布新版本后旧版本即不可经客户端读取。
+- **版本（version）**：场景在任一时刻只有一个“当前发布版本”。版本的文件清单与内容固定；管理端版本说明 `description` 仍可编辑，不改变清单或发布指针。发布新版本后，后续旧版本请求不可经客户端读取。
 - **文件**：每个文件有 `fileId`、相对路径、字节数、SHA256、`contentType`、可直接请求的 `downloadPath`。一个版本就是上传目录的完整文件清单。
-- 平台没有场景描述：档位、分段、时间、变换、封面/音频/配置等文件用途由 Unity 客户端按 `relativePath` 决定，服务端不解释、不解码文件。
+- 平台不保存或解释结构化 `descriptor` 字段：档位、分段、时间、变换、封面/音频/配置等文件用途由 Unity 客户端按 `relativePath` 决定，服务端不解码文件。JSON（包括名为 `resource.json` 的普通文件）仍可上传下载，不获得特殊语义；这与管理端可编辑的文字说明 `description` 不同。
 
 ## 3. 接口
 
@@ -70,9 +70,9 @@
 |---|---|
 | 无 | `200`，完整文件，带 `Accept-Ranges: bytes`、`Content-Length`、强 `ETag`（值为登记的 SHA256） |
 | `Range: bytes=a-b` / `bytes=a-` / `bytes=-n` | `206` 与 `Content-Range`。只支持单段；无效或多段 Range 会被忽略并返回 `200` 完整文件 |
-| 起点越界 | `416`，`Content-Range: bytes */<总长>` |
+| 起点越界或无法满足的合法 Range | `416`，`Content-Range: bytes */<总长>`、`Content-Length: 0`，无正文 |
 | `If-Range: <ETag>` | 与当前 ETag 一致才按 Range 返回，否则 `200` 完整文件 |
-| `HEAD` | 不带 body，`Content-Length` 为完整长度 |
+| `HEAD` | 忽略 Range，不带 body，`Content-Length` 为完整长度 |
 
 `Content-Type` 只按扩展名：`.json` 为 `application/json`，jpg/jpeg/png/webp、wav、webm 为对应 MIME，模型和未知扩展名为 `application/octet-stream`。响应不带 `Content-Disposition`，可直接交给 `UnityWebRequest`、音视频播放器。后端不解码模型，不保证内容一定能被某个播放器加载。
 
@@ -94,8 +94,8 @@
 | 200 / 206 | 正常 | — |
 | 400 | 参数非法（如 `limit` 超范围、UUID 格式错） | 修正请求，不重试 |
 | 404 | 场景/文件不存在、未发布、停用、删除，或 `fileName` 不符 | 回到列表重新获取 |
-| 409 | `versionId` 已不是当前发布版本；或服务器上文件缺失、长度不符 | **停止当前下载**，保留已下载的旧版本目录，重新 `GET /scenes/{id}` 获取新清单，用新版本目录下载；不要把新旧版本的文件混在一起。已开始的字节流会允许读完，下一个请求才 409 |
-| 416 | Range 越界 | 当文件已完整处理（或丢弃 `.part` 重下） |
+| 409 | `versionId` 已不是当前发布版本；或文件尚未就绪、存储缺失、长度不符 | **停止当前下载**，保留旧目录，重新 `GET /scenes/{id}` 核对详情。仅当 `versionId` 改变时使用新版本目录，不混用新旧文件；若未变，不能假定刷新或新建目录即可恢复，应报告文件不可用并由管理员检查。版本切换前已开始的字节流允许读完，其后旧版本请求才 409 |
+| 416 | 合法 Range 无法满足；无 JSON 正文 | 核对本地长度与清单；只有长度及 SHA256 都符合时才认定完整，否则丢弃 `.part` 重下，不能仅凭 416 标记完成 |
 | 401/403 | 访问了非客户端路由或写方法 | 说明调用了不该调用的接口 |
 | 5xx / 超时 | 服务故障、网络中断 | 保留 `.part` 和 ETag，指数退避后续传；超时不代表失败 |
 
@@ -105,7 +105,7 @@
 - 版本替换后旧版本 URL 立即 409，没有历史发布保留层。
 - 文件名含 `%` 或 `;` 的文件在创建版本时即被拒绝，不会出现在客户端清单；零字节文件不能上传。
 - 暂无分片上传/自定义下载协议，仅标准 HTTP Range。
-- 此前桌面 Chrome 参考播放器验证基于已删除的描述，参考播放器当前不可用；手机、Unity 原生解码和音频同步**未验证**。
+- 此前桌面 Chrome 参考播放器验证基于已删除的描述，旧播放器不是现行入口；结果见 [真实样包验收记录](20-4dgs-sample-validation.md)。手机、Unity 原生解码和音频同步**未验证**。
 
 ## 7. 快速自测
 
