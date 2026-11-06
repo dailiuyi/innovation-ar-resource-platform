@@ -1,83 +1,106 @@
 <template>
-  <el-drawer :model-value="open" :title="title" size="90%" class="scene-panel" :close-on-click-modal="false" :before-close="beforeClose">
+  <el-drawer :model-value="open" :title="title" size="560px" class="scene-panel" :close-on-click-modal="false" :before-close="beforeClose">
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+
     <template v-if="mode==='create'">
-      <p class="scene-intro">新建场景后文件清单固定；全部文件校验入库后，启用中的场景即可被客户端读取。要更换资源，请新建另一个场景。</p>
-      <el-alert v-if="error" :title="error" type="error" :closable="false" />
-      <el-form label-width="80px" class="scene-meta" @submit.prevent="startCreate">
+      <el-form label-position="top" class="scene-meta" @submit.prevent="startCreate">
         <el-form-item label="名称" required>
           <el-input v-model="createForm.name" maxlength="200" show-word-limit :disabled="busy" placeholder="场景名称" @input="saveDraft()" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="createForm.description" type="textarea" :rows="3" maxlength="2000" show-word-limit :disabled="busy" placeholder="可留空" @input="saveDraft()" />
+          <el-input v-model="createForm.description" type="textarea" :rows="2" maxlength="2000" show-word-limit :disabled="busy" placeholder="可留空" @input="saveDraft()" />
         </el-form-item>
       </el-form>
-      <div class="action-row">
-        <el-button type="primary" :disabled="busy" @click="choose('directory')">导入资源目录</el-button>
-        <el-button :disabled="busy" @click="choose('files')">导入文件</el-button>
-        <el-button type="primary" :loading="busy" :disabled="createDisabled" @click="startCreate">开始上传</el-button>
-        <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
-        <el-button v-if="createPlan" :disabled="busy" @click="createPlan=null">放弃选择</el-button>
-        <span class="hint">全部文件原样上传（ZIP 不解压，由 Unity 解压）；目录保留相对路径，文件使用文件名。单文件上限 {{size(config.maxBytes)}}，每个场景最多 {{config.sceneMaxFiles}} 个文件 / {{size(config.sceneMaxBytes)}}。</span>
-      </div>
-      <section v-if="createPlan" class="import-card">
-        <h3>待导入：{{createPlan.pkg.files.length}} 个文件，共 {{size(createPlan.pkg.totalBytes)}}</h3>
-        <p class="hint">开始后先计算 SHA-256，再一次性登记场景与文件清单；请保持页面打开。</p>
+      <section class="block">
+        <div class="block-head">
+          <h3>资源文件</h3>
+          <div class="block-actions">
+            <el-button type="primary" :disabled="busy" @click="choose('directory')">导入资源目录</el-button>
+            <el-button :disabled="busy" @click="choose('files')">导入文件</el-button>
+          </div>
+        </div>
+        <div v-if="createPlan" class="picked">
+          <strong>待导入：{{createPlan.pkg.files.length}} 个文件，共 {{size(createPlan.pkg.totalBytes)}}</strong>
+          <el-button link type="primary" :disabled="busy" @click="createPlan=null">放弃选择</el-button>
+        </div>
+        <p v-if="createPlan" class="hint">开始后先计算 SHA-256，再一次性登记场景与文件清单；请保持页面打开。</p>
+        <p class="hint">文件原样上传，ZIP 不解压；目录保留相对路径。单文件上限 {{size(config.maxBytes)}}，每个场景最多 {{config.sceneMaxFiles}} 个文件 / {{size(config.sceneMaxBytes)}}。新建后文件清单固定，换资源请另建场景。</p>
       </section>
     </template>
+
     <template v-else-if="mode==='detail'">
-      <el-alert v-if="error" :title="error" type="error" :closable="false" />
-      <div v-if="!detail" class="action-row">
-        <el-button :disabled="busy||removing" @click="refresh">刷新</el-button>
-      </div>
-      <template v-else>
-        <div class="scene-meta">
-          <el-form label-width="80px" @submit.prevent="saveMeta">
-            <el-form-item label="名称" required>
-              <el-input v-model="meta.name" maxlength="200" :disabled="busy||removing||savingMeta" @keydown.enter="submitMeta" />
-            </el-form-item>
-            <el-form-item label="描述">
-              <el-input v-model="meta.description" type="textarea" :rows="3" maxlength="2000" :disabled="busy||removing||savingMeta" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="savingMeta" :disabled="busy||removing" @click="saveMeta">保存修改</el-button>
-            </el-form-item>
-          </el-form>
-        </div>
-        <p class="scene-state">
+      <template v-if="detail">
+        <div class="scene-state">
           <el-tag :type="detail.enabled?'success':'info'">{{detail.enabled?'启用':'停用'}}</el-tag>
-          <el-tag :type="uploadStatusType(detail.uploadStatus)" class="tag-gap">{{uploadStates[detail.uploadStatus]||detail.uploadStatus}}</el-tag>
+          <el-tag :type="uploadStatusType(detail.uploadStatus)">{{uploadStates[detail.uploadStatus]||detail.uploadStatus}}</el-tag>
           <span class="state-summary">文件 {{detail.availableCount}} / {{detail.fileCount}}<span v-if="detail.failedCount">，失败 {{detail.failedCount}}</span>，共 {{size(detail.totalBytes)}}</span>
           <span class="state-updated">更新于 {{formatTime(detail.updatedAt)}}</span>
-        </p>
+        </div>
         <el-alert v-if="detail.uploadStatus==='DELETE_FAILED'" title="删除未完成，场景已保留；请点击“重试删除”继续清理。" type="warning" :closable="false" />
         <el-alert v-else-if="detail.uploadStatus==='DELETING'" title="场景正在删除；完成后会从列表移除。" type="warning" :closable="false" />
-        <div class="action-row">
-          <el-button v-if="canResume&&sessionForScene" type="primary" :disabled="busy||removing" @click="runSession">继续上传</el-button>
-          <el-button v-if="canResume" :type="sessionForScene?'default':'primary'" :disabled="busy||removing" @click="choose('directory')">重新选择目录</el-button>
-          <el-button v-if="canResume" :type="sessionForScene?'default':'primary'" :disabled="busy||removing" @click="choose('files')">重新选择文件</el-button>
-          <el-button :disabled="busy||removing" @click="refresh">刷新</el-button>
-          <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
-          <el-button type="danger" plain :disabled="busy||removing" @click="removeScene">{{retryDelete?'重试删除':'删除场景'}}</el-button>
-        </div>
-        <p v-if="canResume" class="hint">中断后请选择原文件或原目录：路径、大小与 SHA-256 必须与该场景登记的一致；已入库的文件不会重传。</p>
-        <p v-else-if="detail.uploadStatus==='READY'" class="hint">场景已就绪，文件清单不可修改。要更换资源，请新建另一个场景。</p>
-        <el-table :data="detail.files||[]" class="scene-files" size="small" row-key="fileId">
-          <el-table-column prop="relativePath" label="文件" min-width="280" show-overflow-tooltip />
-          <el-table-column label="大小" width="110"><template #default="{row}">{{size(row.bytes)}}</template></el-table-column>
-          <el-table-column label="状态" width="100"><template #default="{row}"><el-tag :type="fileStatusType(row.status)">{{fileStates[row.status]||row.status}}</el-tag></template></el-table-column>
-          <el-table-column label="原因" min-width="180" show-overflow-tooltip><template #default="{row}">{{row.failureReason}}</template></el-table-column>
-        </el-table>
+
+        <el-form label-position="top" class="scene-meta" @submit.prevent="saveMeta">
+          <el-form-item label="名称" required>
+            <el-input v-model="meta.name" maxlength="200" :disabled="busy||removing||savingMeta" @keydown.enter="submitMeta" />
+          </el-form-item>
+          <el-form-item label="描述">
+            <el-input v-model="meta.description" type="textarea" :rows="2" maxlength="2000" :disabled="busy||removing||savingMeta" />
+          </el-form-item>
+          <el-button type="primary" :loading="savingMeta" :disabled="busy||removing||!dirty" @click="saveMeta">保存修改</el-button>
+        </el-form>
+
+        <section class="block">
+          <div class="block-head">
+            <h3>文件清单</h3>
+            <div v-if="canResume" class="block-actions">
+              <el-button :type="sessionForScene?'default':'primary'" :disabled="busy||removing" @click="choose('directory')">重新选择目录</el-button>
+              <el-button :type="sessionForScene?'default':'primary'" :disabled="busy||removing" @click="choose('files')">重新选择文件</el-button>
+            </div>
+          </div>
+          <p v-if="canResume" class="hint">中断后请选择原文件或原目录：路径、大小与 SHA-256 必须与该场景登记的一致；已入库的文件不会重传。</p>
+          <p v-else-if="detail.uploadStatus==='READY'" class="hint">场景已就绪，文件清单不可修改。要更换资源，请新建另一个场景。</p>
+          <el-table :data="detail.files||[]" class="scene-files" size="small" row-key="fileId">
+            <el-table-column label="文件" min-width="220">
+              <template #default="{row}">
+                <div class="file-path">{{row.relativePath}}</div>
+                <div v-if="row.failureReason" class="file-reason">{{row.failureReason}}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="大小" width="90"><template #default="{row}">{{size(row.bytes)}}</template></el-table-column>
+            <el-table-column label="状态" width="90"><template #default="{row}"><el-tag size="small" :type="fileStatusType(row.status)">{{fileStates[row.status]||row.status}}</el-tag></template></el-table-column>
+          </el-table>
+        </section>
       </template>
+      <el-skeleton v-else-if="!error" :rows="4" animated />
     </template>
-    <p v-if="progressText" role="status">{{progressText}}</p>
-    <el-progress v-if="busy" :percentage="progress" />
-    <el-table v-if="uploadIssues.length" :data="uploadIssues" class="upload-issues" row-key="relativePath" max-height="280">
-      <el-table-column prop="relativePath" label="文件" min-width="260" show-overflow-tooltip />
-      <el-table-column prop="kind" label="结果" width="110" />
-      <el-table-column prop="reason" label="原因" min-width="300" />
+
+    <div v-if="busy||progressText" class="progress">
+      <p role="status">{{progressText}}</p>
+      <el-progress v-if="busy" :percentage="progress" />
+    </div>
+    <el-table v-if="uploadIssues.length" :data="uploadIssues" class="upload-issues" size="small" row-key="relativePath" max-height="280">
+      <el-table-column prop="relativePath" label="文件" min-width="160" show-overflow-tooltip />
+      <el-table-column prop="kind" label="结果" width="90" />
+      <el-table-column prop="reason" label="原因" min-width="180" />
     </el-table>
     <input ref="directoryPicker" type="file" data-import-mode="directory" webkitdirectory directory multiple hidden @change="picked($event,'directory')" />
     <input ref="filePicker" type="file" data-import-mode="files" multiple hidden @change="picked($event,'files')" />
+
+    <template #footer>
+      <div class="panel-footer">
+        <template v-if="mode==='create'">
+          <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
+          <el-button :disabled="busy" @click="requestClose">取消</el-button>
+          <el-button type="primary" :loading="busy" :disabled="createDisabled" @click="startCreate">开始上传</el-button>
+        </template>
+        <template v-else>
+          <el-button v-if="detail" type="danger" plain class="spacer" :disabled="busy||removing" @click="removeScene">{{retryDelete?'重试删除':'删除场景'}}</el-button>
+          <el-button v-if="busy" type="warning" @click="cancel">停止本次传输</el-button>
+          <el-button :disabled="busy||removing" @click="refresh">刷新</el-button>
+          <el-button v-if="canResume&&sessionForScene" type="primary" :disabled="busy||removing" @click="runSession">继续上传</el-button>
+        </template>
+      </div>
+    </template>
   </el-drawer>
 </template>
 <script setup>
@@ -93,7 +116,7 @@ import cache from '@/plugins/cache'
 import useUserStore from '@/store/modules/user'
 
 // 一个场景 = 一个固定的文件清单。新建时名称/描述与文件同一次登记；就绪后不再提供替换或追加文件。
-const props = defineProps({ sceneId: { type: String, default: '' }, creating: { type: Boolean, default: false } })
+const props = defineProps({ target: { type: String, default: '' } })
 const emit = defineEmits(['close', 'created', 'updated'])
 const mode = ref('closed')
 const activeId = ref('')
@@ -117,6 +140,7 @@ const canResume = computed(() => !!detail.value && (detail.value.files?.length ?
 const sessionForScene = computed(() => !!session.value && session.value.sceneId === activeId.value)
 const retryDelete = computed(() => ['DELETING', 'DELETE_FAILED'].includes(detail.value?.uploadStatus))
 const createDisabled = computed(() => busy.value || !createForm.name.trim() || !createPlan.value)
+const dirty = computed(() => !!detail.value && (meta.name !== (detail.value.name ?? '') || meta.description !== (detail.value.description ?? '')))
 
 let configLoaded = false, worker = null, rejectHash = null, cancelled = false, runToken = 0
 const controllers = new Set()
@@ -555,40 +579,40 @@ async function runSession() {
     }
   }
 }
-watch(() => props.creating, value => {
-  if (value) {
-    if (mode.value !== 'create') openCreate()
-  } else if (mode.value === 'create') {
-    mode.value = 'closed'
-  }
-}, { immediate: true })
-watch(() => props.sceneId, id => {
-  if (props.creating) return
-  if (id && id === activeId.value && mode.value === 'detail') return
-  if (id) openDetail(id)
-  else if (mode.value === 'detail') {
-    stopFlow()
-    mode.value = 'closed'
-    activeId.value = ''
-    detail.value = null
-    error.value = ''
-    progress.value = 0
-    progressText.value = ''
-  }
+// 面板只有一个目标：'' 关闭，'new' 新建，其余为场景 id。
+function closeView() {
+  stopFlow()
+  mode.value = 'closed'
+  activeId.value = ''
+  detail.value = null
+  error.value = ''
+}
+watch(() => props.target, target => {
+  if (target === 'new') { if (mode.value !== 'create') openCreate() }
+  else if (target) { if (target !== activeId.value || mode.value !== 'detail') openDetail(target) }
+  else if (mode.value !== 'closed') closeView()
 }, { immediate: true })
 onBeforeUnmount(() => { if (mode.value === 'create') saveDraft(); ++viewToken; cancel(); ++runToken })
 </script>
 <style scoped>
-.scene-intro{margin:0 0 16px;color:var(--el-text-color-secondary)}
-.scene-meta{margin:0 0 16px}
-.scene-state{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.el-alert{margin-bottom:16px}
+.scene-state{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 16px}
 .state-summary,.state-updated{color:var(--el-text-color-secondary);font-size:13px}
 .state-updated{margin-left:auto}
-.action-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
-.hint{color:var(--el-text-color-secondary)}
-.el-alert{margin-bottom:16px}
-.tag-gap{margin-left:0}
-.import-card{border:1px solid var(--el-color-primary-light-5);background:color-mix(in srgb,var(--el-color-primary) 10%,var(--el-bg-color));color:var(--el-text-color-primary);border-radius:4px;padding:16px 20px;margin:8px 0 20px}
-.import-card h3{margin:0 0 12px;font-size:16px}
-.scene-files{margin-top:8px}
+.block{margin-top:20px}
+.block-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.block-head h3{margin:0;font-size:14px;font-weight:600}
+.block-actions{display:flex;gap:8px}
+.block-actions :deep(.el-button+.el-button){margin-left:0}
+.hint{margin:8px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.6}
+.picked{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 12px;border:1px solid var(--el-border-color-lighter);border-radius:4px;background:var(--el-fill-color-light)}
+.picked strong{font-weight:600}
+.file-path{word-break:break-all}
+.file-reason{margin-top:2px;color:var(--el-color-danger);font-size:12px;word-break:break-all}
+.progress{margin-top:20px}
+.progress p{margin:0 0 6px;color:var(--el-text-color-regular);font-size:13px}
+.upload-issues{margin-top:12px}
+.panel-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.panel-footer :deep(.el-button+.el-button){margin-left:0}
+.panel-footer .spacer{margin-right:auto}
 </style>
