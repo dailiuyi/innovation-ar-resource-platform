@@ -770,6 +770,13 @@ SceneMapper 继承 BaseMapper，Manager 的基础 insert/selectById 不再重复
 
   结果索引 `.local/docs-cleanup-20261105/verification.json`，链接上述三份证据与真实 harness 报告，并记录 `sourceUnchanged`、skipped/blocked 与退出状态；本文不预写通过结论，以该索引和实际报告为准。
 
+## 2026-11-05 旧工作区历史记录补入
+
+以下来自原工作区未提交的验证记录，保留当时证据，不将旧版本面板重新引入当前单场景实现，也不作为本轮重验结果。
+
+- 版本面板精简：删除单文件展开的 SHA256、文件编号和上传次数，压缩重复说明；当时记录了 READY、已发布和续传三类面板，以及说明保存/回读。原工作区证据为 `.local/harness/20261105T102721Z-7hpuay_r/report.json`、`.local/harness/20261105T103022Z-ryojpels/report.json` 和 `.local/harness/version-panel-simplify-20261105/` 截图。仅为旧基线的本机无头 Chrome 验证，未验证手机/Unity 或部署。
+- 开发默认账号：原工作区已记录在既有 18082 实例通过正常账号接口创建约定账号、更新 0600 凭据，并重复 prepare 成功；证据 `.local/harness/20261105T103430Z-oaiefk1n/report.json`。当时未复跑全新空库创建，也未改日常账号；本轮新增验证见下文“开发默认账号迁入 main”。
+
 ## 2026-11-06 管理员单场景固定模型与资源分发
 
 用户授权按方案实施，明确选择“新模型新建场景”，并进一步确认本轮只需资源分发，客户端解压/解码已跑通。本轮不改播放器、不做服务端解包，不接 OSS/CDN、普通用户、审核、消息队列或 GPU。
@@ -842,3 +849,20 @@ SceneMapper 继承 BaseMapper，Manager 的基础 insert/selectById 不再重复
 未做：云端管理员登录后的页面点击验证（只有用户掌握日常账号密码，未生成会话）；云端上传新场景的真实入库；手机/Unity 播放；回退演练。视觉观感仍由用户验收。
 
 V018 为破坏式切换，日常库已迁移，回退必须还原上述 dump 并改回 `knife4j-20261104` 标签；记录见[基础设施手册](10-local-infrastructure.md)「2026-11-06 单场景固定文件上线」。
+
+## 2026-11-06 开发默认账号迁入 main
+
+按用户授权整理旧工作区：只迁入 `scripts/prepare_4dgs_check.py` 的本机隔离默认账号约定和对应开发/harness 文档，补入上面的历史记录。旧 `VersionPanel.vue`、旧版入库描述、旧调研草案不覆盖当前实现；`.idea/`、`README.md.bak` 和原工作区全部未提交文件保留。分支 `fix/dev-account-convention` 从 `main=d909cae` 创建；不推送、不部署，不接管 18082 或操作日常云端。
+
+首次空库通过 bootstrap 的正常创建接口建立约定管理员；旧实例使用已保存且能登录的管理员创建它。约定账号已可登录时直接更新私有交接，不依赖旧凭据或退役 bootstrap。只有实际登录成功后才写 0600 凭据文件；遇到停用账号、无有效管理员或创建失败直接阻塞，不重置密码、不复活 bootstrap、不输出口令。
+
+实际冒烟使用当前已验证 Jar、PostgreSQL 17.6，在本任务独立新建的 `dev_account_legacy_47beb74783f5`、`dev_account_fresh_86db8c38aa6f` 数据库和 Redis DB2/DB3 上启动两个仅回环的 Java 进程。先用迁移前函数创建旧随机管理员，确认文档账号不可登录；更新后实际执行 `ensure_admin`，19项检查通过：
+
+- 空库首次创建、管理员身份/角色和真实登录，创建后 bootstrap 退役。
+- 旧随机管理员迁移、旧账号仍可登录、重复准备保持账号身份。
+- 文档账号可用但交接文件陈旧或缺失时正常更新，权限0600。
+- 无效引导密码不提前写凭据；停用账号不被重置/启用，失败保留原交接且错误不含口令。
+
+证据均相对于新 worktree：`.local/dev-account-check/before.json`、`smoke-report.json`。为直连真实后端，冒烟仅去掉 `/prod-api` 网关前缀，不伪造接口响应；未运行完整 Compose prepare、浏览器、Java重编译、18082实例更新或部署。两个临时 Java 命名服务 `dev-account-legacy`、`dev-account-fresh` 已停止；合成测试数据库及证据保留，未删除容器/卷。
+
+最终 doctor/quick 的实际结果及源码指纹索引保存到 `.local/dev-account-check/final-gates.json`；不以历史报告代替本轮检查。

@@ -52,8 +52,8 @@ python3 scripts/prepare_4dgs_check.py prepare \
   --jar backend/ruoyi-admin/target/ruoyi-admin.jar \
   --frontend-dist frontend/dist
 
-# prepare 成功后核对 runtime.json 的 baseUrl/adminBaseUrl/credentialsFile，
-# 下列 credentials.json 是上述 RUN_DIR 对应的私有文件，不打印其内容。
+# prepare 成功后核对 runtime.json 的 baseUrl/adminBaseUrl/credentialsFile；
+# 登录使用开发工作流约定的本机隔离默认账号，credentials.json 仍为 0600 私有文件，不输出口令。
 python3 scripts/verify_ingestion.py \
   --base-url http://127.0.0.1:18082 \
   --admin-base-url http://127.0.0.1:18082/prod-api \

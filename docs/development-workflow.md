@@ -37,6 +37,8 @@ Do not report the local demo as up merely because `local_demo.py` printed `start
 
 环境地址与云端/源端状态统一查 [基础设施手册](10-local-infrastructure.md)，不得自行重启旧本机服务、恢复隧道或切回旧路由，也不得清理保留的数据卷。Vite 使用 `127.0.0.1:43174`，Linux 隔离验收使用 `127.0.0.1:18082`，不能混用日常数据库、账号与配置。Compose 前端在镜像构建时固化；Redis 使用 tmpfs，重启会丢失其中的登录会话，重建 backend/gateway 本身不等于清空 Redis。
 
+Linux 隔离开发/验收实例的默认管理员账号为 `admin` / `123456`，由 `scripts/prepare_4dgs_check.py` 首次准备时通过正常账号接口创建。已有实例优先使用该账号；迁移旧随机账号时使用私有凭据中的有效管理员创建，首次空库使用 bootstrap。只有新账号实际登录成功后才更新 0600 凭据文件，不重置已有账号密码、不重新启用退役 bootstrap。仅限本机回环 `127.0.0.1` 的隔离实例；日常 18081、云端、局域网及任何真实数据环境不得使用该弱口令。
+
 For copy, button, or layout-only changes: edit `frontend/src` and any Playwright selector that clicks the old control (`scripts/verify_browser.py`, `scripts/verify_ingestion.py`). Update the matching sentence in `docs/` if it names that control. A removed label is done when the source and selectors no longer name it. Full login-and-click checks are for behavior changes. `bootstrap` is retired on the daily instance; do not enable it or mint sessions to satisfy a browser check. If you cannot log in, report the blocker rather than bypassing authentication.
 
 日常发布统一按 [基础设施手册](10-local-infrastructure.md) 核对目标配置、已验收镜像及校验结果，并取得明确部署授权；云端运行 Compose 不含构建步骤，不在部署主机照抄本地 build 命令。数据库迁移前先备份并获授权，不因小范围 UI 编辑重建日常实例。

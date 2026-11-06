@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import secrets
 import socket
 import subprocess
 import sys
@@ -36,7 +35,9 @@ BACKEND_TAG = 'innovation-ar-resource-platform-backend:infra-v1'
 GATEWAY_TAG = 'innovation-ar-resource-platform-gateway:infra-v1'
 TASK_TAGS = {'backend': 'innovation-ar-resource-platform-backend:4dgs-check',
              'gateway': 'innovation-ar-resource-platform-gateway:4dgs-check'}
-ADMIN_USER = 'check_admin'
+ADMIN_USER = 'admin'
+# Public loopback-only development convention; never use for a daily or public instance.
+ADMIN_PASSWORD = '123456'
 SERVICES = ('postgres', 'redis', 'backend', 'gateway')
 NGINX_ANCHOR = '    location / {\n'
 REFERENCE_MOUNT = '/srv/reference'
@@ -269,23 +270,22 @@ def login(username, password):
 
 
 def ensure_admin(instance, env):
-    """check_admin is created once through the normal account API (which retires bootstrap); afterwards only its
-    saved credentials are used. Never re-enables bootstrap or mints sessions."""
-    try:
-        write_private(instance.credentials, json.dumps({'username': ADMIN_USER, 'password': secrets.token_urlsafe(24)}) + '\n',
-                      exclusive=True)
-    except FileExistsError:
-        pass
-    saved = json.loads(instance.credentials.read_text(encoding='utf-8'))
-    if login(saved['username'], saved['password']):
-        return
-    bootstrap = login('bootstrap', env['AR_BOOTSTRAP_PASSWORD'])
-    if not bootstrap:
-        raise Blocked(f'{ADMIN_USER} credentials do not match and bootstrap is retired; not resetting the account.')
-    status, body = http('/prod-api/system/user', 'POST',
-                        {'userName': saved['username'], 'nickName': 'infra check admin', 'password': saved['password']}, bootstrap)
-    if status != 200 or body.get('code') != 200 or not login(saved['username'], saved['password']):
-        raise Blocked(f'Creating {ADMIN_USER} failed (HTTP {status}, code {body.get("code")}).')
+    """Use the documented local account; create it through a usable administrator, never reset accounts."""
+    if not login(ADMIN_USER, ADMIN_PASSWORD):
+        actor = None
+        if instance.credentials.exists():
+            saved = json.loads(instance.credentials.read_text(encoding='utf-8'))
+            actor = login(saved['username'], saved['password'])
+        if not actor:
+            actor = login('bootstrap', env['AR_BOOTSTRAP_PASSWORD'])
+        if not actor:
+            raise Blocked('The documented development account cannot log in and no usable administrator remains; '
+                          'not resetting accounts or re-enabling bootstrap.')
+        status, body = http('/prod-api/system/user', 'POST',
+                            {'userName': ADMIN_USER, 'nickName': 'dev admin', 'password': ADMIN_PASSWORD}, actor)
+        if status != 200 or body.get('code') != 200 or not login(ADMIN_USER, ADMIN_PASSWORD):
+            raise Blocked(f'Creating {ADMIN_USER} failed (HTTP {status}, code {body.get("code")}).')
+    write_private(instance.credentials, json.dumps({'username': ADMIN_USER, 'password': ADMIN_PASSWORD}) + '\n')
 
 
 def compose_ps(instance):
