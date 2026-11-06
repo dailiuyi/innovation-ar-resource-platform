@@ -769,3 +769,76 @@ SceneMapper 继承 BaseMapper，Manager 的基础 insert/selectById 不再重复
   ```
 
   结果索引 `.local/docs-cleanup-20261105/verification.json`，链接上述三份证据与真实 harness 报告，并记录 `sourceUnchanged`、skipped/blocked 与退出状态；本文不预写通过结论，以该索引和实际报告为准。
+
+## 2026-11-06 管理员单场景固定模型与资源分发
+
+用户授权按方案实施，明确选择“新模型新建场景”，并进一步确认本轮只需资源分发，客户端解压/解码已跑通。本轮不改播放器、不做服务端解包，不接 OSS/CDN、普通用户、审核、消息队列或 GPU。
+
+实施位于独立 worktree `.local/worktrees/admin-scene-files`、分支 `feat/admin-scene-files`，基线 `fbf3c50c5c2f4d16caa9c61beb7f4cdea58252ee`。原工作区未提交文件与分支保留；四个用户指定 DeepSeek 子代理分别实现后端、前端、工具契约及验收脚本，主会话集成并实际运行检查。未提交、推送、合并或部署。
+
+### 改动与数据边界
+
+- 统一场景信息与文件页面，删除版本列表/版本业务表/发布接口；POST 场景原子登记固定清单，上传就绪自然对启用场景可见。名称/说明可改，文件不可替换。
+- 启停独立，上传完成与恢复不会重新启用；物理删除在场景级统一执行，失败可重试，启动先恢复删除再恢复上传。审计保留，场景软删除行承接历史 FK。
+- V018 保留旧公开模型场景身份，其他模型迁为停用场景，文件 UUID/存储键不改。V001–V017 与原工作区逐文件字节比较一致。未在任何真实/日常数据库运行迁移。
+- API 0.6.0 为不兼容切换：客户端删除 versionId/versionNo，直接使用场景/文件下载路径；上传和下载工具同步修改，上传工具的 gateway base 必须显式含 `/prod-api`。
+
+### 实际执行与证据
+
+以下路径均相对于实施 worktree；Python 使用原仓库 `.local/ingestion-venv/bin/python`，未读取原私密 env。Java 为 Temurin **21.0.13+9**，数据库为隔离 **PostgreSQL 17.6**，Redis **7.4.5**，Chrome 为本机 `/opt/google/chrome/chrome`。
+
+| 检查 | 实际结果 | 证据 |
+|---|---|---|
+| `scripts/check_java.py --module ruoyi-admin --package --offline`，显式 JAVA_HOME 指向 JDK21 | 移除废弃转换器依赖后的最终构建：57 tests，0 failures/errors/skipped；Jar SHA256 `6a27c3fe5a9eef7794ad867dbc520320fdf772404f70f80bb70f889d74a74f43` | `.local/java-check/0b22a54c25f8/report.json` |
+| `scripts/verify_scene_file_migration.py --port 32768 --report …/migration-report.json` | 20 检查通过：空库、非空升级、全部文件身份/验证值、公开性、历史模型、删除回执、审计、异常完成回执拒绝并回滚 | `.local/scene-files-runtime/migration-report.json` |
+| `python -m unittest discover -s scripts -p 'test_*scene*.py'` | 上传/下载工具 28 测试通过 | 本轮命令输出 |
+| `node --test scripts/test_scene_package.mjs` 与后续 frontend profile | 最终保留 15 项路径、边界、续传与并发行为测试；删除原请求字段转发测试 | frontend report 内 scene-package 日志 |
+| `scripts/agent_check.py --profile frontend --retry-reason …` | quick、15 项消费者检查通过；前端生产构建成功，第二次按真实输入和 dist 复用，无重复安装/构建 | `.local/harness/20261106T035408Z-7pfv5nvj/report.json` |
+| `verify_ingestion.py`，直接 API `18084` | 完整 HTTP 场景通过，包括鉴权、参数边界、固定清单/幂等、失败重试、可见性、启停、Range、删除与并发 | `.local/scene-files-runtime/ingestion-http-final/validation-ingestion.json` |
+| `verify_ingestion.py --base-url http://127.0.0.1:18085 --admin-base-url http://127.0.0.1:18085/prod-api --credentials-file … --browser-executable /opt/google/chrome/chrome --report-dir …/gateway-browser-final` | 最终 Jar 重启后110检查通过：真实 Nginx 21 MiB 上传、Range、登录、目录上传、READY、统一详情及 1440/1024 按钮可操作检查 | `.local/scene-files-runtime/gateway-browser-final/validation-ingestion.json` |
+| `verify_scene_list_ui.py --channel chrome --report-dir …/ui-final` | 112 检查通过：合成 API + 真实浏览器/Worker，创建响应丢失重试、迟到响应隔离、逐块摘要进度、三路并发、续传、取消与 ZIP 原样传输 | `.local/scene-files-runtime/ui-final/validation-scene-list-ui.json` |
+| 独立真实 HTTP 冒烟 | 32 检查通过；ZIP 与 JSON 原字节、上传中停用、自动可见、物理删除及幂等回执 | `.local/scene-files-runtime/direct-http-report.json` |
+| 权限故障注入并真实重启 Java | 19 检查通过；删除失败启动续做、完整遗留补记可用、部分遗留可重试、停用不被恢复覆盖 | `.local/scene-files-runtime/recovery-report.json` |
+| 真实交互式浏览器 | 正常登录，ZIP/JSON 上传；启用读取 200、UI 停用 404、UI 再启用 200、UI 删除 404，截图保存；观感仍由用户验收 | `.local/scene-files-runtime/interactive-browser-report.json` |
+| 上传/下载 CLI 端到端 | 上传 2 文件共 **22,020,954 B**（含 ZIP 和中文空格文件名），已有文件重跑跳过；受控客户端读异常留下 65,536 B 后，真实 Range 206 继续并逐文件比对 SHA256 | `.local/scene-files-runtime/import-report.json`、`import-repeat-report.json`、`transfer-resume-report.json` |
+
+最后文档更新后的 quick 汇总写入 `.local/scene-files-runtime/final-gates.json`，以该文件引用的实际报告与 `sourceUnchanged` 为准，不将较早报告指纹用于后续修改。
+
+### 检查中发现与处理
+
+- 前端初稿的哈希进度只在详情分支显示，保存信息响应没有场景代际保护。修复为创建/详情共享进度、保存响应核对场景及视图代际；112 项浏览器回归含实际挂起/迟到响应检查。
+- 新迁移禁止猜测性删除“已完成回执仍有文件行”的异常记录，改为事务失败并保留旧数据；旧空场景汇总为 PENDING，而不是 READY。
+- 旧 SceneConvert 移除后，清理仅供其使用的 MapStruct 依赖和编译处理器；重新打包执行57项Java测试，再启动最终Jar，完整重跑110项真实网关/浏览器检查通过。
+- 验收脚本初稿把匿名读取发到了管理员路径、用带目录的文件名拼 URL、将审计人写死为 bootstrap；修正请求目标和登录身份断言后重跑完整 HTTP 场景通过。未放宽状态码或跳过用例。
+- UI 哈希探针累计了前面草稿场景的文件计数，导致分块进度断言失败；每个场景独立重置探针后，完整 112 项通过。较早创建响应丢失检查曾超时，后续完整运行再次覆盖并通过。
+- 首次 frontend 底层检查与构建通过，但与并行 doctor 同时生成两个 report，`agent_check` 返回无法唯一识别报告的 blocked。结束并行 doctor 后明确重试，成功复用构建并记录 passed；未改门禁脚本或报告。
+- Python 3.14 工具测试有 HTTPError 资源清理警告；UI 合成接口检查在退出时仍打印 3 个此前已有的 Playwright CancelledError，退出码 0、112 项均通过。未屏蔽这些警告，不宣称 stderr 无异常。真实网关浏览器检查未报告页面脚本错误。
+
+### 环境与限制
+
+本轮未接管原 `127.0.0.1:18082` 隔离实例，未操作日常云端或保留的旧模型卷。新建的本任务资源带 `ar.task=admin-scene-files` 标签，PostgreSQL/Redis 只绑定回环 `32768/32769`，只含合成测试数据；Java 只绑定 `127.0.0.1:18084`。Nginx 使用已有镜像与只读新 dist/config 挂载，监听 `127.0.0.1:18085`；未重建镜像。健康 `/healthz` 和真实登录/上传均实测，不仅依据启动日志。
+
+隔离预览为 `http://127.0.0.1:18085/admin/scenes`，人工登录沿用[开发工作流](development-workflow.md)约定的本地隔离默认账号。交付时曾只提供独立随机验收账号，用户指出文档已有约定；已通过正常管理员接口补建文档账号，并经真实网关验证登录、`getInfo` 身份/`ar_admin` 角色和场景详情200，证据 `.local/scene-files-runtime/documented-account-check.json`。未重置或修改日常账号。自动验收私有凭据仍在实施 worktree `.local/scene-files-runtime/credentials.json`（0600），不在聊天/文档复制密码。验收路径：新建场景填写名称/说明并选文件 → 开始上传 → 查看固定文件 → 列表启停 → 删除。实际画面截图 `browser-upload.png`、`browser-deleted.png`。
+
+停止本任务资源：当前会话工具可停止命名服务 `scene-files-api-final`；终端可先核对 PID **146388** 是本 worktree 的 Jar，再 `kill -TERM 146388`。容器执行 `docker stop innovation-ar-resource-platform-infra-check-scene-files-gateway innovation-ar-resource-platform-infra-check-scene-files-redis innovation-ar-resource-platform-infra-check-scene-files-pg`。只停止、不删容器/卷/数据库；若 PID 已变化先核对归属。
+
+没有生产迁移、部署、手机/Unity 重验、解压/解码修改或千人容量测试。CLI 续传为实际服务器字节配合受控客户端读错误注入，不等于运营商断网测试。原工作区既有改动完整保留，本轮业务代码只在独立 worktree 中交付。
+
+## 2026-11-06 场景列表删除「文件」列并上线日常云端
+
+用户看过本地预览后指出列表里的「文件」列（`4 / 4`、`2 / 257` 这类已入库/总数）多余，要求去掉后部署。改动只删 `frontend/src/views/demo/scenes.vue` 的该列，详情抽屉的「文件 x / y」汇总保留，接口字段与后端不变。
+
+| 检查 | 实际结果 | 证据 |
+|---|---|---|
+| `scripts/agent_check.py --profile frontend` | quick、scene-package 与生产构建通过，dist 重建 | `.local/harness/20261106T061635Z-66vsj3sw/report.json` |
+| 真实 Chrome 打开 `18085` 预览 | 表头为「名称/状态/大小/更新时间/操作」，无「文件」列；15 行数据；详情仍显示「文件 」汇总；无页面脚本错误 | `.local/scene-files-runtime/scene-list-column-check.json`、`scene-list-no-file-column.png` |
+| 云端镜像构建与传输 | backend `single-scene-20261106` `d71dbe848133`、gateway `single-scene-20261106` `6cd1108b3c66`；归档 SHA256 `ad88f6e8d2af3b828042c9917c9d675f8428ce46c86b74ed9e7e109ebadfc9e8`，服务器复算一致后 `docker load` | 服务器 `releases/single-scene-20261106/` |
+| 上线前数据库备份 | `pg_dump -Fc` 68,695 B，SHA256 `a0f9d2ca712efa2f079aa5e2f1e0b0190348d57827ec01cf6ec808999be967a3` | 服务器 `backups/single-scene-20261106/before-v018.dump` |
+| 云端 Compose 更新与重启 | `compose.yaml` 改镜像标签及 `AR_STORAGE_VERSION_MAX_*`→`AR_STORAGE_SCENE_MAX_*`，`config/compose.env` 同步改名；`docker compose config --quiet` 通过；四服务 healthy，`/healthz` 200 | 服务器 `releases/single-scene-20261106/compose.yaml.before`、`compose.env.before` |
+| V018 迁移结果 | `flyway_schema_history` 018 成功；13 场景（7 启用）、7 文件、4 条删除回执、73 审计、0 孤儿文件；审计与文件 UUID/存储键未改 | 云端 PostgreSQL 查询 |
+| 匿名分发回归 | 客户端目录返回 3 个完整场景；逐个详情加 `Range: bytes=0-3` 均 206 且为 ZIP 头字节；管理接口未登录 401 | `http://81.71.154.125:18081/prod-api/api/v1/client/scenes` |
+| 部署包内容 | 网关 `static/js/scenes-*.js` 含「场景名称/更新时间/停用」，全文不含 `availableCount` | 容器内 grep |
+
+未做：云端管理员登录后的页面点击验证（只有用户掌握日常账号密码，未生成会话）；云端上传新场景的真实入库；手机/Unity 播放；回退演练。视觉观感仍由用户验收。
+
+V018 为破坏式切换，日常库已迁移，回退必须还原上述 dump 并改回 `knife4j-20261104` 标签；记录见[基础设施手册](10-local-infrastructure.md)「2026-11-06 单场景固定文件上线」。

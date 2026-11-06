@@ -1,18 +1,88 @@
 openapi: 3.0.3
 info:
   title: 4DGS Scene Resource API
-  version: 0.5.0
-  description: 4DGS 场景成品：管理员侧的场景、由目录文件清单构成的内容版本、按文件上传与恢复、单一发布指针、整版删除，以及保留的若依登录与账号接口；匿名客户端只读目录、文件清单与带
-    Range 的文件流（/api/v1/client/，经同源网关直接访问，无需 /prod-api）。
+  version: 0.6.0
+  description: 4DGS 场景资源分发：管理员按名称、说明和固定文件清单创建场景，逐文件上传校验，启用后匿名客户端直接读取目录、固定文件清单与带 Range
+    的文件流；支持名称/说明编辑、启停和整场景物理删除，没有版本或发布指针。保留若依登录与账号接口。匿名读取位于 /api/v1/client/，经同源网关直接访问，无需
+    /prod-api。
 servers:
 - url: /
   description: 同源网关；管理接口经 /prod-api 前缀代理到后端
 paths:
+  /api/v1/scenes/config:
+    get:
+      operationId: sceneConfig
+      summary: 查看单文件与单场景上传上限
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。返回 AR_STORAGE_MAX_BYTES、AR_STORAGE_SCENE_MAX_FILES、AR_STORAGE_SCENE_MAX_BYTES
+        的运行值。
+      security:
+      - bearerAuth: []
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SceneConfig'
+        '400':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-implementation: implemented
+      tags:
+      - 场景
   /api/v1/scenes:
     post:
       operationId: createScene
-      summary: 创建场景
-      description: 创建场景
+      summary: 创建场景与固定文件清单
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。一个场景只有一份创建后固定的文件清单；上传完成并校验后，启用状态下自动对匿名客户端可见，没有发布操作。一次事务登记名称、说明和全部文件（相对路径、大小、SHA256）；默认启用。同
+        requestKey 且名称、说明、文件清单完全相同时重试返回 200 与原场景；不同返回 409；同 requestKey 对应已删除或删除中的场景返回
+        410，不复活。大小或数量超配置返回 413，路径不合法返回 400。
       security:
       - bearerAuth: []
       parameters: []
@@ -22,51 +92,63 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SceneView'
+                $ref: '#/components/schemas/SceneDetail'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: 完全相同的重试，返回原场景详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SceneDetail'
+        '410':
+          description: 同请求键的场景已删除或正在删除，不复活
           content:
             application/json:
               schema:
@@ -82,8 +164,8 @@ paths:
               $ref: '#/components/schemas/SceneCreate'
     get:
       operationId: listScenes
-      summary: 列出场景
-      description: 列出场景
+      summary: 列出场景概要
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。按创建时间倒序；不含已完全删除的场景，删除中/删除失败的场景仍可见以支持重试。
       security:
       - bearerAuth: []
       parameters:
@@ -118,49 +200,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/SceneList'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -171,8 +253,9 @@ paths:
   /api/v1/scenes/{sceneId}:
     get:
       operationId: getScene
-      summary: 查看场景
-      description: 查看场景
+      summary: 查看场景与固定文件清单
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。文件不分页一次返回；uploadStatus
+        为 PENDING/UPLOADING/FAILED/READY/DELETING/DELETE_FAILED。
       security:
       - bearerAuth: []
       parameters:
@@ -188,51 +271,51 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SceneView'
+                $ref: '#/components/schemas/SceneDetail'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -242,8 +325,9 @@ paths:
       - 场景
     put:
       operationId: updateScene
-      summary: 修改场景名称
-      description: 修改场景名称
+      summary: 修改场景名称和说明
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。只修改名称和说明，文件清单创建后固定。expectedVersion
+        为场景 lockVersion，冲突 409；删除中的场景 409。
       security:
       - bearerAuth: []
       parameters:
@@ -257,51 +341,51 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SceneView'
+                $ref: '#/components/schemas/SceneDetail'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -317,8 +401,10 @@ paths:
               $ref: '#/components/schemas/SceneUpdate'
     delete:
       operationId: deleteScene
-      summary: 逻辑删除场景
-      description: 逻辑删除，不递归删除成品版本和文件内容；匿名目录不再返回该场景。
+      summary: 整场景物理删除
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。先持久化删除意图再清理存储文件；上传进行中
+        409，不改写活动字节流。存储删除失败 503 并保留意图，可重试；成功后重复 DELETE 返回 204，意图完成后忽略过期 expectedVersion。不存在且无回执
+        404。删除的文件行不保留，场景行与最小删除回执保留。
       security:
       - bearerAuth: []
       parameters:
@@ -336,49 +422,49 @@ paths:
         '204':
           description: Success
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -389,8 +475,9 @@ paths:
   /api/v1/scenes/{sceneId}/enabled:
     put:
       operationId: setSceneEnabled
-      summary: 启用或禁用场景
-      description: 启用或禁用场景
+      summary: 启用或停用场景
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。reason 必填并写入审计。启停只影响新的匿名读取；已有文件流可完成。上传与恢复从不自动启用场景。expectedVersion
+        为场景 lockVersion，冲突 409。
       security:
       - bearerAuth: []
       parameters:
@@ -404,51 +491,51 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SceneView'
+                $ref: '#/components/schemas/SceneDetail'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -466,7 +553,8 @@ paths:
     get:
       operationId: listAudits
       summary: 只读场景业务审计
-      description: 动作包括 SCENE_* 与上传结果动作，以及 VERSION_CREATE、VERSION_EDIT、VERSION_PUBLISH、VERSION_DELETE_REQUEST、VERSION_DELETE、VERSION_DELETE_FAILED。
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。包含 SCENE_CREATE、SCENE_UPDATE、SCENE_SET_ENABLED、SCENE_DELETE_REQUEST、SCENE_DELETE、SCENE_DELETE_FAILED
+        与文件上传结果动作；历史 VERSION_* 标签作为不可变历史记录保留。
       security:
       - bearerAuth: []
       parameters:
@@ -480,49 +568,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuditList'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -530,534 +618,15 @@ paths:
       x-implementation: implemented
       tags:
       - 场景
-  /api/v1/scene-versions/config:
+  /api/v1/scenes/{sceneId}/files/{fileId}:
     get:
-      operationId: versionConfig
-      summary: 查看单文件与单版本上传上限
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。返回 AR_STORAGE_MAX_BYTES、AR_STORAGE_VERSION_MAX_FILES、AR_STORAGE_VERSION_MAX_BYTES
-        的运行值。
-      security:
-      - bearerAuth: []
-      parameters: []
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionConfig'
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-  /api/v1/scenes/{sceneId}/versions:
-    get:
-      operationId: listSceneVersions
-      summary: 分页列出场景的成品版本
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。含 sceneLockVersion；当前发布版本以
-        published 对象返回，未发布时省略该字段。每项 uploadStatus 由文件状态读时推导：DELETING/DELETE_FAILED/UPLOADING/FAILED/READY/PENDING。
-      security:
-      - bearerAuth: []
-      parameters:
-      - name: sceneId
-        in: path
-        required: true
-        schema: *id001
-      - *id002
-      - *id003
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionList'
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-    post:
-      operationId: createSceneVersion
-      summary: 导入资源目录，创建成品版本
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。一次登记所选目录下的全部文件（相对路径、大小、SHA256），创建后清单不可变，只有说明可编辑。平台不解析档位、分段或时间，这些由客户端按相对路径约定处理。同
-        requestKey 且 description、文件清单完全相同返回 200 与原版本，不同返回 409，已整版删除的版本迟到重试返回 410。大小或数量超配置返回
-        413，路径不合法返回 400 并指出路径。
-      security:
-      - bearerAuth: []
-      parameters:
-      - name: sceneId
-        in: path
-        required: true
-        schema: *id001
-      responses:
-        '201':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionDetail'
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '200':
-          description: 完全相同的重试，返回原版本
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionDetail'
-        '410':
-          description: 同请求键的版本已整版删除，不复活
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VersionCreate'
-  /api/v1/scene-versions/{versionId}:
-    get:
-      operationId: getSceneVersion
-      summary: 查看版本和完整文件清单
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。文件不分页，1000 个文件以内一次返回；不读取文件内容、不计算摘要。
-      security:
-      - bearerAuth: []
-      parameters:
-      - name: versionId
-        in: path
-        required: true
-        schema: *id001
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionDetail'
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-    put:
-      operationId: editSceneVersion
-      summary: 编辑版本说明
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。只编辑说明；文件清单创建后固定。expectedVersion
-        为版本 lockVersion，冲突 409。
-      security:
-      - bearerAuth: []
-      parameters:
-      - name: versionId
-        in: path
-        required: true
-        schema: *id001
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionDetail'
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VersionEdit'
-    delete:
-      operationId: deleteSceneVersion
-      summary: 整版物理删除
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。当前发布版本 409，文件处理中 409。先持久化删除意图，再逐文件删除存储内容；存储失败
-        503 并保留版本，可再次 DELETE 重试；成功后重复 DELETE 为 204。不存在且无回执 404。
-      security:
-      - bearerAuth: []
-      parameters:
-      - name: versionId
-        in: path
-        required: true
-        schema: *id001
-      responses:
-        '204':
-          description: Success
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-  /api/v1/scene-versions/{versionId}/publish:
-    post:
-      operationId: publishSceneVersion
-      summary: 发布为场景的当前版本
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。全部文件 AVAILABLE 且无删除意图才可发布；未完成
-        400，处理中 409。已是当前版本直接 200 且无任何写入；实际切换时 expectedSceneVersion 为场景 lockVersion，冲突
-        409。发布不解析模型、不重算摘要。
-      security:
-      - bearerAuth: []
-      parameters:
-      - name: versionId
-        in: path
-        required: true
-        schema: *id001
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VersionDetail'
-        '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '413':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      x-implementation: implemented
-      tags:
-      - 场景版本
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/VersionPublish'
-  /api/v1/scene-versions/{versionId}/files/{fileId}:
-    get:
-      operationId: getSceneVersionFile
+      operationId: getSceneFile
       summary: 查看单文件状态
       description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。请求结果未确认后用于核对文件状态。
       security:
       - bearerAuth: []
       parameters:
-      - name: versionId
+      - name: sceneId
         in: path
         required: true
         schema: *id001
@@ -1071,61 +640,61 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VersionFile'
+                $ref: '#/components/schemas/SceneFile'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
       x-implementation: implemented
       tags:
-      - 场景版本
-  /api/v1/scene-versions/{versionId}/files/{fileId}/content:
+      - 场景
+  /api/v1/scenes/{sceneId}/files/{fileId}/content:
     put:
-      operationId: uploadSceneVersionFile
+      operationId: uploadSceneFile
       summary: 流式上传并校验文件
       description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。原始字节流。接收时一次校验实际大小与 SHA256，通过后无覆盖提交并直接
         AVAILABLE；已 AVAILABLE 的文件不覆盖。每次新尝试 attempts 加一。大小或摘要不符 422，存储 IO 失败 503，均持久化
@@ -1133,7 +702,7 @@ paths:
       security:
       - bearerAuth: []
       parameters:
-      - name: versionId
+      - name: sceneId
         in: path
         required: true
         schema: *id001
@@ -1147,51 +716,51 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VersionFile'
+                $ref: '#/components/schemas/SceneFile'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1204,7 +773,7 @@ paths:
                 $ref: '#/components/schemas/Error'
       x-implementation: implemented
       tags:
-      - 场景版本
+      - 场景
       requestBody:
         required: true
         content:
@@ -1213,14 +782,14 @@ paths:
               type: string
               format: binary
     get:
-      operationId: downloadSceneVersionFile
+      operationId: downloadSceneFile
       summary: 管理员读取单个文件
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。文件必须 AVAILABLE 且版本无删除意图；允许尚未全部上传的版本读取已完成文件。强
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。文件必须 AVAILABLE 且场景无删除意图；允许尚未全部上传的场景读取已完成文件，场景停用不影响管理员读取。强
         ETag 为登记的 SHA256，支持 Range、If-Range；不重算其他文件。管理员下载带 attachment 文件名。
       security:
       - bearerAuth: []
       parameters:
-      - name: versionId
+      - name: sceneId
         in: path
         required: true
         schema: *id001
@@ -1249,49 +818,49 @@ paths:
                 type: string
                 format: binary
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1303,16 +872,16 @@ paths:
           description: Range 越界；Content-Range 为 bytes */size
       x-implementation: implemented
       tags:
-      - 场景版本
+      - 场景
     head:
-      operationId: headSceneVersionFile
+      operationId: headSceneFile
       summary: 查询管理员单文件下载头
-      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。文件必须 AVAILABLE 且版本无删除意图；允许尚未全部上传的版本读取已完成文件。强
+      description: 仅 ar_admin 管理员；AR_STORAGE_ENABLED=true 时开放。文件必须 AVAILABLE 且场景无删除意图；允许尚未全部上传的场景读取已完成文件，场景停用不影响管理员读取。强
         ETag 为登记的 SHA256，支持 Range、If-Range；不重算其他文件。管理员下载带 attachment 文件名。
       security:
       - bearerAuth: []
       parameters:
-      - name: versionId
+      - name: sceneId
         in: path
         required: true
         schema: &id005
@@ -1339,49 +908,49 @@ paths:
           description: 完整文件
           content: *id004
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1393,13 +962,13 @@ paths:
           description: Range 越界；Content-Range 为 bytes */size
       x-implementation: implemented
       tags:
-      - 场景版本
+      - 场景
   /api/v1/client/scenes:
     get:
       operationId: listClientScenes
-      summary: 匿名列出已发布场景
-      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
-        404。每项只含场景与当前发布版本标识；只读数据库，不打开任何文件。空目录返回 200 与空数组。
+      summary: 匿名列出可读场景
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除、未在删除中，且固定文件清单非空并全部
+        AVAILABLE，否则 404。每项只含场景 id 与名称；只读数据库，不打开任何文件。空目录返回 200 与空数组。
       security: []
       parameters:
       - *id002
@@ -1418,49 +987,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClientSceneList'
         '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1471,10 +1028,10 @@ paths:
   /api/v1/client/scenes/{sceneId}:
     get:
       operationId: getClientScene
-      summary: 匿名读取已发布场景的完整文件清单
-      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
-        404。files 是该版本的完整文件集合，按 relativePath 排序；档位、分段与公共文件的选择由客户端按相对路径自行决定。不返回 storageKey
-        或磁盘路径。不读取文件内容。
+      summary: 匿名读取场景固定文件清单
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除、未在删除中，且固定文件清单非空并全部
+        AVAILABLE，否则 404。files 是场景的固定文件集合，按 relativePath 排序；客户端按相对路径自行组织资源。downloadPath
+        是相对同源根的直接下载地址。不返回 storageKey 或磁盘路径，不读取文件内容。
       security: []
       parameters:
       - name: sceneId
@@ -1489,49 +1046,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClientSceneDetail'
         '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1539,22 +1084,18 @@ paths:
       x-implementation: implemented
       tags:
       - 客户端
-  /api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}:
+  /api/v1/client/scenes/{sceneId}/files/{fileId}/content/{fileName}:
     get:
       operationId: downloadClientFile
-      summary: 匿名读取已发布版本的单个文件
-      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
-        404。fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符 404。版本须仍是当前发布版本，否则
-        409（已开始的字节流可完成，下一请求 409）；文件记录存在但存储缺失或长度不符 409。下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带
+      summary: 匿名读取场景文件
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除、未在删除中，且固定文件清单非空并全部
+        AVAILABLE，否则 404。fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符
+        404。文件记录存在但存储缺失或长度不符返回 409（存储问题，重试可能恢复），不是业务版本变化。下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带
         attachment 文件名，Cache-Control 为 no-store, no-transform。Content-Type 只按扩展名：json
         为 application/json，jpg/png/webp、wav、webm 对应 MIME，模型与未知类型为 application/octet-stream。
       security: []
       parameters:
       - name: sceneId
-        in: path
-        required: true
-        schema: *id001
-      - name: versionId
         in: path
         required: true
         schema: *id001
@@ -1613,49 +1154,37 @@ paths:
                 type: string
                 format: binary
         '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1670,10 +1199,10 @@ paths:
       - 客户端
     head:
       operationId: headClientFile
-      summary: 匿名查询单个文件下载头
-      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除且有完整的当前发布版本，否则
-        404。fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符 404。版本须仍是当前发布版本，否则
-        409（已开始的字节流可完成，下一请求 409）；文件记录存在但存储缺失或长度不符 409。下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带
+      summary: 匿名查询场景文件下载头
+      description: 匿名只读，无需 Authorization；仅 AR_STORAGE_ENABLED=true 时开放。场景须启用、未删除、未在删除中，且固定文件清单非空并全部
+        AVAILABLE，否则 404。fileName 为文件实际 basename 的 URI 编码，仅用于保留扩展名并与记录比对，不参与磁盘路径；不符
+        404。文件记录存在但存储缺失或长度不符返回 409（存储问题，重试可能恢复），不是业务版本变化。下载前不重算摘要，强 ETag 为登记的 SHA256；响应不带
         attachment 文件名，Cache-Control 为 no-store, no-transform。Content-Type 只按扩展名：json
         为 application/json，jpg/png/webp、wav、webm 对应 MIME，模型与未知类型为 application/octet-stream。
       security: []
@@ -1684,10 +1213,6 @@ paths:
         schema: &id007
           type: string
           format: uuid
-      - name: versionId
-        in: path
-        required: true
-        schema: *id007
       - name: fileId
         in: path
         required: true
@@ -1715,49 +1240,37 @@ paths:
           description: 完整文件；HEAD 无正文但带完整 Content-Length
           content: *id006
         '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1785,49 +1298,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FrameworkResponse'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FrameworkResponse'
-        '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1857,49 +1358,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1923,49 +1424,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -1989,49 +1490,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2054,49 +1555,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FrameworkResponse'
-        '401':
-          description: Request failed; 409 covers state/version conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FrameworkResponse'
-        '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2120,49 +1609,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2185,49 +1674,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2271,49 +1760,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2337,49 +1826,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2409,49 +1898,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2481,49 +1970,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2553,49 +2042,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2639,49 +2128,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2719,49 +2208,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2791,49 +2280,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -2862,49 +2351,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '400':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '401':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '403':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '404':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '409':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '413':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '429':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameworkResponse'
         '503':
-          description: Request failed; 409 covers state/version conflict
+          description: Request failed; 409 covers state conflicts
           content:
             application/json:
               schema:
@@ -3035,16 +2524,6 @@ components:
           - '0'
           - '1'
           - '2'
-    SceneCreate:
-      type: object
-      additionalProperties: false
-      properties:
-        name: &id008
-          type: string
-          minLength: 1
-          maxLength: 200
-      required:
-      - name
     EnabledUpdate:
       type: object
       additionalProperties: false
@@ -3076,54 +2555,7 @@ components:
       required:
       - items
       - total
-    SceneUpdate:
-      type: object
-      additionalProperties: false
-      properties:
-        name: *id008
-        expectedVersion:
-          type: integer
-          minimum: 0
-      required:
-      - name
-      - expectedVersion
-    SceneView:
-      type: object
-      additionalProperties: false
-      properties:
-        name: *id008
-        id: *id001
-        enabled:
-          type: boolean
-        lockVersion:
-          type: integer
-          minimum: 0
-        createdAt: &id009
-          type: string
-          format: date-time
-        updatedAt: *id009
-      required:
-      - id
-      - name
-      - enabled
-      - lockVersion
-      - createdAt
-      - updatedAt
-    SceneList:
-      type: object
-      additionalProperties: false
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/SceneView'
-        total:
-          type: integer
-          minimum: 0
-      required:
-      - items
-      - total
-    VersionConfig:
+    SceneConfig:
       type: object
       additionalProperties: false
       properties:
@@ -3131,18 +2563,18 @@ components:
           type: integer
           format: int64
           minimum: 1
-        versionMaxFiles:
+        sceneMaxFiles:
           type: integer
           minimum: 1
-        versionMaxBytes:
+        sceneMaxBytes:
           type: integer
           format: int64
           minimum: 1
       required:
       - maxBytes
-      - versionMaxFiles
-      - versionMaxBytes
-    VersionFileRegistration:
+      - sceneMaxFiles
+      - sceneMaxBytes
+    SceneFileInput:
       type: object
       additionalProperties: false
       properties:
@@ -3154,35 +2586,42 @@ components:
           type: integer
           format: int64
           minimum: 1
-        sha256: &id010
+        sha256: &id008
           type: string
           pattern: ^[0-9a-f]{64}$
       required:
       - relativePath
       - bytes
       - sha256
-    VersionCreate:
+    SceneCreate:
       type: object
       additionalProperties: false
       properties:
         requestKey: *id001
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
         description:
           type: string
           maxLength: 2000
         files:
           type: array
           items:
-            $ref: '#/components/schemas/VersionFileRegistration'
+            $ref: '#/components/schemas/SceneFileInput'
           minItems: 1
-          maxItems: 1000
       required:
       - requestKey
-      - description
+      - name
       - files
-    VersionEdit:
+    SceneUpdate:
       type: object
       additionalProperties: false
       properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
         description:
           type: string
           maxLength: 2000
@@ -3190,120 +2629,10 @@ components:
           type: integer
           minimum: 0
       required:
+      - name
       - description
       - expectedVersion
-    VersionPublish:
-      type: object
-      additionalProperties: false
-      properties:
-        expectedSceneVersion:
-          type: integer
-          minimum: 0
-      required:
-      - expectedSceneVersion
-    VersionSummary:
-      type: object
-      additionalProperties: false
-      properties:
-        id: *id001
-        sceneId: *id001
-        versionNo: &id011
-          type: integer
-          minimum: 1
-        description: &id012
-          type: string
-          maxLength: 2000
-        lockVersion: &id013
-          type: integer
-          minimum: 0
-        published: &id014
-          type: boolean
-        uploadStatus: &id015
-          type: string
-          enum:
-          - DELETING
-          - DELETE_FAILED
-          - UPLOADING
-          - FAILED
-          - READY
-          - PENDING
-        fileCount: &id016
-          type: integer
-          minimum: 0
-        availableCount: &id017
-          type: integer
-          minimum: 0
-        failedCount: &id018
-          type: integer
-          minimum: 0
-        totalBytes: &id019
-          type: integer
-          format: int64
-          minimum: 0
-        creatorId: &id020
-          type: integer
-          format: int64
-        creatorName: &id021
-          type: string
-        createdAt: *id009
-        updatedAt: *id009
-      required:
-      - id
-      - sceneId
-      - versionNo
-      - description
-      - lockVersion
-      - published
-      - uploadStatus
-      - fileCount
-      - availableCount
-      - failedCount
-      - totalBytes
-      - creatorId
-      - creatorName
-      - createdAt
-      - updatedAt
-    PublishedVersion:
-      type: object
-      additionalProperties: false
-      properties:
-        id: *id001
-        versionNo:
-          type: integer
-          minimum: 1
-        description:
-          type: string
-          maxLength: 2000
-        publishedAt: *id009
-        publishedByName:
-          type: string
-      required:
-      - id
-      - versionNo
-      - description
-      - publishedAt
-      - publishedByName
-    VersionList:
-      type: object
-      additionalProperties: false
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/VersionSummary'
-        total:
-          type: integer
-          minimum: 0
-        sceneLockVersion:
-          type: integer
-          minimum: 0
-        published:
-          $ref: '#/components/schemas/PublishedVersion'
-      required:
-      - items
-      - total
-      - sceneLockVersion
-    VersionFile:
+    SceneFile:
       type: object
       additionalProperties: false
       properties:
@@ -3316,7 +2645,7 @@ components:
           type: integer
           format: int64
           minimum: 1
-        sha256: *id010
+        sha256: *id008
         status:
           type: string
           enum:
@@ -3338,46 +2667,110 @@ components:
       - status
       - failureReason
       - attempts
-    VersionDetail:
+    SceneSummary:
       type: object
       additionalProperties: false
       properties:
         id: *id001
-        sceneId: *id001
-        versionNo: *id011
-        description: *id012
-        lockVersion: *id013
-        published: *id014
-        uploadStatus: *id015
-        fileCount: *id016
-        availableCount: *id017
-        failedCount: *id018
-        totalBytes: *id019
-        creatorId: *id020
-        creatorName: *id021
-        createdAt: *id009
+        name: &id010
+          type: string
+          minLength: 1
+          maxLength: 200
+        description: &id011
+          type: string
+          maxLength: 2000
+        enabled: &id012
+          type: boolean
+        lockVersion: &id013
+          type: integer
+          minimum: 0
+        uploadStatus: &id014
+          type: string
+          enum:
+          - PENDING
+          - UPLOADING
+          - FAILED
+          - READY
+          - DELETING
+          - DELETE_FAILED
+        fileCount: &id015
+          type: integer
+          minimum: 0
+        availableCount: &id016
+          type: integer
+          minimum: 0
+        failedCount: &id017
+          type: integer
+          minimum: 0
+        totalBytes: &id018
+          type: integer
+          format: int64
+          minimum: 0
+        createdAt: &id009
+          type: string
+          format: date-time
         updatedAt: *id009
-        files:
-          type: array
-          items:
-            $ref: '#/components/schemas/VersionFile'
       required:
       - id
-      - sceneId
-      - versionNo
+      - name
       - description
+      - enabled
       - lockVersion
-      - published
       - uploadStatus
       - fileCount
       - availableCount
       - failedCount
       - totalBytes
-      - creatorId
-      - creatorName
+      - createdAt
+      - updatedAt
+    SceneDetail:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id001
+        name: *id010
+        description: *id011
+        enabled: *id012
+        lockVersion: *id013
+        uploadStatus: *id014
+        fileCount: *id015
+        availableCount: *id016
+        failedCount: *id017
+        totalBytes: *id018
+        createdAt: *id009
+        updatedAt: *id009
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/SceneFile'
+      required:
+      - id
+      - name
+      - description
+      - enabled
+      - lockVersion
+      - uploadStatus
+      - fileCount
+      - availableCount
+      - failedCount
+      - totalBytes
       - createdAt
       - updatedAt
       - files
+    SceneList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SceneSummary'
+        total:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - total
     ClientSceneItem:
       type: object
       additionalProperties: false
@@ -3386,15 +2779,9 @@ components:
         name:
           type: string
           minLength: 1
-        versionId: *id001
-        versionNo:
-          type: integer
-          minimum: 1
       required:
       - id
       - name
-      - versionId
-      - versionNo
     ClientSceneList:
       type: object
       additionalProperties: false
@@ -3422,7 +2809,7 @@ components:
           type: integer
           format: int64
           minimum: 1
-        sha256: *id010
+        sha256: *id008
         contentType:
           type: string
         downloadPath:
@@ -3442,10 +2829,6 @@ components:
         name:
           type: string
           minLength: 1
-        versionId: *id001
-        versionNo:
-          type: integer
-          minimum: 1
         files:
           type: array
           items:
@@ -3454,12 +2837,10 @@ components:
         fileCount:
           type: integer
           minimum: 1
-        totalBytes: *id019
+        totalBytes: *id018
       required:
       - sceneId
       - name
-      - versionId
-      - versionNo
       - files
       - fileCount
       - totalBytes

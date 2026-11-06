@@ -8,15 +8,15 @@ import secrets
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def environment_values(max_bytes, version_max_files, version_max_bytes, bind_address, http_port):
+def environment_values(max_bytes, scene_max_files, scene_max_bytes, bind_address, http_port):
     """Fresh random private values plus the explicit storage limits, in compose.env order."""
     return {
         'AR_DATABASE_PASSWORD': secrets.token_urlsafe(32),
         'AR_TOKEN_SECRET': secrets.token_urlsafe(64),
         'AR_BOOTSTRAP_PASSWORD': secrets.token_urlsafe(24),
         'AR_STORAGE_MAX_BYTES': str(max_bytes),
-        'AR_STORAGE_VERSION_MAX_FILES': str(version_max_files),
-        'AR_STORAGE_VERSION_MAX_BYTES': str(version_max_bytes),
+        'AR_STORAGE_SCENE_MAX_FILES': str(scene_max_files),
+        'AR_STORAGE_SCENE_MAX_BYTES': str(scene_max_bytes),
         'AR_BIND_ADDRESS': bind_address,
         'AR_HTTP_PORT': str(http_port),
     }
@@ -32,15 +32,15 @@ def create_environment_file(destination, values):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--max-bytes', type=int, required=True, help='Largest single uploaded file, in bytes')
-    parser.add_argument('--version-max-files', type=int, default=1000, help='Largest file count per content version')
-    parser.add_argument('--version-max-bytes', type=int, default=4294967296, help='Largest total bytes per content version')
+    parser.add_argument('--scene-max-files', type=int, default=1000, help='Largest file count per scene')
+    parser.add_argument('--scene-max-bytes', type=int, default=4294967296, help='Largest total bytes per scene')
     parser.add_argument('--test', action='store_true', help='Use isolated test config and port 18082')
     parser.add_argument('--bind-address', default='127.0.0.1',
                         help='IPv4/IPv6 host address for the gateway; ignored with --test')
     parser.add_argument('--http-port', type=int, default=18081,
                         help='Host port for the gateway; ignored with --test')
     args = parser.parse_args()
-    for option in ('max_bytes', 'version_max_files', 'version_max_bytes'):
+    for option in ('max_bytes', 'scene_max_files', 'scene_max_bytes'):
         if getattr(args, option) <= 0:
             parser.error('--' + option.replace('_', '-') + ' must be positive')
     try:
@@ -52,7 +52,7 @@ def main():
     bind_address = '127.0.0.1' if args.test else args.bind_address
     http_port = 18082 if args.test else args.http_port
     destination = ROOT / ('config/compose-test.env' if args.test else 'config/compose.env')
-    values = environment_values(args.max_bytes, args.version_max_files, args.version_max_bytes, bind_address, http_port)
+    values = environment_values(args.max_bytes, args.scene_max_files, args.scene_max_bytes, bind_address, http_port)
     try:
         create_environment_file(destination, values)
     except FileExistsError:

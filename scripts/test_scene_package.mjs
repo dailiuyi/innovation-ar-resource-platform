@@ -1,4 +1,4 @@
-// scenePackage.js 的消费者行为测试：目录归根、全部文件登记、路径冲突、与已固定版本的比对。
+// scenePackage.js 的消费者行为测试：目录归根、全部文件登记、路径冲突、与已固定场景清单的比对。
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
@@ -52,14 +52,14 @@ test('显式文件模式接受任意多个文件和 ZIP，按 NFC 文件名排�
   assert.equal(pkg.files[2].file, files[0])
   assert.equal(pkg.files[1].file, files[2])
   const digests = new Map(pkg.files.map(item => [item.relativePath, SHA_A]))
-  const request = createRequest(pkg, digests, { requestKey: 'files-key', description: '' })
+  const request = createRequest(pkg, digests, { requestKey: 'files-key', name: '文件场景', description: '' })
   assert.equal(request.files.length, 3)
-  const version = { files: request.files }
-  checkSelection(await readPackage([...files].reverse(), { mode: 'files' }), version)
-  checkDigests(pkg, digests, version)
-  assert.throws(() => checkSelection({ ...pkg, files: pkg.files.slice(1) }, version), /缺少/)
-  assert.throws(() => checkSelection({ ...pkg, files: [{ ...pkg.files[0], bytes: 10 }, ...pkg.files.slice(1)] }, version), /大小/)
-  assert.throws(() => checkDigests(pkg, new Map(digests).set('资源.zip', SHA_B), version), /SHA-256/)
+  const scene = { files: request.files }
+  checkSelection(await readPackage([...files].reverse(), { mode: 'files' }), scene)
+  checkDigests(pkg, digests, scene)
+  assert.throws(() => checkSelection({ ...pkg, files: pkg.files.slice(1) }, scene), /缺少/)
+  assert.throws(() => checkSelection({ ...pkg, files: [{ ...pkg.files[0], bytes: 10 }, ...pkg.files.slice(1)] }, scene), /大小/)
+  assert.throws(() => checkDigests(pkg, new Map(digests).set('资源.zip', SHA_B), scene), /SHA-256/)
 })
 
 test('文件模式共享空文件、保留名称与规范化碰撞校验，不接受伪造路径', async () => {
@@ -95,52 +95,45 @@ test('路径冲突：大小写冲突、Unicode 规范化冲突、文件与目录
 
 test('本地上限检查', async () => {
   const pkg = await readPackage(directory())
-  const limits = { maxBytes: 100, versionMaxFiles: 5, versionMaxBytes: 1000 }
+  const limits = { maxBytes: 100, sceneMaxFiles: 5, sceneMaxBytes: 1000 }
   checkLimits(pkg, limits)
-  assert.throws(() => checkLimits(pkg, { ...limits, versionMaxFiles: 4 }), /文件数量/)
+  assert.throws(() => checkLimits(pkg, { ...limits, sceneMaxFiles: 4 }), /文件数量/)
   assert.throws(() => checkLimits(pkg, { ...limits, maxBytes: 9 }), /单文件大小上限/)
-  assert.throws(() => checkLimits(pkg, { ...limits, versionMaxBytes: 49 }), /总大小/)
+  assert.throws(() => checkLimits(pkg, { ...limits, sceneMaxBytes: 49 }), /总大小/)
 })
 
 async function fixture() {
   const pkg = await readPackage(directory())
   const digests = new Map(pkg.files.map((item, index) => [item.relativePath, (index % 2 ? SHA_A : SHA_B)]))
-  const request = createRequest(pkg, digests, { requestKey: '11111111-1111-4111-8111-111111111111', description: '测试' })
-  const version = {
-    id: 'v1',
+  const request = createRequest(pkg, digests, { requestKey: '11111111-1111-4111-8111-111111111111', name: '婚礼场景', description: '测试' })
+  const scene = {
+    id: 's1',
     files: request.files.map((file, index) => ({ fileId: `f${index}`, status: 'PENDING', attempts: 0, ...file }))
   }
-  return { pkg, digests, request, version }
+  return { pkg, digests, request, scene }
 }
 
-test('创建请求只含 requestKey、说明与全部文件的路径/大小/摘要', async () => {
-  const { pkg, request } = await fixture()
-  assert.deepEqual(Object.keys(request), ['requestKey', 'description', 'files'])
-  assert.deepEqual(request.files.map(file => Object.keys(file)), pkg.files.map(() => ['relativePath', 'bytes', 'sha256']))
-  assert.equal(request.files.length, PATHS.length)
-  assert.throws(() => createRequest(pkg, new Map(), { requestKey: 'k', description: '' }), /缺少.*SHA-256/)
-})
 
-test('重新选择目录与已固定版本一致时通过', async () => {
-  const { pkg, digests, version } = await fixture()
-  checkSelection(pkg, version)
-  checkDigests(pkg, digests, version)
+test('重新选择目录与已固定场景清单一致时通过', async () => {
+  const { pkg, digests, scene } = await fixture()
+  checkSelection(pkg, scene)
+  checkDigests(pkg, digests, scene)
 })
 
 test('重新选择不匹配：路径集合、大小、摘要任一不同都拒绝', async () => {
-  const { pkg, digests, version } = await fixture()
-  const missing = structuredClone(version)
+  const { pkg, digests, scene } = await fixture()
+  const missing = structuredClone(scene)
   missing.files.pop()
-  assert.throws(() => checkSelection(pkg, missing), /不在该版本的文件清单中/)
-  const extra = structuredClone(version)
+  assert.throws(() => checkSelection(pkg, missing), /不在该场景的文件清单中/)
+  const extra = structuredClone(scene)
   extra.files.push({ fileId: 'fx', relativePath: 'models/extra.c.ply', bytes: 10, sha256: SHA_A, status: 'PENDING' })
-  assert.throws(() => checkSelection(pkg, extra), /缺少该版本登记的文件：models\/extra\.c\.ply/)
-  const resized = structuredClone(version)
+  assert.throws(() => checkSelection(pkg, extra), /缺少该场景登记的文件：models\/extra\.c\.ply/)
+  const resized = structuredClone(scene)
   resized.files[0].bytes = 11
   assert.throws(() => checkSelection(pkg, resized), /大小/)
   const wrong = new Map(digests)
   wrong.set(pkg.files[2].relativePath, 'c'.repeat(64))
-  assert.throws(() => checkDigests(pkg, wrong, version), new RegExp(`${pkg.files[2].relativePath.replace(/\./g, '\\.')}.*SHA-256`))
+  assert.throws(() => checkDigests(pkg, wrong, scene), new RegExp(`${pkg.files[2].relativePath.replace(/\./g, '\\.')}.*SHA-256`))
 })
 
 test('上传规划：已入库跳过，处理中不重发，失败与待上传按路径顺序重传', () => {

@@ -1,105 +1,123 @@
 <template>
   <div class="app-container">
-    <h2>场景管理</h2><p>每个场景对应一个独立的 4DGS 成品：“场景信息”维护名称，“版本与文件”进入该场景的成品版本管理面板。</p>
+    <h2>场景管理</h2>
+    <p>每个场景对应一个固定的 4DGS 成品文件清单。上传并校验全部文件后自动可读（场景启用时）；要更换资源，请新建另一个场景。</p>
     <el-form inline @submit.prevent="search">
       <el-form-item label="场景名称"><el-input v-model="name" clearable placeholder="搜索场景" /></el-form-item>
       <el-form-item>
-        <el-button @click="search">查询</el-button><el-button type="primary" @click="create">新建场景</el-button>
+        <el-button @click="search">查询</el-button><el-button type="primary" @click="openCreate">新建场景</el-button>
       </el-form-item>
     </el-form>
     <el-table :data="items" v-loading="loading">
       <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
-      <el-table-column label="状态" width="80"><template #default="{row}"><el-tag :type="row.enabled?'success':'info'">{{row.enabled?'启用':'停用'}}</el-tag></template></el-table-column>
-      <el-table-column prop="lockVersion" label="修订号" width="80" />
-      <el-table-column label="操作" width="300" fixed="right"><template #default="{row}">
+      <el-table-column label="状态" width="150">
+        <template #default="{row}">
+          <el-tag :type="row.enabled?'success':'info'">{{row.enabled?'启用':'停用'}}</el-tag>
+          <el-tag v-if="row.uploadStatus" :type="uploadStatusType(row.uploadStatus)" class="tag-gap">{{uploadStates[row.uploadStatus]||row.uploadStatus}}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="大小" width="100"><template #default="{row}">{{size(row.totalBytes)}}</template></el-table-column>
+      <el-table-column label="更新时间" width="150"><template #default="{row}">{{formatTime(row.updatedAt)}}</template></el-table-column>
+      <el-table-column label="操作" width="240" fixed="right"><template #default="{row}">
         <div class="scene-actions">
-          <el-button link type="primary" @click="edit(row)">场景信息</el-button>
-          <el-button link type="primary" @click="openVersions(row)">版本与文件</el-button>
-          <el-button link type="warning" @click="toggle(row)">{{row.enabled?'停用':'启用'}}</el-button>
-          <el-button link type="danger" :disabled="deleting" @click="remove(row)">删除</el-button>
+          <el-button link type="primary" @click="openScene(row)">查看</el-button>
+          <el-button link type="warning" :disabled="deleting||['DELETING','DELETE_FAILED'].includes(row.uploadStatus)" @click="toggle(row)">{{row.enabled?'停用':'启用'}}</el-button>
+          <el-button link type="danger" :disabled="deleting||row.uploadStatus==='UPLOADING'" @click="remove(row)">{{retryDelete(row)?'重试删除':'删除'}}</el-button>
         </div>
       </template></el-table-column>
     </el-table>
     <pagination v-show="total>0" :total="total" v-model:page="page" v-model:limit="limit" @pagination="load" />
-    <el-dialog v-model="visible" :title="form.id?'场景信息':'新建场景'" width="600px" :close-on-click-modal="false">
-      <el-form label-width="100px" @submit.prevent="save">
-        <el-form-item label="名称" required><el-input v-model="form.name" maxlength="200" :disabled="saving" @keydown.enter="submitName" /></el-form-item>
-        <el-form-item v-if="form.id" label="场景编号"><span>{{form.id}}</span></el-form-item>
-      </el-form>
-      <template #footer><el-button @click="visible=false">关闭</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
-    </el-dialog>
-    <VersionPanel :scene-id="panelScene" @close="closeVersions" @scene-updated="load" />
+    <ScenePanel :scene-id="panelScene" :creating="creating" @close="closePanel" @created="onCreated" @updated="load" />
   </div>
 </template>
 <style scoped>
 .scene-actions{display:flex;align-items:center;flex-wrap:nowrap;gap:12px}
 .scene-actions :deep(.el-button+.el-button){margin-left:0}
+.tag-gap{margin-left:6px}
 </style>
 <script setup>
-import request from '@/utils/request'
-import VersionPanel from './VersionPanel.vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { watch } from 'vue'
-import cache from '@/plugins/cache'
-import useUserStore from '@/store/modules/user'
-const route=useRoute(),router=useRouter()
-// URL 的 sceneId/versionId 恢复版本面板；离开面板后重新读场景列表，不缓存发布结果。
-const panelScene=computed(()=>String(route.query.sceneId||''))
-function openVersions(row){const query={...route.query,sceneId:row.id};delete query.versionId;router.replace({query})}
-function closeVersions(){const query={...route.query};delete query.sceneId;delete query.versionId;router.replace({query});load()}
 import { ElMessage, ElMessageBox } from 'element-plus'
-const deleting=ref(false)
-const items=ref([]),total=ref(0),page=ref(1),limit=ref(20),name=ref(''),loading=ref(false),visible=ref(false),saving=ref(false),form=ref({})
-// 新建名称草稿按账号保存在浏览器；编辑既有场景不写草稿，创建成功后清除。
-const draftKey='ar:new-scene-name:'+useUserStore().id
-watch(()=>form.value.name,value=>{
-  if(!form.value.id)cache.local.set(draftKey,value??'')
-},{flush:'sync'})
-async function load(){loading.value=true;try{const r=await request.get('/api/v1/scenes',{params:{name:name.value,limit:limit.value,offset:(page.value-1)*limit.value}});items.value=r.items;total.value=r.total}finally{loading.value=false}}
-function search(){page.value=1;load()}
-function create(){form.value={name:cache.local.get(draftKey)||''};visible.value=true}
-async function edit(row){form.value=await request.get('/api/v1/scenes/'+row.id);visible.value=true}
-// 输入法确认候选词时不提交；普通 Enter 才调用保存。
-function submitName(event){
-  if(event.isComposing||event.keyCode===229)return
-  event.preventDefault()
-  save()
+import { deleteScene, listScenes, setSceneEnabled } from '@/api/scene'
+import { SCENE_UPLOAD_STATES, formatBytes, formatTime, uploadStatusType } from '@/utils/scenePackage'
+import ScenePanel from './ScenePanel.vue'
+
+const route = useRoute(), router = useRouter()
+const uploadStates = SCENE_UPLOAD_STATES
+const size = formatBytes
+const items = ref([]), total = ref(0), page = ref(1), limit = ref(20), name = ref('')
+const loading = ref(false), deleting = ref(false), creating = ref(false)
+// URL 只保存 sceneId；新建面板是页面本地状态，不写路由。
+const panelScene = computed(() => String(route.query.sceneId || ''))
+function retryDelete(row) { return ['DELETING', 'DELETE_FAILED'].includes(row.uploadStatus) }
+function message(e) { return e?.response?.data?.message || e?.message || '请求失败，请刷新后重试' }
+async function load() {
+  loading.value = true
+  try {
+    const result = await listScenes({ name: name.value, limit: limit.value, offset: (page.value - 1) * limit.value })
+    items.value = result.items
+    total.value = result.total
+  } catch (e) { ElMessage.error(message(e)) } finally { loading.value = false }
 }
-// 行上的 lockVersion 作为 expectedVersion；409 后刷新列表，让用户基于新状态重试。
-async function save(){
-  if(saving.value)return
-  if(!form.value.name?.trim()) return ElMessage.warning('请填写场景名称')
-  const s=form.value
-  const data={name:s.name.trim(),expectedVersion:s.lockVersion}
-  saving.value=true
-  try{
-    await request({url:'/api/v1/scenes'+(s.id?'/'+s.id:''),method:s.id?'put':'post',data})
-    if(!s.id){form.value={};cache.local.remove(draftKey)}
-    visible.value=false;ElMessage.success('场景已保存');await load()
+function search() { page.value = 1; load() }
+function openCreate() {
+  creating.value = true
+  if (route.query.sceneId) {
+    const query = { ...route.query }
+    delete query.sceneId
+    router.replace({ query })
   }
-  catch(e){if(e.response?.status===409){await load();if(s.id)visible.value=false}}
-  finally{saving.value=false}
 }
-async function toggle(row){
-  try{const {value}=await ElMessageBox.prompt('请填写原因','确认'+(row.enabled?'停用':'启用'),{inputValidator:v=>!!v?.trim()||'原因不能为空'});await request.put('/api/v1/scenes/'+row.id+'/enabled',{enabled:!row.enabled,expectedVersion:row.lockVersion,reason:value});ElMessage.success('状态已更新');await load()}
-  catch(e){if(e.response?.status===409) await load()}
+function openScene(row) {
+  creating.value = false
+  const query = { ...route.query, sceneId: row.id }
+  router.replace({ query })
 }
-// 此处删除场景只做软删除；逐版本清理实际文件走 VersionPanel 的 deleteVersion。
-async function remove(row){
-  if(deleting.value) return
-  deleting.value=true
-  try{
-    await ElMessageBox.confirm(`确认删除场景“${row.name}”吗？删除后将从列表移除，操作记录仍会保留。`,'删除场景',{
-      confirmButtonText:'确认删除',cancelButtonText:'取消',type:'warning',
-      closeOnClickModal:false,autofocus:false,confirmButtonClass:'el-button--danger'
+function closePanel() {
+  creating.value = false
+  const query = { ...route.query }
+  delete query.sceneId
+  router.replace({ query })
+  load()
+}
+function onCreated(scene) {
+  creating.value = false
+  const query = { ...route.query, sceneId: scene.id }
+  router.replace({ query })
+  load()
+}
+async function toggle(row) {
+  try {
+    const { value } = await ElMessageBox.prompt('请填写原因', '确认' + (row.enabled ? '停用' : '启用'), {
+      inputValidator: value => !!value?.trim() || '原因不能为空'
     })
-    await request.delete('/api/v1/scenes/'+row.id,{params:{expectedVersion:row.lockVersion}})
-    ElMessage.success('场景已删除')
-    if(items.value.length===1 && page.value>1) page.value--
+    await setSceneEnabled(row.id, { enabled: !row.enabled, expectedVersion: row.lockVersion, reason: value })
+    ElMessage.success('状态已更新')
     await load()
-  }catch(e){
-    if(e.response?.status===409 || e.response?.status===404) await load()
-  }finally{deleting.value=false}
+  } catch (e) {
+    if (e.response?.status === 409) await load()
+  }
+}
+// 物理删除场景与全部文件；失败后行保留为“删除失败”，可再次点击重试。
+async function remove(row) {
+  if (deleting.value) return
+  try {
+    await ElMessageBox.confirm(`确认删除场景“${row.name}”吗？将永久删除该场景的全部模型文件，无法恢复。操作记录会保留。`, '删除场景', {
+      confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning',
+      closeOnClickModal: false, autofocus: false, confirmButtonClass: 'el-button--danger'
+    })
+  } catch { return }
+  deleting.value = true
+  try {
+    await deleteScene(row.id, row.lockVersion)
+    ElMessage.success('场景已删除')
+    if (items.value.length === 1 && page.value > 1) page.value--
+    await load()
+  } catch (e) {
+    ElMessage.error(message(e))
+    await load()
+  } finally { deleting.value = false }
 }
 load()
 </script>

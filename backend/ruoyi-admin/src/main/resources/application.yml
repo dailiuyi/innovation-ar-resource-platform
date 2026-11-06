@@ -13,15 +13,15 @@ ruoyi:
   # 验证码类型 math 数字计算 char 字符验证
   captchaType: math
 
-# Product version endpoints are registered when local storage is enabled.
+# Scene and fixed-file endpoints are registered when local storage is enabled.
 ar:
   storage:
     enabled: ${AR_STORAGE_ENABLED:false}
     root: ${AR_STORAGE_ROOT:./.local/artifacts}
     # Zero is deliberately invalid when enabled. Choose a test limit explicitly.
     max-bytes: ${AR_STORAGE_MAX_BYTES:0}
-    version-max-files: ${AR_STORAGE_VERSION_MAX_FILES:1000}
-    version-max-bytes: ${AR_STORAGE_VERSION_MAX_BYTES:4294967296}
+    scene-max-files: ${AR_STORAGE_SCENE_MAX_FILES:1000}
+    scene-max-bytes: ${AR_STORAGE_SCENE_MAX_BYTES:4294967296}
 
 # 开发环境配置
 server:
@@ -141,9 +141,9 @@ springdoc:
       packages-to-scan: com.ruoyi.ar
       paths-to-match: /api/v1/client/**
     - group: 'ar-admin'
-      display-name: '场景与版本管理'
+      display-name: '场景管理'
       packages-to-scan: com.ruoyi.ar
-      paths-to-match: /api/v1/scenes,/api/v1/scenes/**,/api/v1/scene-versions/**,/api/v1/audits
+      paths-to-match: /api/v1/scenes,/api/v1/scenes/**,/api/v1/audits
     - group: 'system'
       display-name: '登录与系统管理'
       packages-to-scan: com.ruoyi.web.controller

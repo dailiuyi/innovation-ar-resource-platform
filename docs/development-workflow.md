@@ -64,7 +64,7 @@ The V0.1 scripts initialize an empty database. Use descriptive Flyway names such
 
 ## Testing Guidelines
 
-Use JSON Schema/OpenAPI validators and psycopg with real PostgreSQL. For current business changes, check affected invariants such as immutable file lists, verified files, publication pointer replacement, physical deletion/recovery and audit consistency. Day/night variants remain historical candidates; republishing an intact old version uses the current publication API, not a separate rollback endpoint. No percentage coverage threshold exists. Record results and limitations in `docs/06-validation.md`; SQL tests do not verify HTTP, cloud storage, or client behavior.
+Use JSON Schema/OpenAPI validators and real isolated PostgreSQL. Current business checks cover fixed scene manifests, upload-completion visibility, enable/disable, verified files, physical scene deletion/recovery and audit. A new model requires a new scene; version replacement and republish are historical behaviors. No percentage coverage threshold exists. Record actual commands, versions, results and limitations in [validation records](06-validation.md); SQL alone does not verify HTTP or resource distribution.
 
 ## Commit & Pull Request Guidelines
 

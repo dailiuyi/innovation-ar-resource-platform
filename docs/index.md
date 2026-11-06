@@ -7,8 +7,8 @@
 | 要回答的问题 | 入口 | 使用边界 |
 |---|---|---|
 | 收到口头需求、准备 Issue、审查 PR 或接手任务时先做什么 | [Agent 工作流入口](17-agent-workflow.md) | 先判断职责和用户授权，再进入对应手册；不依赖旧聊天 |
-| 当前平台实现了什么 | [资源入库闭环](12-resource-ingestion.md)、[项目介绍](../README.md) | 场景、账号、目录文件清单版本、逐文件入库、单一发布指针、整版物理删除与匿名读取/下载；后台内嵌预览未提供；旧参考播放器对现行接口不可用，旧验收见[真实样包记录](20-4dgs-sample-validation.md) |
-| 客户端如何对接接口 | [客户端接口对接文件](21-client-api.md)、[Unity 对接技术文档](22-unity-integration.md) | 匿名读取、Range 下载、断点续传与错误处理；手机和 Unity 原生加载未验证 |
+| 当前平台实现了什么 | [资源入库闭环](12-resource-ingestion.md)、[项目介绍](../README.md) | 管理员单场景单模型、固定文件清单、上传即发布、启停、场景级物理清理与匿名下载；本地源码不代表日常环境已升级 |
+| 客户端如何对接接口 | [客户端接口对接文件](21-client-api.md)、[Unity 对接技术文档](22-unity-integration.md) | 0.6.0 场景/文件身份，无版本字段；用户确认既有客户端已解压解码跑通，本次只做资源分发 |
 | 当前平台如何组成 | [当前架构](11-current-platform-architecture.md) | 结合现行实现核对；后续设计不等于已有能力 |
 | 如何开发、启动、打包，并查看部署记录 | [开发工作流](development-workflow.md)、[Windows 原生手册](08-demo-runbook.md)、[容器与环境手册](10-local-infrastructure.md) | 环境分工和带日期部署记录以 10 为主体；其他入口只导航，不复制当前实例状态 |
 | 下载参考工具如何工作 | [资源传输参考](11-artifact-transfer-reference.md) | 场景下载使用 download_scene.py，复用单文件 Range/If-Range；通用打包扩展不是当前业务流程 |
@@ -26,6 +26,7 @@
 
 | 要回答的问题 | 入口 | 使用边界 |
 |---|---|---|
+| 当前简化业务与后续云架构的关系是什么 | [管理员单场景方案与长期调研](24-4dgs-content-platform-proposal.md) | 当前已授权管理员单模型、上传即发布和启停；普通用户、OSS/CDN、审核与 GPU 是后续范围 |
 | 深圳试点大资源如何传输和存储 | [公网分发架构建议](19-public-resource-delivery-proposal.md) | 云主机挂盘、CDN 回源与对象存储预留等仍待批准实施；不代表所有部署都未实施，实际部署记录见[容器与环境手册](10-local-infrastructure.md) |
 
 ## 历史证据与任务
@@ -36,6 +37,6 @@
 | 如何跨会话交接 | [任务管理](tasks/README.md)、[4DGS 成品重构任务](tasks/active/2026-10-29-4dgs-resource-refactor.md)、[任务控制](tasks/active/2026-09-20-task-control.md)、[4DGS 格式核查](tasks/active/2026-10-23-4dgs-format-discovery.md) | 任务记录进度和当时边界，完成后归档 |
 | 4DGS 真实样包验收（旧基线） | [真实样包记录](20-4dgs-sample-validation.md) | 对应旧描述与参考播放器基线；现行接口见 21，资源清单见 12 |
 
-`docs/01` 至 `docs/05`、`docs/07`、[历史汇报页](presentation.html)、`docs/images/` 的旧图、根目录 `database/migrations/` 和 `contracts/` 中的 runtime-manifest（不再生成）保留历史候选设计。旧任务、决策与验证记录中的“当前”仅对应所记日期/基线；后续状态见各入口，不能据旧草稿、昼夜、ZIP 设计推断现行功能。[2026-10-23 格式核查](tasks/active/2026-10-23-4dgs-format-discovery.md)保留旧实现观察，现行目录文件清单版本与读取链路由 12 与 21 承接（`resource.json` 描述已于 2026-10-29 删除）。
+`docs/01` 至 `docs/05`、`docs/07`、[历史汇报页](presentation.html)、`docs/images/`、根目录 `database/migrations/` 与 runtime-manifest 保留历史候选设计。旧任务、决策及验收中的“当前”只对应所记基线，不沿用草稿、昼夜、ZIP 或多版本流程。现行单场景固定文件与读取链路由 12 与 21 承接，`resource.json` 普通文件无特殊语义。
 
 新增长期规则时指定对应文档和验证方式。优先补一个能发现实际错误的检查，避免反复追加大段提示词。尚不能自动检查的约束，明确由任务负责人审查。

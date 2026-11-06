@@ -62,6 +62,7 @@ class Runtime:
                         AR_REDIS_HOST='127.0.0.1', AR_REDIS_PORT=str(redis), AR_PORT=str(api),
                         AR_STORAGE_ENABLED='true', AR_STORAGE_ROOT=str(directory / 'artifacts'),
                         AR_STORAGE_MAX_BYTES=str(256 * 1024 * 1024),
+                        AR_STORAGE_SCENE_MAX_FILES='1000', AR_STORAGE_SCENE_MAX_BYTES=str(4 * 1024 * 1024 * 1024),
                         AR_UPLOAD_DIR=str(directory / 'uploads'), AR_DEV_API_TARGET=self.base,
                         PGPASSWORD=db_password)
         self.redis_port = redis
@@ -225,21 +226,23 @@ def seed_preview(runtime):
     user = 'review_admin'
     api('/system/user', 'POST', {'userName': user, 'nickName': '隔离验收账号', 'password': runtime.password}, token)
     token = api('/login', 'POST', {'username': user, 'password': runtime.password})['token']
-    from verify_ingestion import synthetic_package, version_request
+    from verify_ingestion import scene_request, synthetic_package
     fixtures = {'username': user, 'scenes': []}
     for index, name in enumerate(['验收场景A', '超长场景名称' + '测试内容' * 25]):
-        scene = api('/api/v1/scenes', 'POST', {'name': name}, token)
         # Synthetic text bytes: exercises management and transfer, not playback.
         files = synthetic_package('review-' + str(index))
-        version = api('/api/v1/scenes/' + scene['id'] + '/versions', 'POST',
-                      version_request(files, '人工验收用合成版本，模型不可渲染'), token)
-        for entry in version['files']:
-            uploaded = api('/api/v1/scene-versions/' + version['id'] + '/files/' + entry['fileId'] + '/content', 'PUT',
+        scene = api('/api/v1/scenes', 'POST',
+                    scene_request(name, files, '人工验收用合成场景，模型不可渲染'), token)
+        for entry in scene['files']:
+            uploaded = api('/api/v1/scenes/' + scene['id'] + '/files/' + entry['fileId'] + '/content', 'PUT',
                            files[entry['relativePath']], token)
             if uploaded.get('status') != 'AVAILABLE':
                 raise RuntimeError('Synthetic payload was not verified')
-        fixtures['scenes'].append({'id': scene['id'], 'name': name, 'versionId': version['id'],
-                                   'fileIds': [entry['fileId'] for entry in version['files']]})
+        detail = api('/api/v1/scenes/' + scene['id'], token=token)
+        if detail.get('uploadStatus') != 'READY':
+            raise RuntimeError('Synthetic scene did not become READY')
+        fixtures['scenes'].append({'id': scene['id'], 'name': name,
+                                   'fileIds': [entry['fileId'] for entry in scene['files']]})
     (runtime.directory / 'fixtures.json').write_text(json.dumps(fixtures, ensure_ascii=False, indent=2), encoding='utf-8')
     return fixtures
 
@@ -261,16 +264,18 @@ def browser_smoke(runtime, fixtures):
             page.wait_for_url(lambda url: '/login' not in url, timeout=30000)
             page.goto(runtime.web + '/admin/scenes', wait_until='networkidle', timeout=90000)
             row = page.get_by_role('row').filter(has_text=fixtures['scenes'][0]['name'])
-            row.get_by_role('button', name='场景信息', exact=True).click()
-            dialog = page.get_by_role('dialog', name='场景信息')
-            dialog.wait_for()
-            dialog.locator('.el-dialog__footer').get_by_role('button', name='关闭', exact=True).click()
-            dialog.wait_for(state='hidden')
-            row.get_by_role('button', name='版本与文件', exact=True).click()
-            page.get_by_role('heading', name='版本与文件 · ' + fixtures['scenes'][0]['name']).wait_for()
+            row.get_by_role('button', name='查看', exact=True).click()
+            drawer = page.locator('.scene-panel')
+            drawer.wait_for(state='visible')
+            drawer.get_by_text('场景 · ' + fixtures['scenes'][0]['name'], exact=True).wait_for()
+            drawer.get_by_text('场景已就绪', exact=False).wait_for()
+            drawer.get_by_role('button', name='停止本次传输', exact=True).wait_for(state='hidden', timeout=30000)
+            if 'versionId' in page.url:
+                raise RuntimeError('Scene route still carries a version id')
+            drawer.get_by_text('settings.json', exact=True).wait_for()
             page.screenshot(path=str(runtime.directory / 'real-browser.png'), full_page=True)
             if errors:
                 raise RuntimeError('Browser page errors; inspect isolated browser evidence')
-            return [{'name': 'real login, scene information and corresponding version panel', 'passed': True}]
+            return [{'name': 'real login, scene list and fixed-file detail', 'passed': True}]
         finally:
             browser.close()

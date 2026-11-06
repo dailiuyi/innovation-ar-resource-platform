@@ -4,15 +4,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.ruoyi.ar.module.scene.mapper.SceneMapper">
 
-    <resultMap id="SceneResult" type="com.ruoyi.ar.module.scene.model.SceneDO">
-        <id property="id" column="id" javaType="java.util.UUID" />
-        <result property="name" column="name" />
-        <result property="enabled" column="enabled" />
-        <result property="lockVersion" column="lockVersion" />
-        <result property="createdAt" column="createdAt" />
-        <result property="updatedAt" column="updatedAt" />
-    </resultMap>
-
     <resultMap id="AuditResult" type="com.ruoyi.ar.module.scene.model.AuditVO">
         <constructor>
             <idArg name="id" column="id" javaType="_long" />
@@ -25,33 +16,92 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         </constructor>
     </resultMap>
 
-    <sql id="SceneColumns">
-        id, name, enabled, lock_version as "lockVersion",
-        created_at as "createdAt", updated_at as "updatedAt"
-    </sql>
-
     <sql id="AuditColumns">
         id, scene_id::text as "sceneId", actor_id as "actorId", actor_name as "actorName",
         action, detail::text as detail, created_at as "createdAt"
     </sql>
 
-    <!-- 按子串忽略大小写匹配，% 和 _ 不作为通配符。 -->
-    <sql id="SceneSearch">
-        deleted_at is null and position(lower(#{name}) in lower(name)) > 0
+    <!-- 删除意图优先于上传状态；删除成功后的场景由 deleted_at 隐藏。 -->
+    <sql id="sceneSummary">
+        select s.id::text as id, s.name, s.description, s.enabled, s.lock_version as "lockVersion",
+               case
+                   when d.scene_id is not null then
+                       case when d.failure_reason is null then 'DELETING' else 'DELETE_FAILED' end
+                   when c.uploading &gt; 0 then 'UPLOADING'
+                   when c.failed &gt; 0 then 'FAILED'
+                   when c.total &gt; 0 and c.available = c.total then 'READY'
+                   else 'PENDING'
+               end as "uploadStatus",
+               c.total as "fileCount", c.available as "availableCount", c.failed as "failedCount",
+               c.bytes as "totalBytes", s.created_at as "createdAt", s.updated_at as "updatedAt"
+        from ar_scene s
+        left join ar_scene_deletion d on d.scene_id = s.id and d.completed_at is null
+        cross join lateral (
+            select count(*) as total,
+                   count(*) filter (where f.status = 'AVAILABLE') as available,
+                   count(*) filter (where f.status = 'FAILED') as failed,
+                   count(*) filter (where f.status = 'UPLOADING') as uploading,
+                   coalesce(sum(f.expected_bytes), 0)::bigint as bytes
+            from ar_scene_file f where f.scene_id = s.id
+        ) c
+        where s.deleted_at is null
     </sql>
 
-    <select id="list" resultMap="SceneResult">
-        select <include refid="SceneColumns" /> from ar_scene
-        where <include refid="SceneSearch" />
-        order by created_at desc, id limit #{limit} offset #{offset}
+    <select id="list" resultType="com.ruoyi.ar.module.scene.model.SceneRows$Summary">
+        <include refid="sceneSummary" />
+        and position(lower(#{name}) in lower(s.name)) &gt; 0
+        order by s.created_at desc, s.id limit #{limit} offset #{offset}
     </select>
 
     <select id="count" resultType="long">
-        select count(*) from ar_scene where <include refid="SceneSearch" />
+        select count(*) from ar_scene s
+        where s.deleted_at is null and position(lower(#{name}) in lower(s.name)) &gt; 0
     </select>
 
-    <update id="rename">
-        update ar_scene set name = #{name}, lock_version = lock_version + 1, updated_at = now()
+    <select id="summary" resultType="com.ruoyi.ar.module.scene.model.SceneRows$Summary">
+        <include refid="sceneSummary" />
+        and s.id = cast(#{id} as uuid)
+    </select>
+
+    <select id="summaryByRequestKey" resultType="com.ruoyi.ar.module.scene.model.SceneRows$Summary">
+        <include refid="sceneSummary" />
+        and s.request_key = cast(#{requestKey} as uuid)
+    </select>
+
+    <select id="scene" resultType="com.ruoyi.ar.module.scene.model.SceneRows$Scene">
+        select lock_version as "lockVersion", name, description, enabled, request_key::text as "requestKey"
+        from ar_scene where id = cast(#{id} as uuid) and deleted_at is null
+    </select>
+
+    <select id="sceneExists" resultType="boolean">
+        select exists(select 1 from ar_scene where id = cast(#{id} as uuid) and deleted_at is null)
+    </select>
+
+    <!-- 必须实际获取行锁；不能复用 MyBatis 本地缓存中的查询结果。 -->
+    <select id="lockScene" resultType="string" useCache="false" flushCache="true">
+        select id::text from ar_scene
+        where id = cast(#{id} as uuid) and deleted_at is null for update
+    </select>
+
+    <!-- request_key 冲突时保留既有场景，由 Service 比较请求内容。 -->
+    <insert id="insertScene">
+        insert into ar_scene(id, name, description, enabled, lock_version, request_key)
+        values(cast(#{id} as uuid), #{name}, #{description}, true, 0, cast(#{requestKey} as uuid))
+        on conflict (request_key) do nothing
+    </insert>
+
+    <insert id="insertFiles">
+        insert into ar_scene_file(id, scene_id, relative_path, expected_bytes, expected_sha256, storage_key,
+                                  creator_id, creator_name, last_actor_id, last_actor_name) values
+        <foreach collection="files" item="f" separator=",">
+            (cast(#{f.id} as uuid), cast(#{f.sceneId} as uuid), #{f.path}, #{f.bytes}, #{f.sha256},
+             #{f.id} || '.bin', #{f.actor}, #{f.actorName}, #{f.actor}, #{f.actorName})
+        </foreach>
+    </insert>
+
+    <update id="edit">
+        update ar_scene set name = #{name}, description = #{description},
+            lock_version = lock_version + 1, updated_at = now()
         where deleted_at is null and id = cast(#{id} as uuid) and lock_version = #{version}
     </update>
 
@@ -60,11 +110,10 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         where deleted_at is null and id = cast(#{id} as uuid) and lock_version = #{version}
     </update>
 
-    <!-- 只做软删除，不清理版本文件。 -->
-    <update id="softDelete">
+    <update id="markDeleted">
         update ar_scene set deleted_at = now(), enabled = false,
             lock_version = lock_version + 1, updated_at = now()
-        where id = cast(#{id} as uuid) and deleted_at is null and lock_version = #{version}
+        where id = cast(#{id} as uuid) and deleted_at is null
     </update>
 
     <insert id="audit">

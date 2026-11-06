@@ -4,7 +4,7 @@
 
 当前业务格式是目录固定文件清单（不含描述文件，档位等逻辑由 Unity 客户端决定），接口见 [资源入库闭环](12-resource-ingestion.md)。本页只说明 Python 3.11+ 标准库传输工具和独立的打包扩展接口，不另设业务契约。
 
-场景级下载使用 `scripts/download_scene.py`：按当前发布版本的完整固定清单下载全部文件，分离 `payload/` 与控制区，复用 `artifact_transfer.download` 的 Range 续传逻辑。后台上传按文件重试，已入库文件跳过，不整包重传，也没有分片上传协议。匿名客户端读取不带管理员认证；这些工具是联调参考，不是手机 SDK。
+场景级下载使用 `scripts/download_scene.py`：按场景固定清单下载全部文件，输出 `<output>/<sceneId>/payload/`，控制区与正文分离，复用 `artifact_transfer.download` 的 Range 续传逻辑。上传按文件重试，已入库文件跳过，没有分片上传协议。匿名读取不带管理员认证；这些工具是联调参考，不是手机 SDK。
 
 ## 工具边界
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | 通用打包扩展 | `scripts/artifact_packaging.py` 中的 `PackageCodec` Protocol，无具体编解码实现 | 独立开发工具，当前 4DGS 目录上传/下载不调用它，也不要求 ZIP 或 Unity AssetBundle |
 | 单文件传输 | `scripts/artifact_transfer.py` 的 `download` 与本机测试服务 | 固定 URL、大小与摘要，提供 Range/If-Range 参考；不解析模型 |
-| 场景与版本下载 | `scripts/download_scene.py` | 经匿名目录/详情下载当前发布版本的全部文件，完成校验后才写 `ready.json`；版本变化 409 即停止 |
+| 场景下载 | `scripts/download_scene.py` | 下载固定场景全部文件，完整校验后写 `ready.json`；404 表示不可访问，409 表示存储不可用，无版本切换 |
 
 `PackageCodec.pack`/`unpack` 仅表达可选生产工具的扩展职责，没有实现格式验证、安全解包或容量限制，不应当作已可用功能。通用 `restore-manifest` 命令仍能消费调用者提供的文件清单，但旧管理员清单接口已删除，当前业务完整下载使用 `download_scene.py`。
 
@@ -54,4 +54,4 @@ python scripts/test_download_scene.py
 
 ## 验证边界
 
-单文件本机测试只证明通用传输规则；真实网关、版本变化和样包的既有验证见 [资源入库闭环](12-resource-ingestion.md) 与 [真实样包验收记录](20-4dgs-sample-validation.md)。它们不证明手机解码、可选打包/解包、现场网络容量或数百人承载能力；这些需要对应客户端与真实环境验收。
+单文件本机测试只证明通用传输规则；真实网关和样包验证分别见 [资源入库闭环](12-resource-ingestion.md)、[验证记录](06-validation.md) 与 [历史样包验收](20-4dgs-sample-validation.md)。它们不自动证明当前播放器、手机解码或千人承载能力，需要对应场景和实际链路验证。

@@ -1,7 +1,9 @@
 """Real browser/API checks; only the innovation-ar-resource-platform-infra-check database is modified."""
+import hashlib
 import json
 import secrets
 import time
+import uuid
 from playwright.sync_api import sync_playwright
 from verify_infrastructure import BASE, ENV_FILE, ROOT, command, request, check, checks, wait_ready
 
@@ -34,7 +36,10 @@ try:
     path = '/system/user/' + str(victim[0])
     check('anonymous deletion rejected', api(path, 'DELETE')[0] == 401)
     check('self deletion rejected', api('/system/user/' + str(owner[0]), 'DELETE', token=token)[1].get('code') != 200)
-    scene = api('/api/v1/scenes', 'POST', {'name': 'account-delete-audit'}, victim[3])[1]
+    scene = api('/api/v1/scenes', 'POST', {
+        'requestKey': str(uuid.uuid4()), 'name': 'account-delete-audit', 'description': '',
+        'files': [{'relativePath': 'settings.json', 'bytes': 1, 'sha256': hashlib.sha256(b'x').hexdigest()}]
+    }, victim[3])[1]
     with sync_playwright() as p:
         browser = p.chromium.launch(channel='msedge', headless=True)
         context = browser.new_context()

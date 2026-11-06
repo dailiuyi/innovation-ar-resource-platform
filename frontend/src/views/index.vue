@@ -3,8 +3,8 @@
     <section class="hero" aria-labelledby="home-title">
       <div class="hero-text">
         <p class="eyebrow">4DGS 场景成品管理</p>
-        <h1 id="home-title">把一个 4DGS 成品，发布给客户端</h1>
-        <p class="lead">导入资源目录，校验入库，发布为场景的当前版本。客户端只会读到已发布的版本。</p>
+        <h1 id="home-title">把一个 4DGS 成品，分发给客户端</h1>
+        <p class="lead">新建场景，导入一套固定的模型文件；全部文件校验入库后自动可读。客户端只读已启用且完整的场景。</p>
         <el-button v-if="canOpen(entries[0])" type="primary" size="large" @click="router.push(entries[0].path)">进入场景管理</el-button>
       </div>
       <svg class="hero-art" viewBox="0 0 220 160" role="img" aria-label="一个场景，含多个画质档位和分段模型" focusable="false">
@@ -25,7 +25,7 @@
     </section>
 
     <section aria-labelledby="guide-title">
-      <h2 id="guide-title">四步完成一次发布</h2>
+      <h2 id="guide-title">三步完成一次分发</h2>
       <ol class="flow">
         <li v-for="(step, index) in steps" :key="step.title" class="flow-step" :class="{ 'is-final': index === steps.length - 1 }">
           <div class="flow-badge">
@@ -45,9 +45,9 @@
         <path d="M12 7.5v5.5M12 16.4v.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
       </svg>
       <ul>
-        <li>文件全部入库后，还需要点“发布”，客户端才读得到。</li>
-        <li>版本创建后内容固定；要更新资源，导入新版本再发布。</li>
-        <li>同一场景只有一个当前发布版本。</li>
+        <li>全部文件校验入库后自动可读。</li>
+        <li>一个场景的文件清单固定；要更换资源，请新建场景。</li>
+        <li>停用后客户端立即读不到；删除会清理该场景的全部文件。</li>
       </ul>
     </aside>
 
@@ -71,7 +71,7 @@ import auth from '@/plugins/auth'
 
 const router = useRouter()
 const entries = [
-  { title: '场景管理', path: '/admin/scenes', permission: 'ar:scene:list', description: '新建场景，进入“版本与文件”' },
+  { title: '场景管理', path: '/admin/scenes', permission: 'ar:scene:list', description: '新建场景，导入并校验模型文件' },
   { title: '账号管理', path: '/account/accounts', permission: 'system:user:list', description: '团队账号、状态和密码' },
   { title: '场景操作记录', path: '/admin/audits', permission: 'ar:audit:list', description: '谁在什么时候改了什么' }
 ]
@@ -84,28 +84,22 @@ const visibleEntries = computed(() => entries.filter(canOpen))
 const stroke = 'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"'
 const steps = [
   {
-    title: '选一个场景',
-    description: '一个场景就是一个独立的成品。没有就先新建。',
-    path: '场景管理 → 场景列表',
+    title: '新建一个场景',
+    description: '填写名称和描述。一个场景就是一套固定的成品文件清单，新模型请新建场景。',
+    path: '场景管理 → 新建场景',
     icon: `<g ${stroke}><path d="M24 6 7 15v18l17 9 17-9V15z"/><path d="M7 15l17 9 17-9M24 24v18"/></g>`
   },
   {
-    title: '导入资源目录',
-    description: '选择资源文件夹，目录下全部文件都会上传，确认文件数和大小后开始。',
-    path: '该行的“版本与文件” → 导入资源目录',
+    title: '导入并上传文件',
+    description: '选择资源目录或文件，确认数量和大小后开始。目录保留相对路径，ZIP 原样分发。',
+    path: '新建场景 → 导入资源目录 → 开始上传',
     icon: `<g ${stroke}><path d="M6 14a3 3 0 0 1 3-3h10l4 5h16a3 3 0 0 1 3 3v17a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/><path d="M24 33V22m0 0-5 5m5-5 5 5"/></g>`
   },
   {
-    title: '等文件校验入库',
-    description: '逐个文件上传并校验。中断了就点“继续上传”，已入库的不会重传。',
-    path: '版本详情 → 继续上传',
+    title: '等全部文件入库',
+    description: '逐个文件上传并校验；详情确认全部就绪后自动可读。中断时重新选择原文件继续，已入库的不会重传。',
+    path: '场景详情 → 继续上传 / 刷新',
     icon: `<g ${stroke}><path d="M24 6 9 12v11c0 9 6 16 15 19 9-3 15-10 15-19V12z"/><path d="m17 24 5 5 9-10"/></g>`
-  },
-  {
-    title: '发布版本',
-    description: '全部就绪后点“发布”，客户端从这一刻起读到它。',
-    path: '版本列表 → 发布 / 替换发布',
-    icon: `<g ${stroke}><path d="M24 4c6 5 9.5 12 9.5 20.5V32h-19v-7.5C14.5 16 18 9 24 4z"/><circle cx="24" cy="19.5" r="3.4"/><path d="M14.5 26 8.5 33v6l6-3.2M33.5 26l6 7v6l-6-3.2"/><path d="M20 36.5c0 3 1.7 5.5 4 7.5 2.3-2 4-4.5 4-7.5"/></g>`
   }
 ]
 </script>
@@ -148,8 +142,8 @@ p { margin: 0; color: var(--el-text-color-regular); }
 .art-dots circle { fill: currentColor; opacity: .55; }
 .art-arrow { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-/* 四步流程：横向串联，末步强调 */
-.flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; counter-reset: none; }
+/* 三步流程：横向串联，末步强调 */
+.flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; counter-reset: none; }
 .flow-step {
   position: relative;
   padding: 20px 18px 18px;

@@ -5,8 +5,6 @@
         <constructor>
             <arg column="id" javaType="java.lang.String" />
             <arg column="name" javaType="java.lang.String" />
-            <arg column="version_id" javaType="java.lang.String" />
-            <arg column="version_no" javaType="_int" />
         </constructor>
     </resultMap>
 
@@ -19,41 +17,39 @@
         </constructor>
     </resultMap>
 
-    <!-- 只展示启用、未删除、文件全部就绪且无删除意图的当前发布版本。 -->
+    <!-- 只展示启用、未删除、非空、文件全部就绪且无未完成删除意图的场景。 -->
     <sql id="visible">
-        from ar_scene s join ar_scene_version v on v.id=s.published_version_id
+        from ar_scene s
         where s.enabled and s.deleted_at is null
-          and not exists(select 1 from ar_version_file f where f.version_id=v.id and f.status&lt;&gt;'AVAILABLE')
-          and not exists(select 1 from ar_version_deletion d where d.version_id=v.id and d.completed_at is null)
-    </sql>
-
-    <sql id="columns">
-        s.id::text as id, s.name, v.id::text as version_id, v.version_no
+          and exists(select 1 from ar_scene_file f where f.scene_id = s.id)
+          and not exists(select 1 from ar_scene_file f where f.scene_id = s.id and f.status &lt;&gt; 'AVAILABLE')
+          and not exists(select 1 from ar_scene_deletion d
+                         where d.scene_id = s.id and d.completed_at is null)
     </sql>
 
     <!-- position 保留空串、大小写无关和字面 %/_ 搜索语义。 -->
     <select id="list" resultMap="clientScene">
-        select <include refid="columns" />
+        select s.id::text as id, s.name
         <include refid="visible" />
-        and position(lower(#{name}) in lower(s.name))&gt;0
+        and position(lower(#{name}) in lower(s.name)) &gt; 0
         order by s.name, s.id limit #{limit} offset #{offset}
     </select>
 
     <select id="count" resultType="long">
         select count(*) <include refid="visible" />
-        and position(lower(#{name}) in lower(s.name))&gt;0
+        and position(lower(#{name}) in lower(s.name)) &gt; 0
     </select>
 
     <select id="find" resultMap="clientScene">
-        select <include refid="columns" />
+        select s.id::text as id, s.name
         <include refid="visible" />
-        and s.id=cast(#{sceneId} as uuid)
+        and s.id = cast(#{sceneId} as uuid)
     </select>
 
     <select id="files" resultMap="clientFile">
         select id::text as id, relative_path, expected_bytes, expected_sha256
-        from ar_version_file
-        where version_id=cast(#{versionId} as uuid)
+        from ar_scene_file
+        where scene_id = cast(#{sceneId} as uuid)
         order by relative_path, id
     </select>
 </mapper>

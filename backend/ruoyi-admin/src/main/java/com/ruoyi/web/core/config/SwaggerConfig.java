@@ -56,7 +56,7 @@ public class SwaggerConfig
             // 设置标题
             .title("AR 场景资源管理平台接口文档")
             // 描述
-            .description("场景、场景版本、逐文件入库与匿名客户端读取接口；管理端接口需 Bearer 登录，部分需 ar_admin 角色")
+            .description("场景、固定文件清单、逐文件入库与匿名客户端直接分发接口；管理端接口需 Bearer 登录，并按 ar_admin 角色授权")
             // 作者信息
             .contact(new Contact().name(ruoyiConfig.getName()))
             // 版本

@@ -1,4 +1,4 @@
-"""Ingestion acceptance for 4DGS scene product versions: import, per-file upload and recovery, publish, whole-version delete.
+"""Ingestion acceptance for 4DGS scenes: combined fixed-manifest creation, per-file upload/recovery, lifecycle and deletion.
 
 Two ways to run:
 * External isolated instance (any OS): --base-url, --admin-base-url and --credentials-file drive HTTP (and an optional
@@ -6,7 +6,8 @@ Two ways to run:
 * Windows runtime (review.py, harness): a new private PostgreSQL 17 / Redis / Spring Boot / Vite directory, with
   database and private-storage fault injection on top of the same HTTP checks. Never uses the running Demo database.
 
-Synthetic model bytes are not renderable 4DGS content; this verifies the management and transfer contract only.
+Synthetic model bytes are not renderable 4DGS content; this verifies the distribution contract only: fixed file
+manifest, authenticated uploads, range downloads, anonymous visibility for complete enabled scenes, and deletion.
 """
 import argparse
 import copy
@@ -38,7 +39,7 @@ def sha256(data):
 
 
 def synthetic_package(label, standard_segments=2):
-    """A small valid version: a settings file plus model files in nested directories.
+    """A small fixed scene file set: settings plus synthetic model files in nested directories.
 
     Returns {relativePath: bytes}. The model files are synthetic text and are not renderable."""
     files = {'settings.json': json.dumps({'synthetic': label}).encode() + b'\n'}
@@ -48,9 +49,14 @@ def synthetic_package(label, standard_segments=2):
     return files
 
 
-def version_request(files, description='', request_key=None):
-    return {'requestKey': request_key or str(uuid.uuid4()), 'description': description,
-            'files': [{'relativePath': path, 'bytes': len(data), 'sha256': sha256(data)} for path, data in sorted(files.items())]}
+def manifest(files):
+    return [{'relativePath': path, 'bytes': len(data), 'sha256': sha256(data)}
+            for path, data in sorted(files.items())]
+
+
+def scene_request(name, files, description='', request_key=None):
+    return {'requestKey': request_key or str(uuid.uuid4()), 'name': name, 'description': description,
+            'files': manifest(files)}
 
 
 class Session:
@@ -121,18 +127,18 @@ def upload_lock_checks(s, check):
     """Different files must upload concurrently even when they shared a bucket of the former striped lock."""
     count = 257
     files = {f'models/standard/{i:03d}.c.ply': f'lock isolation {i}\n'.encode() * 16 for i in range(count)}
-    config = s.api('/api/v1/scene-versions/config')[1]
-    check('upload limits fit the lock isolation fixture', config.get('versionMaxFiles', 0) >= count
-          and config.get('versionMaxBytes', 0) >= sum(map(len, files.values())) and config.get('maxBytes', 0) >= max(map(len, files.values())))
-    scene = s.api('/api/v1/scenes', 'POST', {'name': 'upload-lock-isolation'})[1]
-    status, version = s.api(f'/api/v1/scenes/{scene["id"]}/versions', 'POST', version_request(files))
-    check('lock isolation version created', status == 201)
-    ids = {f['relativePath']: f['fileId'] for f in version['files']}
+    config = s.api('/api/v1/scenes/config')[1]
+    check('upload limits fit the lock isolation fixture', config.get('sceneMaxFiles', 0) >= count
+          and config.get('sceneMaxBytes', 0) >= sum(map(len, files.values()))
+          and config.get('maxBytes', 0) >= max(map(len, files.values())))
+    status, scene = s.api('/api/v1/scenes', 'POST', scene_request('upload-lock-isolation-' + uuid.uuid4().hex[:8], files))
+    check('lock isolation scene created', status == 201)
+    ids = {f['relativePath']: f['fileId'] for f in scene['files']}
     groups = {}
     for path, file_id in sorted(ids.items()):
         groups.setdefault(former_lock_bucket(file_id), []).append(path)
     held, other = next(group for group in groups.values() if len(group) >= 2)[:2]
-    base = '/api/v1/scene-versions/' + version['id']
+    base = '/api/v1/scenes/' + scene['id']
     def file_path(path): return f'{base}/files/{ids[path]}'
     def put(path): return s.api(file_path(path) + '/content', 'PUT', files[path])
     data = files[held]
@@ -156,208 +162,318 @@ def upload_lock_checks(s, check):
     attempts = s.api(file_path(held))[1]['attempts']
     status, body = put(held)
     check('finished upload leaves no in-flight marker', status == 200 and body.get('status') == 'AVAILABLE' and body['attempts'] == attempts)
-    return {'versionId': version['id']}
+    return {'sceneId': scene['id']}
 
 
 def scenario(s, check):
-    """Product-version scenario over HTTP only. Returns identifiers the caller may inspect or reuse."""
-    anonymous = s.api
-    config_status, config = s.api('/api/v1/scene-versions/config')
-    check('administrator can read upload limits', config_status == 200 and all(
-        isinstance(config.get(k), int) and config[k] > 0 for k in ('maxBytes', 'versionMaxFiles', 'versionMaxBytes')))
-    check('anonymous version config rejected', anonymous('/api/v1/scene-versions/config', auth=False)[0] == 401)
-    check('anonymous publish rejected', anonymous('/api/v1/scene-versions/' + str(uuid.uuid4()) + '/publish', 'POST',
-                                                  {'expectedSceneVersion': 0}, auth=False)[0] == 401)
-    check('anonymous file content rejected', s.raw('/api/v1/scene-versions/%s/files/%s/content' % (uuid.uuid4(), uuid.uuid4()),
+    """Scene lifecycle over HTTP only. Returns identifiers the caller may inspect or reuse."""
+    anonymous = lambda path, method='GET', body=None, headers=None: s.api(path, method, body, auth=False, headers=headers)
+    config_status, config = s.api('/api/v1/scenes/config')
+    check('administrator can read scene upload limits', config_status == 200 and all(
+        isinstance(config.get(key), int) and config[key] > 0 for key in ('maxBytes', 'sceneMaxFiles', 'sceneMaxBytes')))
+    check('anonymous scene config rejected', anonymous('/api/v1/scenes/config')[0] == 401)
+    check('anonymous scene create rejected', anonymous('/api/v1/scenes', 'POST',
+                                                       scene_request('anonymous', {'settings.json': b'x'}))[0] == 401)
+    check('anonymous file content rejected', s.raw('/api/v1/scenes/%s/files/%s/content' % (uuid.uuid4(), uuid.uuid4()),
                                                    auth=False)[0] == 401)
 
-    scene = s.api('/api/v1/scenes', 'POST', {'name': 'ingestion-acceptance'})[1]
-    scene_id = scene['id']
-    versions_path = f'/api/v1/scenes/{scene_id}/versions'
-    scene_lock = lambda: s.api('/api/v1/scenes/' + scene_id)[1]['lockVersion']
-    files1 = synthetic_package('v1')
-    status, missing = s.api(f'/api/v1/scenes/{uuid.uuid4()}/versions', 'POST', version_request(files1))
-    check('version on missing scene rejected with the shared error format',
-          status == 404 and missing.get('code') == 'AR_404' and bool(missing.get('traceId')))
-    gone = s.api('/api/v1/scenes', 'POST', {'name': 'deleted-scene'})[1]
-    check('deleted scene delete', s.api('/api/v1/scenes/%s?expectedVersion=0' % gone['id'], 'DELETE')[0] == 204)
-    check('version on deleted scene rejected', s.api('/api/v1/scenes/%s/versions' % gone['id'], 'POST',
-                                                     version_request(files1))[0] == 404)
+    name = 'ingestion-' + uuid.uuid4().hex[:10]
+    files1 = synthetic_package('main')
 
-    def rejected(label, expected_status, mutate):
-        files = copy.deepcopy(files1)
-        body_override = mutate(files)
-        body = version_request(files)
-        body.update(body_override or {})
-        status, error = s.api(versions_path, 'POST', body)
+    def reject(label, expected_status, body):
+        status, error = s.api('/api/v1/scenes', 'POST', body)
         check(f'{label} returns {expected_status}', status == expected_status and bool(error.get('message')))
 
-    def traversal(files):
-        files['../escape.bin'] = files.pop('models/high/00.c.ply')
-    def absolute(files):
-        files['/etc/escape.bin'] = files.pop('models/high/00.c.ply')
+    def traversal(files): files['../escape.bin'] = files.pop('models/high/00.c.ply')
+    def absolute(files): files['/etc/escape.bin'] = files.pop('models/high/00.c.ply')
     def duplicate_file(files):
-        entry = version_request(files)['files'][0]
-        return {'files': version_request(files)['files'] + [entry]}
-    def case_duplicate(files):
-        files['Settings.json'] = files['settings.json']
-    def no_files(files):
-        return {'files': []}
+        body = scene_request(name, files)
+        body['files'].append(dict(body['files'][0]))
+        return body
+    def case_duplicate(files): files['Settings.json'] = files['settings.json']
     for label, mutate in [('path traversal', traversal), ('absolute path', absolute),
-                          ('same path registered twice', duplicate_file), ('case-insensitive duplicate path', case_duplicate),
-                          ('empty file list', no_files)]:
-        rejected(label, 400, mutate)
+                          ('case-insensitive duplicate path', case_duplicate)]:
+        changed_files = copy.deepcopy(files1)
+        mutate(changed_files)
+        reject(label, 400, scene_request(name, changed_files))
+    reject('same path registered twice', 400, duplicate_file(copy.deepcopy(files1)))
+    reject('empty file list', 400, {**scene_request(name, files1), 'files': []})
+    reject('blank scene name', 400, {**scene_request(name, files1), 'name': '   '})
+    reject('scene name longer than 200', 400, {**scene_request(name, files1), 'name': 'x' * 201})
+    reject('description longer than 2000', 400, {**scene_request(name, files1), 'description': 'x' * 2001})
+    oversize = scene_request(name, files1)
+    oversize['files'][0]['bytes'] = config['maxBytes'] + 1
+    reject('file larger than the single-file limit', 413, oversize)
+    if config['sceneMaxFiles'] <= 5000:
+        too_many = {'files': [{'relativePath': f'm/{index}.c.ply', 'bytes': 1, 'sha256': sha256(b'x')}
+                              for index in range(config['sceneMaxFiles'] + 1)]}
+        reject('more files than the per-scene limit', 413, {**scene_request(name, files1), **too_many})
+    total_count = config['sceneMaxBytes'] // config['maxBytes'] + 1
+    if total_count <= config['sceneMaxFiles']:
+        remaining = config['sceneMaxBytes'] + 1
+        entries = []
+        for index in range(total_count):
+            size = min(config['maxBytes'], remaining)
+            entries.append({'relativePath': f'total/{index}.bin', 'bytes': size, 'sha256': sha256(b'x')})
+            remaining -= size
+        reject('total bytes above the per-scene limit', 413, {**scene_request(name, files1), 'files': entries})
+    check('rejected requests created no scene', s.api('/api/v1/scenes?name=' + urllib.parse.quote(name))[1]['total'] == 0)
 
-    def oversize(files):
-        body = version_request(files)
-        body['files'][0]['bytes'] = config['maxBytes'] + 1
-        return {'files': body['files']}
-    rejected('file larger than the single-file limit', 413, oversize)
-
-    def too_many(files):
-        count = config['versionMaxFiles']
-        listed = [{'relativePath': f'm/{i}.c.ply', 'bytes': 1, 'sha256': sha256(b'x')} for i in range(count)]
-        listed.append({'relativePath': 'settings.json', 'bytes': 1, 'sha256': sha256(b'x')})
-        return {'files': listed}
-    if config['versionMaxFiles'] <= 5000:
-        rejected('more files than the per-version limit', 413, too_many)
-    check('rejected requests created no version', s.api(versions_path)[1]['total'] == 0)
-
-    request1 = version_request(files1, 'first version')
-    status, v1 = s.api(versions_path, 'POST', request1)
-    check('create version returns 201 with detail', status == 201 and v1['sceneId'] == scene_id and v1['versionNo'] == 1)
-    check('new version is PENDING with every file registered', v1['uploadStatus'] == 'PENDING' and v1['fileCount'] == len(files1)
-          and v1['availableCount'] == 0 and all(f['status'] == 'PENDING' and f['attempts'] == 0 for f in v1['files']))
-    check('stored file set equals the request and the detail has no descriptor',
-          sorted(f['relativePath'] for f in v1['files']) == sorted(files1) and 'descriptor' not in v1 and not v1['published'])
-    v1_id, v1_path = v1['id'], '/api/v1/scene-versions/' + v1['id']
-    status, retry = s.api(versions_path, 'POST', request1)
-    check('identical request-key retry returns the original version', status == 200 and retry['id'] == v1_id
-          and s.api(versions_path)[1]['total'] == 1)
+    request1 = scene_request(name, files1, 'first scene')
+    status, scene = s.api('/api/v1/scenes', 'POST', request1)
+    check('combined create returns 201 with detail', status == 201 and isinstance(scene.get('id'), str)
+          and scene.get('name') == name and scene.get('description') == 'first scene'
+          and isinstance(scene.get('files'), list))
+    scene_id, scene_path = scene['id'], '/api/v1/scenes/' + scene['id']
+    check('new scene is enabled and PENDING with every file registered',
+          scene.get('enabled') is True and scene.get('uploadStatus') == 'PENDING' and scene.get('fileCount') == len(files1)
+          and scene.get('availableCount') == 0 and all(file.get('status') == 'PENDING' and file.get('attempts') == 0
+                                                       for file in scene['files']))
+    check('created detail carries the fixed file set and no version fields',
+          sorted(file['relativePath'] for file in scene['files']) == sorted(files1)
+          and not any(key in scene for key in ('versionId', 'versionNo', 'published')))
+    status, retry = s.api('/api/v1/scenes', 'POST', request1)
+    check('identical request-key retry returns the original scene', status == 200 and retry.get('id') == scene_id
+          and s.api('/api/v1/scenes?name=' + urllib.parse.quote(name))[1]['total'] == 1)
     changed = copy.deepcopy(request1)
     changed['files'][0]['sha256'] = sha256(b'different')
-    check('same request key with a different digest conflicts', s.api(versions_path, 'POST', changed)[0] == 409)
+    check('same request key with a different digest conflicts', s.api('/api/v1/scenes', 'POST', changed)[0] == 409)
     check('same request key with a different description conflicts',
-          s.api(versions_path, 'POST', {**request1, 'description': 'other'})[0] == 409)
-    listed = s.api(versions_path)[1]
-    check('version list carries the scene revision and no published pointer yet',
-          isinstance(listed['sceneLockVersion'], int) and 'published' not in listed and listed['items'][0]['uploadStatus'] == 'PENDING')
-    check('incomplete version cannot publish', s.api(v1_path + '/publish', 'POST', {'expectedSceneVersion': scene_lock()})[0] == 400)
-    edited = s.api(v1_path, 'PUT', {'description': 'edited description', 'expectedVersion': v1['lockVersion']})
-    check('description can be edited', edited[0] == 200 and edited[1]['description'] == 'edited description'
-          and sorted(f['relativePath'] for f in edited[1]['files']) == sorted(files1))
-    check('stale description edit conflicts', s.api(v1_path, 'PUT', {'description': 'stale', 'expectedVersion': v1['lockVersion']})[0] == 409)
+          s.api('/api/v1/scenes', 'POST', {**request1, 'description': 'other'})[0] == 409)
+    check('same request key with a different name conflicts',
+          s.api('/api/v1/scenes', 'POST', {**request1, 'name': name + '-other'})[0] == 409)
+    listed = s.api('/api/v1/scenes?name=' + urllib.parse.quote(name))[1]
+    check('scene list exposes summary fields and no publication pointer',
+          listed['total'] == 1 and isinstance(listed['items'][0].get('lockVersion'), int)
+          and listed['items'][0]['uploadStatus'] == 'PENDING' and 'published' not in listed['items'][0])
 
-    ids = {f['relativePath']: f['fileId'] for f in v1['files']}
-    def content(version_path, file_id): return f'{version_path}/files/{file_id}/content'
-    def upload(path, data): return s.api(content(v1_path, ids[path]), 'PUT', data)
+    status, edited = s.api(scene_path, 'PUT', {'name': name + '-edited', 'description': 'edited description',
+                                               'expectedVersion': scene['lockVersion']})
+    check('name and description can be edited', status == 200 and edited.get('name') == name + '-edited'
+          and edited.get('description') == 'edited description'
+          and sorted(file['relativePath'] for file in edited['files']) == sorted(files1))
+    check('stale metadata edit conflicts', s.api(scene_path, 'PUT', {'name': name, 'description': 'stale',
+                                                                     'expectedVersion': scene['lockVersion']})[0] == 409)
+    scene = edited
+    ids = {file['relativePath']: file['fileId'] for file in scene['files']}
+    def content(file_id): return f'{scene_path}/files/{file_id}/content'
+    def upload(path, data): return s.api(content(ids[path]), 'PUT', data)
+    check('incomplete scene is invisible to anonymous clients',
+          scene_id not in {item['id'] for item in anonymous('/api/v1/client/scenes')[1].get('items', [])}
+          and anonymous('/api/v1/client/scenes/' + scene_id)[0] == 404
+          and anonymous(f'/api/v1/client/scenes/{scene_id}/files/{ids["settings.json"]}/content/settings.json')[0] == 404)
+
     target = 'models/standard/00.c.ply'
     good = files1[target]
-    bad = bytes(b ^ 1 for b in good)
+    bad = bytes(byte ^ 1 for byte in good)
     check('digest mismatch with the declared size returns 422', upload(target, bad)[0] == 422)
-    file_status = s.api(f'{v1_path}/files/{ids[target]}')[1]
+    file_status = s.api(f'{scene_path}/files/{ids[target]}')[1]
     check('digest mismatch is persisted as FAILED with a reason and one attempt',
-          file_status['status'] == 'FAILED' and 'SHA256' in file_status['failureReason'] and file_status['attempts'] == 1)
-    check('failed file makes the version FAILED', s.api(v1_path)[1]['uploadStatus'] == 'FAILED' and s.api(v1_path)[1]['failedCount'] == 1)
+          file_status.get('status') == 'FAILED' and 'SHA256' in file_status.get('failureReason', '')
+          and file_status.get('attempts') == 1)
+    check('failed file makes the scene FAILED', s.api(scene_path)[1].get('uploadStatus') == 'FAILED'
+          and s.api(scene_path)[1].get('failedCount') == 1)
     check('actual size beyond the declaration returns 422', upload(target, good + b'x')[0] == 422)
-    check('wrong version cannot reach the file', s.api(content('/api/v1/scene-versions/' + str(uuid.uuid4()), ids[target]), 'PUT', good)[0] == 404)
-    check('anonymous upload rejected', s.api(content(v1_path, ids[target]), 'PUT', good, auth=False)[0] == 401)
+    check('another scene cannot reach the file', s.api(f'/api/v1/scenes/{uuid.uuid4()}/files/{ids[target]}/content',
+                                                       'PUT', good)[0] == 404)
+    check('unknown file in the scene is rejected', s.api(f'{scene_path}/files/{uuid.uuid4()}/content', 'PUT', good)[0] == 404)
+    check('anonymous upload rejected', s.api(content(ids[target]), 'PUT', good, auth=False)[0] == 401)
     status, uploaded = upload(target, good)
-    check('failed file is retried completely and becomes AVAILABLE', status == 200 and uploaded['status'] == 'AVAILABLE'
-          and uploaded['attempts'] == 3 and uploaded['failureReason'] is None)
+    check('failed file is retried completely and becomes AVAILABLE', status == 200 and uploaded.get('status') == 'AVAILABLE'
+          and uploaded.get('attempts') == 3 and uploaded.get('failureReason') is None)
     first_attempts = {target: uploaded['attempts']}
-    check('available file upload is idempotent and does not overwrite', upload(target, good)[1]['status'] == 'AVAILABLE')
+    status, repeated = upload(target, good)
+    check('available file upload is idempotent and does not overwrite',
+          status == 200 and repeated.get('status') == 'AVAILABLE' and repeated.get('attempts') == first_attempts[target])
     for path in sorted(files1):
         if path != target:
-            first_attempts[path] = upload(path, files1[path])[1]['attempts']
-            check('upload ' + path, s.api(f'{v1_path}/files/{ids[path]}')[1]['status'] == 'AVAILABLE')
-    ready = s.api(v1_path)[1]
-    check('all files AVAILABLE makes the version READY', ready['uploadStatus'] == 'READY' and ready['availableCount'] == len(files1)
-          and all(f['status'] == 'AVAILABLE' for f in ready['files']))
-    check('completed files are not attempted again', all(f['attempts'] == first_attempts[f['relativePath']] for f in ready['files']))
+            status, state = upload(path, files1[path])
+            check('upload ' + path, status == 200 and state.get('status') == 'AVAILABLE')
+            first_attempts[path] = state['attempts']
+    ready = s.api(scene_path)[1]
+    check('all files AVAILABLE makes the scene READY', ready.get('uploadStatus') == 'READY'
+          and ready.get('availableCount') == len(files1) and ready.get('failedCount') == 0
+          and all(file.get('status') == 'AVAILABLE' for file in ready['files']))
+    check('completed files are not attempted again',
+          all(file['attempts'] == first_attempts[file['relativePath']] for file in ready['files']))
 
     sample_path = 'models/high/00.c.ply'
     sample = files1[sample_path]
-    status, headers, body = s.raw(content(v1_path, ids[sample_path]))
+    status, headers, body = s.raw(content(ids[sample_path]))
     check('administrator downloads exact bytes with the SHA256 strong ETag', status == 200 and body == sample
           and headers.get('ETag') == '"' + sha256(sample) + '"')
-    status, headers, body = s.raw(content(v1_path, ids[sample_path]), headers={'Range': 'bytes=0-3'})
+    status, headers, body = s.raw(content(ids[sample_path]), headers={'Range': 'bytes=0-3'})
     check('administrator Range 0-3 returns 206 with exact bytes', status == 206 and body == sample[:4]
           and headers.get('Content-Range') == f'bytes 0-3/{len(sample)}')
-    status, headers, body = s.raw(content(v1_path, ids[sample_path]), headers={'Range': 'bytes=2-'})
+    status, headers, body = s.raw(content(ids[sample_path]), headers={'Range': 'bytes=2-'})
     check('administrator open-ended Range returns the tail', status == 206 and body == sample[2:])
-    check('administrator out-of-range request returns 416', s.raw(content(v1_path, ids[sample_path]),
-                                                                   headers={'Range': 'bytes=99999999-'})[0] == 416)
-    status, headers, body = s.raw(content(v1_path, ids[sample_path]), headers={'Range': 'bytes=0-3', 'If-Range': '"' + '0' * 64 + '"'})
+    check('administrator out-of-range request returns 416',
+          s.raw(content(ids[sample_path]), headers={'Range': 'bytes=99999999-'})[0] == 416)
+    status, headers, body = s.raw(content(ids[sample_path]), headers={'Range': 'bytes=0-3',
+                                                                      'If-Range': '"' + '0' * 64 + '"'})
     check('mismatched If-Range returns the full file', status == 200 and body == sample)
-    status, headers, body = s.raw(content(v1_path, ids[sample_path]), 'HEAD')
-    check('HEAD returns the length without a body', status == 200 and int(headers['Content-Length']) == len(sample) and body == b'')
-    check('anonymous content download rejected', s.raw(content(v1_path, ids[sample_path]), auth=False)[0] == 401)
+    status, headers, body = s.raw(content(ids[sample_path]), 'HEAD')
+    check('HEAD returns the length without a body', status == 200 and int(headers['Content-Length']) == len(sample)
+          and body == b'')
+    check('anonymous administrator download rejected', s.raw(content(ids[sample_path]), auth=False)[0] == 401)
 
-    before = scene_lock()
-    check('stale scene revision cannot publish', s.api(v1_path + '/publish', 'POST', {'expectedSceneVersion': before + 1})[0] == 409
-          and not s.api(v1_path)[1]['published'])
-    status, published = s.api(v1_path + '/publish', 'POST', {'expectedSceneVersion': before})
-    check('publish switches the single pointer', status == 200 and published['published'] is True and scene_lock() == before + 1)
-    status, again = s.api(v1_path + '/publish', 'POST', {'expectedSceneVersion': before + 99})
-    check('repeat publish is idempotent without a revision check or write', status == 200 and again['published'] is True
-          and scene_lock() == before + 1)
-    listed = s.api(versions_path)[1]
-    check('exactly one published version', listed['published']['id'] == v1_id and sum(1 for x in listed['items'] if x['published']) == 1)
-    check('published version cannot be deleted', s.api(v1_path, 'DELETE')[0] == 409)
-    check('published description stays editable', s.api(v1_path, 'PUT', {'description': 'published note',
-          'expectedVersion': s.api(v1_path)[1]['lockVersion']})[0] == 200)
+    # A second scene is disabled while its upload is still incomplete; completion must not re-enable it.
+    files2 = {'settings.json': b'{"disable":true}\n', 'models/only.ply': b'disabled while uploading\n' * 9}
+    status, scene2 = s.api('/api/v1/scenes', 'POST', scene_request('disable-' + uuid.uuid4().hex[:8], files2,
+                                                                   'disabled during upload'))
+    check('disable-while-uploading scene created', status == 201)
+    ids2 = {file['relativePath']: file['fileId'] for file in scene2['files']}
+    paths2 = sorted(files2)
+    def upload2(path): return s.api(f'/api/v1/scenes/{scene2["id"]}/files/{ids2[path]}/content', 'PUT', files2[path])
+    check('first file of the second scene is available', upload2(paths2[0])[1].get('status') == 'AVAILABLE')
+    status, disabled = s.api(f'/api/v1/scenes/{scene2["id"]}/enabled', 'PUT',
+                             {'enabled': False, 'expectedVersion': scene2['lockVersion'], 'reason': '暂停上传'})
+    check('scene can be disabled while an upload is incomplete', status == 200 and disabled.get('enabled') is False)
+    check('remaining file uploads on a disabled scene', upload2(paths2[1])[1].get('status') == 'AVAILABLE')
+    finished2 = s.api('/api/v1/scenes/' + scene2['id'])[1]
+    check('upload completion keeps the scene disabled and READY', finished2.get('uploadStatus') == 'READY'
+          and finished2.get('enabled') is False)
+    check('admin can read a ready file of a disabled scene',
+          s.raw(f'/api/v1/scenes/{scene2["id"]}/files/{ids2[paths2[1]]}/content')[0] == 200)
 
-    files2 = synthetic_package('v2')
-    request2 = version_request(files2, 'second version')
-    v2 = s.api(versions_path, 'POST', request2)[1]
-    v2_path = '/api/v1/scene-versions/' + v2['id']
-    check('second version gets the next number', v2['versionNo'] == 2)
-    for entry in v2['files']:
-        s.api(content(v2_path, entry['fileId']), 'PUT', files2[entry['relativePath']])
-    check('second version READY', s.api(v2_path)[1]['uploadStatus'] == 'READY')
-    check('replacement publish', s.api(v2_path + '/publish', 'POST', {'expectedSceneVersion': scene_lock()})[0] == 200
-          and s.api(versions_path)[1]['published']['id'] == v2['id'] and not s.api(v1_path)[1]['published'])
-    check('current version cannot be deleted', s.api(v2_path, 'DELETE')[0] == 409)
-    check('previous version is still viewable', s.api(v1_path)[0] == 200 and s.raw(content(v1_path, ids[sample_path]))[2] == sample)
-    check('previous version delete', s.api(v1_path, 'DELETE')[0] == 204)
-    check('repeat delete is idempotent', s.api(v1_path, 'DELETE')[0] == 204)
-    check('deleted version is gone', s.api(v1_path)[0] == 404 and s.raw(content(v1_path, ids[sample_path]))[0] == 404
-          and s.api(versions_path)[1]['total'] == 1)
-    check('late create retry after delete returns 410', s.api(versions_path, 'POST', request1)[0] == 410
-          and s.api(versions_path)[1]['total'] == 1)
-    check('unknown version id delete returns 404', s.api('/api/v1/scene-versions/' + str(uuid.uuid4()), 'DELETE')[0] == 404)
+    client_items = anonymous('/api/v1/client/scenes')[1]
+    check('anonymous list includes the complete enabled scene',
+          {item['id']: item['name'] for item in client_items['items']}[scene_id] == name + '-edited')
+    check('anonymous list excludes the complete disabled scene',
+          scene2['id'] not in {item['id'] for item in client_items['items']})
+    check('anonymous detail of the disabled scene is hidden', anonymous('/api/v1/client/scenes/' + scene2['id'])[0] == 404)
+    check('anonymous file of the disabled scene is hidden',
+          anonymous(f'/api/v1/client/scenes/{scene2["id"]}/files/{ids2[paths2[1]]}/content/{Path(paths2[1]).name}')[0] == 404)
+    client_detail = anonymous('/api/v1/client/scenes/' + scene_id)
+    check('anonymous detail lists the fixed files and totals', client_detail[0] == 200
+          and client_detail[1].get('sceneId') == scene_id and client_detail[1].get('fileCount') == len(files1)
+          and client_detail[1].get('totalBytes') == sum(map(len, files1.values()))
+          and sorted(file['relativePath'] for file in client_detail[1].get('files', [])) == sorted(files1)
+          and not any(key in client_detail[1] for key in ('versionId', 'versionNo', 'published')))
+    anonymous_file = next(file for file in client_detail[1]['files'] if file['relativePath'] == sample_path)
+    download = anonymous_file['downloadPath']
+    check('anonymous download path points at the scene file route',
+          download.startswith(f'/api/v1/client/scenes/{scene_id}/files/{ids[sample_path]}/content/'))
+    status, headers, body = s.raw(download, auth=False)
+    check('anonymous download returns exact bytes without store caching', status == 200 and body == sample
+          and headers.get('ETag') == '"' + sha256(sample) + '"' and 'no-store' in headers.get('Cache-Control', '')
+          and bool(headers.get('Content-Type')))
+    status, headers, body = s.raw(download, auth=False, headers={'Range': 'bytes=0-3'})
+    check('anonymous Range 0-3 returns 206', status == 206 and body == sample[:4]
+          and headers.get('Content-Range') == f'bytes 0-3/{len(sample)}')
+    status, headers, body = s.raw(download, auth=False, headers={'Range': 'bytes=0-3', 'If-Range': '"' + '0' * 64 + '"'})
+    check('anonymous mismatched If-Range returns the full file', status == 200 and body == sample)
+    status, headers, body = s.raw(download, auth=False, method='HEAD')
+    check('anonymous HEAD returns the length without a body', status == 200
+          and int(headers['Content-Length']) == len(sample) and body == b'')
+    wrong = f'/api/v1/client/scenes/{scene_id}/files/{ids2[paths2[0]]}/content/{Path(paths2[0]).name}'
+    check('anonymous file from another scene is hidden', anonymous(wrong)[0] == 404)
+
+    status, enabled2 = s.api(f'/api/v1/scenes/{scene2["id"]}/enabled', 'PUT',
+                             {'enabled': True, 'expectedVersion': finished2['lockVersion'], 'reason': '完成上传后启用'})
+    check('re-enabling a complete scene exposes it to anonymous clients', status == 200 and enabled2.get('enabled') is True
+          and scene2['id'] in {item['id'] for item in anonymous('/api/v1/client/scenes')[1]['items']})
+
+    # Deleting an actively uploading scene is refused; the held request can finish before deletion.
+    files3 = synthetic_package('active-delete')
+    request3 = scene_request('active-delete-' + uuid.uuid4().hex[:8], files3)
+    status, scene3 = s.api('/api/v1/scenes', 'POST', request3)
+    check('active-delete scene created', status == 201)
+    ids3 = {file['relativePath']: file['fileId'] for file in scene3['files']}
+    held_path = 'models/standard/00.c.ply'
+    sock = held_upload(s, f'/api/v1/scenes/{scene3["id"]}/files/{ids3[held_path]}/content', files3[held_path],
+                       len(files3[held_path]) - 1)
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline and s.api(f'/api/v1/scenes/{scene3["id"]}/files/{ids3[held_path]}')[1].get('status') != 'UPLOADING':
+            time.sleep(0.05)
+        check('active upload is in flight', s.api(f'/api/v1/scenes/{scene3["id"]}/files/{ids3[held_path]}')[1].get('status') == 'UPLOADING')
+        path3 = '/api/v1/scenes/' + scene3['id']
+        active3 = s.api(path3)[1]
+        check('deletion during an active upload is refused',
+              s.api(f'{path3}?expectedVersion={active3["lockVersion"]}', 'DELETE')[0] == 409)
+        check('held upload completes', finish_held(sock, files3[held_path][-1:]) == 200)
+    finally:
+        sock.close()
+    for path, data in files3.items():
+        if path != held_path:
+            s.api(f'{path3}/files/{ids3[path]}/content', 'PUT', data)
+    current3 = s.api(path3)[1]
+    check('active-delete scene is READY before deletion', current3.get('uploadStatus') == 'READY')
+    check('anonymous deletion rejected', s.api(f'{path3}?expectedVersion={current3["lockVersion"]}', 'DELETE', auth=False)[0] == 401)
+    check('missing deletion revision rejected', s.api(path3, 'DELETE')[0] == 400)
+    check('stale deletion revision rejected',
+          s.api(f'{path3}?expectedVersion={current3["lockVersion"] + 99}', 'DELETE')[0] == 409)
+    check('unknown scene deletion returns 404',
+          s.api(f'/api/v1/scenes/{uuid.uuid4()}?expectedVersion=0', 'DELETE')[0] == 404)
+    check('confirmed scene deletion returns 204',
+          s.api(f'{path3}?expectedVersion={current3["lockVersion"]}', 'DELETE')[0] == 204)
+    check('repeat deletion is idempotent without a revision check',
+          s.api(f'{path3}?expectedVersion=0', 'DELETE')[0] == 204)
+    check('deleted scene detail is hidden', s.api(path3)[0] == 404)
+    check('deleted scene is excluded from the name list',
+          s.api('/api/v1/scenes?name=' + urllib.parse.quote(scene3['name']))[1]['total'] == 0)
+    check('deleted scene cannot be edited',
+          s.api(path3, 'PUT', {'name': 'after-delete', 'description': '', 'expectedVersion': 0})[0] == 404)
+    check('deleted scene cannot be enabled',
+          s.api(path3 + '/enabled', 'PUT', {'enabled': True, 'expectedVersion': 0, 'reason': 'test'})[0] == 404)
+    check('deleted scene file is not readable', s.api(f'{path3}/files/{ids3[held_path]}')[0] == 404)
+    check('deleted scene upload is not accepted',
+          s.api(f'{path3}/files/{ids3[held_path]}/content', 'PUT', files3[held_path])[0] == 404)
+    check('late create retry after deletion returns 410',
+          s.api('/api/v1/scenes', 'POST', request3)[0] == 410)
 
     audits = s.api('/api/v1/audits?limit=100')[1]['items']
-    actions = [(a['action'], a['detail']) for a in audits if a['sceneId'] == scene_id]
-    check('version lifecycle audits are written', {'VERSION_CREATE', 'VERSION_EDIT', 'VERSION_PUBLISH', 'VERSION_DELETE_REQUEST',
-                                                   'VERSION_DELETE'} <= {name for name, _ in actions})
-    check('repeat publish wrote no second audit', sum(1 for name, detail in actions
-                                                      if name == 'VERSION_PUBLISH' and json.loads(detail).get('toVersionId') == v1_id) == 1)
+    actions = [(item['action'], item['actorName'], item['detail']) for item in audits if item['sceneId'] == scene3['id']]
+    check('scene lifecycle audits are written', {'CREATE', 'SCENE_DELETE_REQUEST', 'SCENE_DELETE'}
+          <= {action for action, _, _ in actions})
+    current_actor = s.api('/getInfo')[1]['user']['userName']
+    check('deletion audit records the authenticated actor', all(actor == current_actor for _, actor, _ in actions))
+    details = []
+    for _, _, raw_detail in actions:
+        details.append(json.loads(raw_detail) if isinstance(raw_detail, str) else raw_detail)
+    check('new scene audit details do not carry a version id',
+          all('versionId' not in (detail or {}) for detail in details))
+
+    files4 = {'settings.json': b'{"race":true}\n', 'models/00.ply': b'race\n'}
+    status, scene4 = s.api('/api/v1/scenes', 'POST', scene_request('delete-race-' + uuid.uuid4().hex[:8], files4))
+    check('concurrent deletion scene created', status == 201)
+    race_path = '/api/v1/scenes/' + scene4['id'] + '?expectedVersion=0'
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(2) as pool:
+        outcomes = list(pool.map(lambda _: s.api(race_path, 'DELETE')[0], range(2)))
+    check('concurrent deletes have at least one success and no server error',
+          204 in outcomes and all(status in (204, 404, 409) for status in outcomes))
+    check('concurrently deleted scene is gone', s.api('/api/v1/scenes/' + scene4['id'])[0] == 404)
 
     big = None
-    if config['maxBytes'] >= 22 * MIB and config['versionMaxBytes'] >= 22 * MIB:
+    if config['maxBytes'] >= 22 * MIB and config['sceneMaxBytes'] >= 22 * MIB:
         # Larger than the gateway's default 20 MiB body limit and not above the configured per-file limit.
-        scene_big = s.api('/api/v1/scenes', 'POST', {'name': 'large-upload'})[1]
         payload = os.urandom(21 * MIB)
         files_big = {'settings.json': b'{"large":true}\n', 'models/standard/00.c.ply': payload}
-        big = s.api(f'/api/v1/scenes/{scene_big["id"]}/versions', 'POST', version_request(files_big, 'large file'))[1]
-        big_path = '/api/v1/scene-versions/' + big['id']
-        results = {e['relativePath']: s.api(content(big_path, e['fileId']), 'PUT', files_big[e['relativePath']], timeout=300)
-                   for e in big['files']}
-        check('21 MiB file uploads through the configured base URL', all(r[0] == 200 and r[1]['status'] == 'AVAILABLE' for r in results.values()))
-        large_id = next(e['fileId'] for e in big['files'] if e['relativePath'].endswith('.ply'))
-        status, headers, body = s.raw(content(big_path, large_id), headers={'Range': f'bytes={21 * MIB - 8}-'})
+        status, big = s.api('/api/v1/scenes', 'POST', scene_request('large-upload-' + uuid.uuid4().hex[:8], files_big,
+                                                                    'large file'))
+        check('large scene created', status == 201)
+        big_path = '/api/v1/scenes/' + big['id']
+        results = {entry['relativePath']: s.api(f'{big_path}/files/{entry["fileId"]}/content', 'PUT',
+                                                files_big[entry['relativePath']], timeout=300)
+                   for entry in big['files']}
+        check('21 MiB file uploads through the configured base URL',
+              all(result[0] == 200 and result[1].get('status') == 'AVAILABLE' for result in results.values()))
+        large_id = next(entry['fileId'] for entry in big['files'] if entry['relativePath'].endswith('.ply'))
+        status, headers, body = s.raw(f'{big_path}/files/{large_id}/content',
+                                      headers={'Range': f'bytes={21 * MIB - 8}-'})
         check('large file tail Range returns exact bytes', status == 206 and body == payload[-8:])
-        check('large version deletes physically', s.api(big_path, 'DELETE')[0] == 204 and s.api(big_path)[0] == 404)
-    return {'sceneId': scene_id, 'config': config, 'versionIds': {'deleted': v1_id, 'current': v2['id']}, 'largeUploadChecked': big is not None}
+        current_big = s.api(big_path)[1]
+        check('large scene deletes physically', s.api(f'{big_path}?expectedVersion={current_big["lockVersion"]}',
+                                                      'DELETE')[0] == 204 and s.api(big_path)[0] == 404)
+    return {'sceneId': scene_id, 'config': config, 'largeUploadChecked': big is not None}
 
 
 def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
-    """Real browser: import and automatically publish a directory, reload and check nothing is covered."""
+    """Real browser: create a scene through the unified drawer, upload a directory and reopen the detail."""
     from playwright.sync_api import sync_playwright
     name = 'ui-' + uuid.uuid4().hex[:8]
-    scene = s.api('/api/v1/scenes', 'POST', {'name': name})[1]
     files = synthetic_package('browser')
     with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
         package = Path(temporary) / 'scene-package'
@@ -370,46 +486,60 @@ def browser_scenario(s, web_base_url, executable, check, channel='msedge'):
             context = browser.new_context(viewport={'width': 1440, 'height': 1000})
             context.add_cookies([{'name': 'Admin-Token', 'value': s.token, 'url': web_base_url}])
             page = context.new_page()
-            errors = []
+            errors, requests = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
+            page.on('request', lambda request: requests.append(request.url))
             page.goto(web_base_url + '/admin/scenes')
-            row = page.get_by_role('row').filter(has_text=name)
-            row.get_by_role('button', name='版本与文件', exact=True).click()
-            page.get_by_role('heading', name='当前发布版本').wait_for()
-            check('browser panel opens for the clicked scene', f'sceneId={scene["id"]}' in page.url
-                  and page.get_by_text('该场景尚未发布').count() == 1)
-            page.locator('input[type=file][webkitdirectory]').set_input_files(str(package))
-            page.get_by_role('heading', name='待导入：%d 个文件' % len(files), exact=False).wait_for()
-            page.get_by_role('button', name='开始导入', exact=True).click()
-            drawer = page.locator('.el-drawer')
-            drawer.get_by_role('row').filter(has_text='v1').get_by_text('已就绪', exact=True).first.wait_for(timeout=60000)
-            listed = s.api(f'/api/v1/scenes/{scene["id"]}/versions')[1]
-            check('browser import creates one READY version with every file of the directory', listed['total'] == 1
-                  and listed['items'][0]['uploadStatus'] == 'READY'
-                  and sorted(f['relativePath'] for f in s.api('/api/v1/scene-versions/' + listed['items'][0]['id'])[1]['files'])
-                  == sorted(files))
+            page.get_by_role('button', name='新建场景', exact=True).click()
+            drawer = page.locator('.scene-panel')
+            drawer.wait_for(state='visible')
+            drawer.get_by_role('heading', name='新建场景', exact=True).wait_for()
+            name_input = drawer.locator('input:not([type=file])').first
+            name_input.fill(name)
+            drawer.locator('textarea').first.fill('浏览器验收合成场景')
+            drawer.locator('input[data-import-mode=directory]').set_input_files(str(package))
+            page.get_by_text(f'待导入：{len(files)} 个文件', exact=False).wait_for()
+            drawer.get_by_role('button', name='开始上传', exact=True).click()
+            drawer.get_by_text('场景已就绪', exact=False).first.wait_for(timeout=120000)
+            drawer.get_by_role('button', name='停止本次传输', exact=True).wait_for(state='hidden', timeout=30000)
+            check('browser creates one scene with a fixed file set through the unified drawer',
+                  s.api('/api/v1/scenes?name=' + urllib.parse.quote(name))[1]['total'] == 1)
+            created = s.api('/api/v1/scenes?name=' + urllib.parse.quote(name))[1]['items'][0]
+            detail = s.api('/api/v1/scenes/' + created['id'])[1]
+            check('browser upload reaches READY with every file available and no publish call',
+                  detail.get('uploadStatus') == 'READY' and detail.get('availableCount') == len(files)
+                  and not any('/versions' in url or '/publish' in url or 'versionId' in url for url in requests))
+            check('browser panel hides import and resume controls after READY',
+                  not any(drawer.get_by_role('button', name=label, exact=True).count()
+                          for label in ('开始上传', '继续上传', '重新选择目录', '重新选择文件',
+                                        '导入资源目录', '导入文件')))
             for width in (1440, 1024):
                 page.set_viewport_size({'width': width, 'height': 1000})
-                buttons = [b for b in drawer.get_by_role('button').all() if b.is_visible()]
+                buttons = [button for button in drawer.get_by_role('button').all() if button.is_visible()]
                 obscured = []
-                for b in buttons:
-                    b.scroll_into_view_if_needed()
-                    # Fully inside the viewport and the topmost element at its centre is the button itself.
-                    if not b.evaluate(
+                for button in buttons:
+                    button.scroll_into_view_if_needed()
+                    if not button.evaluate(
                             """el => { const r = el.getBoundingClientRect();
                                if (r.x < 0 || r.x + r.width > innerWidth) return false;
                                const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
                                return !!top && (top === el || el.contains(top)); }"""):
-                        obscured.append(b.inner_text() or b.get_attribute('class'))
+                        obscured.append(button.inner_text() or button.get_attribute('class'))
                 check(f'browser panel buttons are not covered at {width}px', not obscured and len(buttons) > 0)
-            drawer.locator('.published-card .el-tag').wait_for(timeout=60000)
-            check('browser import automatically publishes the READY version without a confirmation',
-                  s.api(f'/api/v1/scenes/{scene["id"]}/versions')[1]['published']['versionNo'] == 1
-                  and page.locator('.el-message-box:visible').count() == 0)
-            page.reload()
-            page.get_by_role('heading', name='当前发布版本').wait_for()
-            check('browser reload keeps the scene and version in the address', 'sceneId=' in page.url and 'versionId=' in page.url)
+            page.set_viewport_size({'width': 1440, 'height': 1000})
+            page.goto(web_base_url + '/admin/scenes')
+            row = page.get_by_role('row').filter(has_text=name)
+            row.get_by_role('button', name='查看', exact=True).click()
+            reopened = page.locator('.scene-panel')
+            reopened.wait_for(state='visible')
+            check('browser detail is addressable only by scene id',
+                  f'sceneId={created["id"]}' in page.url and 'versionId' not in page.url)
+            check('browser reopens the scene detail with its name and files',
+                  name in reopened.inner_text()
+                  and all(reopened.get_by_text(path, exact=True).count() for path in ('settings.json', 'models/high/00.c.ply')))
+            page.screenshot(path=str(ROOT / '.local/scenes-browser.png'), full_page=True)
             check('browser page reported no script errors', not errors)
+            return [{'name': 'real login, unified scene create, directory upload and fixed file detail', 'passed': True}]
         finally:
             browser.close()
 
@@ -430,8 +560,9 @@ def run_http_checks(base_url, admin_base_url, credentials_file, report_dir, brow
     credentials = json.loads(Path(credentials_file).read_text(encoding='utf-8'))
     s = Session(admin_base_url)
     report = {'passed': False, 'baseUrl': base_url, 'adminBaseUrl': admin_base_url, 'checks': checks,
-              'limitations': ['Synthetic model bytes are not renderable 4DGS content', 'No client download or playback validation',
-                              'No power-loss or disk-full injection']}
+              'limitations': ['Synthetic model bytes are not renderable 4DGS content',
+                              'No client playback or decoder validation',
+                              'No power-loss or disk-full injection outside the Windows fault runtime']}
     try:
         check('administrator login', bool(s.login(credentials['username'], credentials['password'])))
         report['scenario'] = scenario(s, check)
@@ -459,72 +590,85 @@ class WindowsRuntime:
         self.run, self.api_port, self.sql = run, api_port, sql
         self.restart_backend, self.kill_backend = restart_backend, kill_backend
 
-    def committed(self, storage_key): return self.run / 'artifacts/committed' / storage_key
+    def committed(self, storage_key):
+        return self.run / 'artifacts/committed' / storage_key
 
     def fault_checks(self, s, check):
         run, sql = self.run, self.sql
-        scene = s.api('/api/v1/scenes', 'POST', {'name': 'fault-injection'})[1]
-        versions_path = f'/api/v1/scenes/{scene["id"]}/versions'
         def make(label, segments=2):
             files = synthetic_package(label, segments)
-            version = s.api(versions_path, 'POST', version_request(files, label))[1]
-            return files, version, {f['relativePath']: f['fileId'] for f in version['files']}
-        def put(version, file_id, data): return s.api(f'/api/v1/scene-versions/{version["id"]}/files/{file_id}/content', 'PUT', data)
-        def state(file_id): return sql('select status from ar_version_file where id=%s', (file_id,))[0][0]
-        def key(file_id): return sql('select storage_key from ar_version_file where id=%s', (file_id,))[0][0]
+            status, scene = s.api('/api/v1/scenes', 'POST', scene_request('fault-' + label + '-' + uuid.uuid4().hex[:6],
+                                                                          files, label))
+            check('fault fixture ' + label + ' created', status == 201)
+            return files, scene, {file['relativePath']: file['fileId'] for file in scene['files']}
+        def put(scene, file_id, data):
+            return s.api(f'/api/v1/scenes/{scene["id"]}/files/{file_id}/content', 'PUT', data)
+        def state(file_id):
+            return sql('select status from ar_scene_file where id=%s', (file_id,))[0][0]
+        def key(file_id):
+            return sql('select storage_key from ar_scene_file where id=%s', (file_id,))[0][0]
 
-        files, version, ids = make('storage')
+        files, scene, ids = make('storage')
         for path, data in files.items():
-            put(version, ids[path], data)
-        check('formal storage bytes equal the uploaded bytes', all(
-            self.committed(key(ids[p])).read_bytes() == files[p] for p in files))
-        mismatch_files, mismatch_version, mismatch_ids = make('mismatch')
+            put(scene, ids[path], data)
+        check('formal storage bytes equal the uploaded bytes',
+              all(self.committed(key(ids[path])).read_bytes() == files[path] for path in files))
+
+        mismatch_files, mismatch_scene, mismatch_ids = make('mismatch')
         path = 'models/high/00.c.ply'
-        check('digest mismatch leaves no formal file', put(mismatch_version, mismatch_ids[path], bytes(b ^ 1 for b in mismatch_files[path]))[0] == 422
+        check('digest mismatch leaves no formal file',
+              put(mismatch_scene, mismatch_ids[path], bytes(byte ^ 1 for byte in mismatch_files[path]))[0] == 422
               and not self.committed(key(mismatch_ids[path])).exists()
               and not (run / 'artifacts/staging' / (mismatch_ids[path] + '.ready')).exists())
+
         # A never-uploaded file lets the test occupy its storage target with a directory, making delete fail with IO.
-        blocked_files, blocked_version, blocked_ids = make('delete-failure')
-        put(blocked_version, blocked_ids['settings.json'], blocked_files['settings.json'])
+        blocked_files, blocked_scene, blocked_ids = make('delete-failure')
+        put(blocked_scene, blocked_ids['settings.json'], blocked_files['settings.json'])
         blocker = self.committed(key(blocked_ids['models/high/00.c.ply']))
         blocker.mkdir()
-        blocked_path = '/api/v1/scene-versions/' + blocked_version['id']
-        check('storage deletion failure returns 503', s.api(blocked_path, 'DELETE')[0] == 503)
+        blocked_path = '/api/v1/scenes/' + blocked_scene['id']
+        blocked_current = s.api(blocked_path)[1]
+        check('storage deletion failure returns 503',
+              s.api(f'{blocked_path}?expectedVersion={blocked_current["lockVersion"]}', 'DELETE')[0] == 503)
         failing = s.api(blocked_path)[1]
-        check('failed deletion keeps the version, marks DELETE_FAILED and keeps the reason',
-              failing['uploadStatus'] == 'DELETE_FAILED' and sql('select failure_reason from ar_version_deletion where version_id=%s',
-                                                                 (blocked_version['id'],))[0][0] is not None)
-        check('a version being deleted accepts no upload', put(blocked_version, blocked_ids['models/standard/00.c.ply'],
-                                                               blocked_files['models/standard/00.c.ply'])[0] == 409)
+        check('failed deletion keeps the scene, marks DELETE_FAILED and keeps the reason',
+              failing.get('uploadStatus') == 'DELETE_FAILED'
+              and sql('select failure_reason from ar_scene_deletion where scene_id=%s', (blocked_scene['id'],))[0][0] is not None)
+        check('a scene being deleted accepts no upload',
+              put(blocked_scene, blocked_ids['models/standard/00.c.ply'],
+                  blocked_files['models/standard/00.c.ply'])[0] == 409)
         blocker.rmdir()
-        blocked_keys = [row[0] for row in sql('select storage_key from ar_version_file where version_id=%s', (blocked_version['id'],))]
-        check('delete retry completes and removes rows and bytes', s.api(blocked_path, 'DELETE')[0] == 204
-              and not sql('select 1 from ar_scene_version where id=%s', (blocked_version['id'],))
-              and not sql('select 1 from ar_version_file where version_id=%s', (blocked_version['id'],))
-              and not any(self.committed(k).exists() for k in blocked_keys))
-        check('completed deletion keeps a minimal receipt', sql('select completed_at is not null from ar_version_deletion where version_id=%s',
-                                                                (blocked_version['id'],))[0][0])
+        blocked_keys = [row[0] for row in sql('select storage_key from ar_scene_file where scene_id=%s',
+                                               (blocked_scene['id'],))]
+        check('delete retry ignores a stale revision and completes', s.api(f'{blocked_path}?expectedVersion=0', 'DELETE')[0] == 204)
+        check('completed deletion removes file rows and bytes but keeps the scene row and receipt',
+              not sql('select 1 from ar_scene_file where scene_id=%s', (blocked_scene['id'],))
+              and sql('select deleted_at is not null from ar_scene where id=%s', (blocked_scene['id'],))[0][0]
+              and not any(self.committed(storage_key).exists() for storage_key in blocked_keys)
+              and sql('select completed_at is not null from ar_scene_deletion where scene_id=%s',
+                      (blocked_scene['id'],))[0][0])
 
         # Durable deletion intent at both crash boundaries (before / after the first unlink).
         recovery = []
         for stage in ('before-unlink', 'after-unlink'):
-            stage_files, stage_version, stage_ids = make(stage)
-            keys = {p: None for p in stage_files}
-            for p, data in stage_files.items():
-                put(stage_version, stage_ids[p], data)
-                keys[p] = key(stage_ids[p])
-            sql('insert into ar_version_deletion(version_id,scene_id,request_key,actor_id,actor_name) '
-                'select id,scene_id,request_key,creator_id,creator_name from ar_scene_version where id=%s', (stage_version['id'],))
+            stage_files, stage_scene, stage_ids = make(stage)
+            keys = {path: None for path in stage_files}
+            for path, data in stage_files.items():
+                put(stage_scene, stage_ids[path], data)
+                keys[path] = key(stage_ids[path])
+            sql('insert into ar_scene_deletion(scene_id,request_key,actor_id,actor_name) '
+                "select id,request_key,1,'bootstrap' from ar_scene where id=%s", (stage_scene['id'],))
             if stage == 'after-unlink':
                 self.committed(keys['settings.json']).unlink()
-            recovery.append((stage_version, keys))
-        # Unfinished uploads and unconfirmed writes in one version.
-        files, version, ids = make('restart', 3)
+            recovery.append((stage_scene, keys))
+
+        # Unfinished uploads and unconfirmed writes in one scene.
+        files, scene, ids = make('restart', 3)
         paths = sorted(files)
         confirmed, partial, ready, committed, pending = paths[0], paths[1], paths[2], paths[3], paths[4]
-        put(version, ids[confirmed], files[confirmed])
+        put(scene, ids[confirmed], files[confirmed])
         big = files[partial]
-        head = (f"PUT /api/v1/scene-versions/{version['id']}/files/{ids[partial]}/content HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        head = (f"PUT /api/v1/scenes/{scene['id']}/files/{ids[partial]}/content HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                 f"Authorization: Bearer {s.token}\r\nContent-Type: application/octet-stream\r\nContent-Length: {len(big)}\r\n"
                 'Connection: close\r\n\r\n')
         sock = socket.create_connection(('127.0.0.1', self.api_port), timeout=10)
@@ -539,17 +683,20 @@ class WindowsRuntime:
         sock.close()
         check('hard-stopped service retains the unfinished record', state(ids[partial]) == 'UPLOADING')
         self.restart_backend()
-        check('restart completes interrupted whole-version deletions', all(
-            not sql('select 1 from ar_scene_version where id=%s', (v['id'],)) and not any(self.committed(k).exists() for k in keys.values())
-            and sql('select completed_at is not null from ar_version_deletion where version_id=%s', (v['id'],))[0][0]
-            for v, keys in recovery))
-        check('restart keeps confirmed files and fails the interrupted upload', state(ids[confirmed]) == 'AVAILABLE'
-              and state(ids[partial]) == 'FAILED')
-        check('restart recovers ready and committed bytes and leaves PENDING alone', state(ids[ready]) == 'AVAILABLE'
-              and state(ids[committed]) == 'AVAILABLE' and state(ids[pending]) == 'PENDING')
-        check('recovery audit marks the system action', sql("select count(*) from ar_audit where detail->>'versionId'=%s "
-              "and detail->>'performedBy'='SYSTEM_RECONCILIATION'", (version['id'],))[0][0] >= 2)
-        check('interrupted file retries with the same id', put(version, ids[partial], big)[1]['status'] == 'AVAILABLE')
+        check('restart completes interrupted scene deletions', all(
+            not sql('select 1 from ar_scene_file where scene_id=%s', (item['id'],))
+            and sql('select deleted_at is not null from ar_scene where id=%s', (item['id'],))[0][0]
+            and not any(self.committed(storage_key).exists() for storage_key in keys.values())
+            and sql('select completed_at is not null from ar_scene_deletion where scene_id=%s', (item['id'],))[0][0]
+            for item, keys in recovery))
+        check('restart keeps confirmed files and fails the interrupted upload',
+              state(ids[confirmed]) == 'AVAILABLE' and state(ids[partial]) == 'FAILED')
+        check('restart recovers ready and committed bytes and leaves PENDING alone',
+              state(ids[ready]) == 'AVAILABLE' and state(ids[committed]) == 'AVAILABLE' and state(ids[pending]) == 'PENDING')
+        check('recovery audit marks the system action', sql(
+            "select count(*) from ar_audit where scene_id=%s and detail->>'performedBy'='SYSTEM_RECONCILIATION'",
+            (scene['id'],))[0][0] >= 2)
+        check('interrupted file retries with the same id', put(scene, ids[partial], big)[1].get('status') == 'AVAILABLE')
         return {'faultInjection': 'database and private-storage fixtures in the isolated native runtime'}
 
 
@@ -574,8 +721,8 @@ def windows_runtime(args):
                AR_TOKEN_SECRET=secrets.token_urlsafe(64), AR_BOOTSTRAP_PASSWORD=password,
                AR_REDIS_HOST='127.0.0.1', AR_REDIS_PORT=str(redis_port), AR_PORT=str(api_port),
                AR_STORAGE_ENABLED='true', AR_STORAGE_ROOT=str(run / 'artifacts'),
-               AR_STORAGE_MAX_BYTES=str(4 * MIB), AR_STORAGE_VERSION_MAX_FILES='1000',
-               AR_STORAGE_VERSION_MAX_BYTES=str(64 * MIB), AR_UPLOAD_DIR=str(run / 'framework-uploads'),
+               AR_STORAGE_MAX_BYTES=str(4 * MIB), AR_STORAGE_SCENE_MAX_FILES='1000',
+               AR_STORAGE_SCENE_MAX_BYTES=str(64 * MIB), AR_UPLOAD_DIR=str(run / 'framework-uploads'),
                AR_DEV_API_TARGET=f'http://127.0.0.1:{api_port}', PGPASSWORD=password)
     base = f'http://127.0.0.1:{api_port}'
     web = f'http://127.0.0.1:{web_port}'

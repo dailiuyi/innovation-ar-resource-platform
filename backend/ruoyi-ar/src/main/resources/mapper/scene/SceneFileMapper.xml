@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.ar.module.scene.mapper.SceneFileMapper">
+    <sql id="fileColumns">
+        id::text as "fileId", scene_id::text as "sceneId", relative_path as "relativePath",
+        expected_bytes as bytes, expected_sha256 as sha256, status, failure_reason as "failureReason", attempts
+    </sql>
+
+    <select id="files" resultType="com.ruoyi.ar.module.scene.model.SceneRows$File">
+        select <include refid="fileColumns" /> from ar_scene_file
+        where scene_id = cast(#{sceneId} as uuid) order by relative_path, id
+    </select>
+
+    <select id="file" resultType="com.ruoyi.ar.module.scene.model.SceneRows$File">
+        select <include refid="fileColumns" /> from ar_scene_file
+        where scene_id = cast(#{sceneId} as uuid) and id = cast(#{fileId} as uuid)
+    </select>
+
+    <update id="startUpload">
+        update ar_scene_file
+        set status = 'UPLOADING', failure_reason = null, verified_bytes = null, verified_sha256 = null,
+            attempts = attempts + 1, last_actor_id = #{actor}, last_actor_name = #{actorName}, updated_at = now()
+        where id = cast(#{fileId} as uuid)
+    </update>
+
+    <select id="uploadActor" resultType="com.ruoyi.ar.module.scene.model.SceneRows$Actor">
+        select scene_id::text as "sceneId", last_actor_id as "actorId", last_actor_name as "actorName"
+        from ar_scene_file where id = cast(#{fileId} as uuid)
+    </select>
+
+    <update id="finishUpload">
+        update ar_scene_file
+        set status = #{status},
+            verified_bytes = case when #{available} then expected_bytes else null end,
+            verified_sha256 = case when #{available} then expected_sha256 else null end,
+            failure_reason = #{reason}, updated_at = now()
+        where id = cast(#{fileId} as uuid)
+    </update>
+
+    <select id="fileIds" resultType="string">
+        select id::text from ar_scene_file where scene_id = cast(#{sceneId} as uuid) order by id
+    </select>
+
+    <delete id="deleteFiles">
+        delete from ar_scene_file where scene_id = cast(#{sceneId} as uuid)
+    </delete>
+
+    <select id="recoveryFiles" resultType="com.ruoyi.ar.module.scene.model.SceneRows$File">
+        select <include refid="fileColumns" /> from ar_scene_file f
+        where f.id &gt; cast(#{cursor} as uuid)
+          and f.status in ('PENDING', 'UPLOADING', 'FAILED')
+          and not exists(select 1 from ar_scene_deletion d
+                         where d.scene_id = f.scene_id and d.completed_at is null)
+          and not exists(select 1 from ar_scene s
+                         where s.id = f.scene_id and s.deleted_at is not null)
+        order by f.id limit 100
+    </select>
+</mapper>

@@ -107,21 +107,19 @@ public class SecurityConfig
                     .requestMatchers(HttpMethod.POST, "/system/user").authenticated()
                     .requestMatchers(HttpMethod.DELETE, "/system/user/{id}").authenticated()
                     .requestMatchers(HttpMethod.PUT, "/system/user/changeStatus", "/system/user/resetPwd", "/system/user/profile", "/system/user/profile/updatePwd").authenticated()
-                    // 路由层先要求登录；版本控制器另以 @PreAuthorize 校验 ar_admin 角色。
-                    .requestMatchers(HttpMethod.GET, "/api/v1/scenes", "/api/v1/scenes/{id}", "/api/v1/audits").authenticated()
+                    // 路由层先要求登录；场景控制器另以 @PreAuthorize 校验 ar_admin 角色。
+                    .requestMatchers(HttpMethod.GET, "/api/v1/scenes", "/api/v1/scenes/config", "/api/v1/scenes/{id}",
+                        "/api/v1/scenes/{id}/files/{fileId}", "/api/v1/scenes/{id}/files/{fileId}/content",
+                        "/api/v1/audits").authenticated()
+                    .requestMatchers(HttpMethod.HEAD, "/api/v1/scenes/{id}/files/{fileId}/content").authenticated()
                     .requestMatchers(HttpMethod.POST, "/api/v1/scenes").authenticated()
+                    .requestMatchers(HttpMethod.PUT, "/api/v1/scenes/{id}", "/api/v1/scenes/{id}/enabled",
+                        "/api/v1/scenes/{id}/files/{fileId}/content").authenticated()
                     .requestMatchers(HttpMethod.DELETE, "/api/v1/scenes/{id}").authenticated()
-                    .requestMatchers(HttpMethod.PUT, "/api/v1/scenes/{id}", "/api/v1/scenes/{id}/enabled").authenticated()
-                    .requestMatchers(HttpMethod.GET, "/api/v1/scene-versions/config", "/api/v1/scenes/{id}/versions", "/api/v1/scene-versions/{versionId}",
-                        "/api/v1/scene-versions/{versionId}/files/{fileId}", "/api/v1/scene-versions/{versionId}/files/{fileId}/content").authenticated()
-                    .requestMatchers(HttpMethod.HEAD, "/api/v1/scene-versions/{versionId}/files/{fileId}/content").authenticated()
-                    .requestMatchers(HttpMethod.POST, "/api/v1/scenes/{id}/versions", "/api/v1/scene-versions/{versionId}/publish").authenticated()
-                    .requestMatchers(HttpMethod.PUT, "/api/v1/scene-versions/{versionId}", "/api/v1/scene-versions/{versionId}/files/{fileId}/content").authenticated()
-                    .requestMatchers(HttpMethod.DELETE, "/api/v1/scene-versions/{versionId}").authenticated()
                     // Anonymous demo client: exactly these read routes, nothing else under /api/v1/client.
                     .requestMatchers(HttpMethod.GET, "/api/v1/client/scenes", "/api/v1/client/scenes/{sceneId}",
-                        "/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}").permitAll()
-                    .requestMatchers(HttpMethod.HEAD, "/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}").permitAll()
+                        "/api/v1/client/scenes/{sceneId}/files/{fileId}/content/{fileName}").permitAll()
+                    .requestMatchers(HttpMethod.HEAD, "/api/v1/client/scenes/{sceneId}/files/{fileId}/content/{fileName}").permitAll()
                     .anyRequest().denyAll();
             })
             // 添加Logout filter

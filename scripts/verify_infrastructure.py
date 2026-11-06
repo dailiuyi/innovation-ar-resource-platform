@@ -87,9 +87,10 @@ def main():
     wait_ready()
     check('frontend served', request('/')[0] == 200)
     check('scene API requires login', request('/prod-api/api/v1/scenes')[0] == 401)
-    check('scene version API requires login', request('/prod-api/api/v1/scene-versions/config')[0] == 401)
-    check('scene version file content requires login', request(
-        '/prod-api/api/v1/scene-versions/%s/files/%s/content' % (uuid.uuid4(), uuid.uuid4()), 'PUT', {})[0] == 401)
+    check('scene config API requires login', request('/prod-api/api/v1/scenes/config')[0] == 401)
+    check('scene file content requires login', request(
+        '/prod-api/api/v1/scenes/%s/files/%s/content' % (uuid.uuid4(), uuid.uuid4()), 'PUT', {})[0] == 401)
+    check('anonymous client scene list is public', request('/prod-api/api/v1/client/scenes')[0] == 200)
     for path in ('/artifacts/file.bin', '/_artifacts/file.bin', '/staging/file.part', '/committed/file.bin', '/data/artifacts/file.bin', '/.env'):
         check('private path blocked ' + path, request(path)[0] == 404)
     check('framework upload remains disabled', request('/prod-api/common/upload', 'POST', {})[0] in (401, 403))
@@ -102,9 +103,15 @@ def main():
 
     token = login()
     name = 'infra-' + str(uuid.uuid4())
-    status, body = request('/prod-api/api/v1/scenes', 'POST', {'name': name}, token)
+    files = {'settings.json': b'{"infra":true}\n', 'models/00.c.ply': b'infrastructure persistence\n'}
+    request_body = {
+        'requestKey': str(uuid.uuid4()), 'name': name, 'description': 'infrastructure check',
+        'files': [{'relativePath': path, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+                  for path, data in sorted(files.items())]}
+    status, body = request('/prod-api/api/v1/scenes', 'POST', request_body, token)
     scene = json.loads(body)
-    check('scene write through proxy', status == 201 and scene.get('name') == name)
+    check('scene write through proxy', status == 201 and scene.get('name') == name
+          and scene.get('fileCount') == len(files))
     scene_id = scene['id']
 
     # Only writes known synthetic fixture paths in this isolated project's artifact volume.
@@ -127,7 +134,7 @@ def main():
     report = {
         'stage': 'infrastructure', 'project': 'innovation-ar-resource-platform-infra-check',
         'containerRecreationTested': args.recreate, 'checks': checks,
-        'limitations': ['Container wiring only: no real model upload, publication or download is exercised here',
+        'limitations': ['Container wiring only: no real model upload or client download is exercised here',
                         'No real disk-full or power-loss test', 'No physical Linux host migration'],
     }
     (ROOT / 'docs/validation-infrastructure.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

@@ -100,11 +100,11 @@ export async function readPackage(files, { mode = 'directory' } = {}) {
 }
 
 /** 本地数量/大小上限检查；服务端对同一上限返回 413。 */
-export function checkLimits(pkg, { maxBytes, versionMaxFiles, versionMaxBytes }) {
-  if (pkg.files.length > versionMaxFiles) fail(`文件数量 ${pkg.files.length} 超过每个版本 ${versionMaxFiles} 个的上限`)
+export function checkLimits(pkg, { maxBytes, sceneMaxFiles, sceneMaxBytes }) {
+  if (pkg.files.length > sceneMaxFiles) fail(`文件数量 ${pkg.files.length} 超过每个场景 ${sceneMaxFiles} 个的上限`)
   const oversize = pkg.files.find(item => item.bytes > maxBytes)
   if (oversize) fail(`${oversize.relativePath} 超过单文件大小上限`)
-  if (pkg.totalBytes > versionMaxBytes) fail('文件总大小超过每个版本的上限')
+  if (pkg.totalBytes > sceneMaxBytes) fail('文件总大小超过每个场景的上限')
 }
 
 function digestOf(digests, relativePath) {
@@ -113,43 +113,44 @@ function digestOf(digests, relativePath) {
   return digest
 }
 
-/** 创建版本请求体：files 为目录下全部文件的路径/大小/摘要。digests: Map(relativePath -> sha256)。 */
-export function createRequest(pkg, digests, { requestKey, description }) {
+/** 创建场景请求体：场景名称、描述、全部文件的路径/大小/摘要。digests: Map(relativePath -> sha256)。 */
+export function createRequest(pkg, digests, { requestKey, name, description = '' }) {
   return {
     requestKey,
+    name: name.trim(),
     description,
     files: pkg.files.map(item => ({ relativePath: item.relativePath, bytes: item.bytes, sha256: digestOf(digests, item.relativePath) }))
   }
 }
 
-/** 重新选择资源后，先不看摘要：路径集合和大小必须与已固定的版本一致。 */
-export function checkSelection(pkg, version) {
-  const fixed = new Map(version.files.map(item => [item.relativePath, item]))
+/** 重新选择资源后，先不看摘要：路径集合和大小必须与已固定的场景清单一致。 */
+export function checkSelection(pkg, scene) {
+  const fixed = new Map(scene.files.map(item => [item.relativePath, item]))
   for (const item of pkg.files) {
     const expected = fixed.get(item.relativePath)
-    if (!expected) fail(`${item.relativePath} 不在该版本的文件清单中`)
-    if (expected.bytes !== item.bytes) fail(`${item.relativePath} 的大小与该版本登记的不一致`)
+    if (!expected) fail(`${item.relativePath} 不在该场景的文件清单中`)
+    if (expected.bytes !== item.bytes) fail(`${item.relativePath} 的大小与该场景登记的不一致`)
   }
   if (fixed.size !== pkg.files.length) {
     const present = new Set(pkg.files.map(item => item.relativePath))
-    fail(`所选资源缺少该版本登记的文件：${[...fixed.keys()].find(path => !present.has(path))}`)
+    fail(`所选资源缺少该场景登记的文件：${[...fixed.keys()].find(path => !present.has(path))}`)
   }
 }
 
 /** 摘要计算完成后，逐文件与固定清单比较。 */
-export function checkDigests(pkg, digests, version) {
-  const fixed = new Map(version.files.map(item => [item.relativePath, item]))
+export function checkDigests(pkg, digests, scene) {
+  const fixed = new Map(scene.files.map(item => [item.relativePath, item]))
   for (const item of pkg.files) {
     if (digestOf(digests, item.relativePath) !== fixed.get(item.relativePath).sha256) {
-      fail(`${item.relativePath} 的内容与该版本登记的 SHA-256 不一致，请选择原文件或原目录`)
+      fail(`${item.relativePath} 的内容与该场景登记的 SHA-256 不一致，请选择原文件或原目录`)
     }
   }
 }
 
 /** 按文件状态规划上传：AVAILABLE 跳过，UPLOADING 处理中不重复发送，FAILED/PENDING 完整重传。 */
-export function uploadPlan(versionFiles) {
+export function uploadPlan(sceneFiles) {
   const plan = { upload: [], processing: [], done: 0 }
-  for (const file of versionFiles) {
+  for (const file of sceneFiles) {
     if (file.status === 'AVAILABLE') plan.done++
     else if (file.status === 'UPLOADING') plan.processing.push(file)
     else plan.upload.push(file)
@@ -162,6 +163,46 @@ export function uploadPlan(versionFiles) {
 
 /** 网页上传固定三路，不依赖 HTTP/2 的复用能力。 */
 export const UPLOAD_CONCURRENCY = 3
+
+/** 场景上传状态与文件状态的展示文案；启用状态单独展示，两者不能混用。 */
+export const SCENE_UPLOAD_STATES = Object.freeze({
+  PENDING: '待上传',
+  UPLOADING: '上传中',
+  FAILED: '有失败',
+  READY: '已就绪',
+  DELETING: '正在删除',
+  DELETE_FAILED: '删除失败'
+})
+
+export const SCENE_FILE_STATES = Object.freeze({
+  PENDING: '待上传',
+  UPLOADING: '处理中',
+  AVAILABLE: '已入库',
+  FAILED: '失败'
+})
+
+export function uploadStatusType(status) {
+  if (status === 'READY') return 'success'
+  return ['FAILED', 'DELETE_FAILED'].includes(status) ? 'danger' : 'warning'
+}
+
+export function fileStatusType(status) {
+  return status === 'AVAILABLE' ? 'success' : status === 'FAILED' ? 'danger' : 'warning'
+}
+
+export function formatBytes(value) {
+  const bytes = value ?? 0
+  return bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(2)} GiB`
+    : bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MiB` : `${bytes} B`
+}
+
+export function formatTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = number => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 
 /**
  * 以至多 limit 个并发执行 upload(record)。单个失败不影响其余记录；stopped() 为真后不再派发新记录，在途的照常完成。

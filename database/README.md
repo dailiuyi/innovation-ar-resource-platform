@@ -1,4 +1,4 @@
-本轮实际新增的草稿与文件登记迁移位于 `backend/ruoyi-admin/src/main/resources/db/demo/V007__resource_ingestion.sql`，见 [资源入库说明](../docs/12-resource-ingestion.md)。本目录保留历史候选设计。
+当前应用迁移位于 `backend/ruoyi-admin/src/main/resources/db/demo`；V018 将版本文件归到单场景，保留原模型文件与审计。现行行为见[资源入库说明](../docs/12-resource-ingestion.md)，生产迁移须另行备份和授权。本目录其余内容均为历史候选设计，不参与应用初始化。
 
 # V0.1 候选数据库初始化
 

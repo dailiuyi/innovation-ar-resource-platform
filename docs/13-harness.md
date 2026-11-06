@@ -33,7 +33,7 @@ python scripts/harness.py check --profile ingestion
 |---|---|---|
 | quick（默认） | Harness 故障回归、审查工具回归、Symphony 模型路由协议回归、OpenAPI/Schema/示例、生成源一致性、AGENTS/README/docs 递归本地链接 | Python 3.11+、Git、requirements-review 中的契约验证依赖 |
 | frontend | quick + 成品包解析消费者行为测试（`scripts/test_scene_package.mjs`）+ Vue 生产构建 | Node、npm，以及首次或失效依赖准备所需的网络/缓存；控制器自动安装或核对后复用依赖，不要求预先手工 npm ci |
-| ingestion | quick + 成品包解析测试 + 已测试 Jar 上的 Windows 隔离入库 API/Edge 验收（版本导入、逐文件上传与恢复、发布、整版删除） | Windows、项目 .local 中 PostgreSQL 17/JDK 21、Redis、Node、前端依赖、psycopg、Playwright、Edge，以及同源码由 `scripts/check_java.py --module ruoyi-admin --package` 产出的 `backend/ruoyi-admin/target/ruoyi-admin.jar` |
+| ingestion | quick + 成品包解析测试 + 已测试 Jar 上的 Windows 隔离入库 API/Edge 验收（场景固定清单、逐文件上传与恢复、上传即发布、启停、场景删除） | Windows、项目 .local 中 PostgreSQL 17/JDK 21、Redis、Node、前端依赖、psycopg、Playwright、Edge，以及同源码由 `scripts/check_java.py --module ruoyi-admin --package` 产出的 Jar |
 
 `doctor` 只探测所选 profile 的必要环境，不安装依赖、不启动应用、不连接日常数据库。Python 同时搜索当前解释器和 `.local/python`；缺依赖时按输出提示准备。版本和路径沿用已有入库脚本的约定。Node 还会对现有回归脚本进行路径访问探测；如沙箱拒绝读取项目父目录，应申请对应命令的沙箱外权限，不修改业务代码绕过限制。
 

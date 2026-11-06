@@ -372,7 +372,7 @@ def prepare(args):
         'source': harness.source_identity(ROOT), 'runDirectory': str(instance.dir),
         'jfr': {'jfc': str(instance.jfc), 'containerDirectory': '/app/.local/logs', 'filePattern': 'backend-<pid>-<timestamp>.jfr',
                 'events': ['jdk.FileRead', 'jdk.FileWrite']},
-        'limits': {key: int(env[key]) for key in ('AR_STORAGE_MAX_BYTES', 'AR_STORAGE_VERSION_MAX_FILES', 'AR_STORAGE_VERSION_MAX_BYTES')},
+        'limits': {key: int(env[key]) for key in ('AR_STORAGE_MAX_BYTES', 'AR_STORAGE_SCENE_MAX_FILES', 'AR_STORAGE_SCENE_MAX_BYTES')},
         'stopCommand': [sys.executable, str(Path(__file__).resolve()), 'stop', '--report-dir', str(instance.dir)]}
     write_private(instance.runtime, json.dumps(runtime, ensure_ascii=False, indent=2) + '\n')
     print('READY ' + BASE_URL + '  runtime=' + str(instance.runtime))

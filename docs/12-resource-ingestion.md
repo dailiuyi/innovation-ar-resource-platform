@@ -1,95 +1,73 @@
 # 资源入库闭环
 
-一个场景对应一个独立的 4DGS 重建成品。管理员私有入库流程：选择场景 → 导入资源目录或多个文件创建内容版本 → 逐文件上传并校验 → 正式存储确认 → 发布为场景当前版本 → 需要时整版删除。文件“可用”仅表示已可靠入库；匿名客户端只读取当前发布版本（见下文“匿名客户端读取与完整下载”）。
+2026-11-06 本地源码按管理员单场景单模型简化；不代表日常服务已部署。一个场景直接对应一套固定文件，换模型新建场景。名称和说明可编辑，文件上传校验完成后自动对外可用，启用/停用控制客户端访问，没有版本列表、独立发布或模型替换流程。
 
 ## 数据与状态
 
-实际迁移随应用 Flyway 执行：`V014__remove_scene_geography.sql` 删除地址、经纬度和坐标系；`V015__scene_product_versions.sql` 是**破坏性清洁切换**，明确清空旧成品业务记录（`ar_audit`、旧草稿/文件/ZIP 表和 `ar_scene`）后删除旧表，不涉及任何 `sys_*` 账号和菜单表，也不能对日常库自动执行；`V017__remove_version_descriptor.sql` 删除 `ar_scene_version.descriptor` 列（该列数据不可恢复，执行前须备份并获批准；日常库 18081 已于 2026-10-29 经授权备份后执行，见 [验证记录](06-validation.md)）。根目录 `database/migrations` 仍是历史候选设计。
+应用仅加载 `backend/ruoyi-admin/src/main/resources/db/demo` 下的 Flyway 迁移。V001–V017 保留原样；V018 将旧版本映射为独立场景，文件 UUID 与存储键不变，不搬运模型字节。旧当前发布模型保留原场景身份，其他模型停用保存；完整迁移规则及实测见[验证记录](06-validation.md)。升级任何真实数据库前须备份并获得单独授权。
 
-- `ar_scene`：只保留名称、启停、修订号及时间/删除信息，加当前发布指针 `published_version_id`、`published_at`、`published_by_*`（复合外键保证不跨场景发布）。
-- `ar_scene_version`：文件清单与内容固定的版本，含场景内版本号、`request_key`、可编辑说明和说明修订号。同场景同请求键幂等。
-- `ar_version_file`：每文件相对路径、预期大小/SHA256、服务端 UUID 加 `.bin` 的存储标识、状态、已验证大小/摘要、尝试次数、失败原因、创建人和最后操作人。同版本相对路径唯一。
-- `ar_version_deletion`：整版删除意图、失败原因和最小幂等回执，不向已删除版本保留外键，也不复制文件内容。
-- 文件内容只写入 `ArtifactStorage`，不进数据库。相对路径只用于清单和还原，不能指定服务器落盘路径。
-
-| 文件状态 | 含义 |
+| 数据 | 用途 |
 |---|---|
-| PENDING | 元数据已登记，尚未确认上传 |
-| UPLOADING | 正在接收或校验，不能当作成功 |
-| AVAILABLE | 接收时大小和 SHA256 校验通过并已无覆盖提交为正式文件，数据库确认可用 |
-| FAILED | 校验、传输、存储或重启核对失败，原因可查，可用原文件重试 |
+| `ar_scene` | 名称、说明、启停、并发修订号、创建请求键和删除信息 |
+| `ar_scene_file` | 直接关联场景的固定清单，保存相对路径、预期大小/SHA256、上传状态及验证结果 |
+| 场景级删除记录 | 删除意图、失败原因和最小幂等回执 |
+| `ar_audit` | 操作人、动作、对象和变更；历史版本动作保留为历史证据 |
+| `ArtifactStorage` | 私有本地文件正文，不操作业务表 |
 
-版本 `uploadStatus` 读时由文件状态推导，不另存状态机：未完成删除为 `DELETING`/`DELETE_FAILED`，否则有 `UPLOADING` 为 `UPLOADING`，有 `FAILED` 为 `FAILED`，全部 `AVAILABLE` 为 `READY`，其余 `PENDING`。`AVAILABLE` 的数据库约束要求已验证大小/摘要与登记值相等且无失败原因。
+文件状态为 `PENDING`、`UPLOADING`、`AVAILABLE`、`FAILED`。只有服务端接收时核验大小、SHA256 并无覆盖提交后才记为 `AVAILABLE`。场景 `uploadStatus` 汇总为 `PENDING/UPLOADING/FAILED/READY`，删除处理中为 `DELETING/DELETE_FAILED`。
 
-## 版本内容：固定文件清单
+**客户端可见条件：启用、未删除/未进入删除、清单非空且所有文件 AVAILABLE。** 上传和恢复均不自动修改启停状态。管理员在上传期间停用，最后一个文件完成后仍不可公开。
 
-一个内容版本就是一次选择的固定文件清单（相对路径、字节数、SHA256）加可编辑说明 `description`。平台不保存或解释结构化 `descriptor` 字段（2026-10-29 删除）：档位、分段、时间、变换和媒体用途由 Unity 客户端按相对路径决定，服务端不解释文件用途、不解码模型。JSON（包括名为 `resource.json` 的普通文件）仍可上传下载，不获得特殊语义。
+## 固定文件清单
 
-- “导入资源目录”登记目录下每个文件，去掉所选顶层目录名并保留子目录；“导入文件”允许选择任意类型的一个或多个文件，以文件名作为相对路径，一次选择创建一个版本。空选择、零字节文件和规范化后重名的文件拒绝。
-- ZIP 与其他文件一样原样上传，不扫描包内清单、不在服务端解压。Unity 下载并校验文件后自行解压；平台清单只登记 ZIP 本身，不包含包内文件。本入口及续传支持于 2026-10-30，决定依据为用户确认的多文件/ZIP 导入需求。
-- 路径必须为相对路径，不含 `..` 或绝对路径，已是 NFC 规范形式，文件名不含 `%`/`;`，大小写不敏感重复拒绝，并有长度限制；违反返回 400 并指出路径。文件大小或数量超配置返回 413。
+- 新建时一次登记目录或多个文件的完整清单（相对路径、字节数、SHA256），不能追加或替换；换模型使用新的场景 ID。
+- 目录去掉所选顶层目录名，保留子目录；多文件以各自文件名登记。拒绝空选择、零字节、重复及大小写冲突、越界和非法路径；摘要或大小有误的文件上传拒绝。
+- JSON 和 ZIP 均原样保存，ZIP 不解压。平台不解释 `resource.json` 或文件用途，档位、分段和加载顺序由已有播放器决定。
+- 名称、说明和启停可编辑，内部修订号防止并发覆盖；它不是内容版本，不在管理列表展示。
 
-## 接口
+## 管理接口
 
-管理接口位于 `/api/v1`，类级 `ar_admin`，经网关为 `/prod-api/api/v1`。完整输入输出见生成的 [OpenAPI](../contracts/openapi.yaml)（`4DGS Scene Resource API` 0.5.0，仅描述当前实际接口）。创建版本 body 为 `{requestKey, description, files}`。
+前缀 `/api/v1`，网关为 `/prod-api/api/v1`；管理员身份来自登录，不由请求体指定。完整字段见[生成 OpenAPI](../contracts/openapi.yaml)。
 
 | 方法与路径 | 用途 |
 |---|---|
-| GET `/scene-versions/config` | 单文件、单版本文件数和字节上限 |
-| GET / POST `/scenes/{sceneId}/versions` | 分页查询（含 `sceneLockVersion`、`published`）/ 创建版本 |
-| GET / PUT `/scene-versions/{versionId}` | 版本信息和完整文件清单 / 仅编辑说明（`expectedVersion`） |
-| DELETE `/scene-versions/{versionId}` | 整版物理删除；当前发布版本 409 |
-| POST `/scene-versions/{versionId}/publish` | 发布，body `expectedSceneVersion` |
-| GET `/scene-versions/{versionId}/files/{fileId}` | 单文件状态，用于结果未确认后核对 |
-| PUT `/scene-versions/{versionId}/files/{fileId}/content` | `application/octet-stream` 原始文件流 |
-| GET / HEAD `/scene-versions/{versionId}/files/{fileId}/content` | 管理员读取已完成文件，支持强 ETag、Range、If-Range |
+| GET `/scenes/config` | 单文件和单场景限制：`maxBytes/sceneMaxFiles/sceneMaxBytes` |
+| POST `/scenes` | `{requestKey,name,description,files}` 原子创建场景及固定清单；首次 201，相同请求重试 200 |
+| GET `/scenes`、`/scenes/{sceneId}` | 列表汇总、详情与文件状态 |
+| PUT `/scenes/{sceneId}` | `{name,description,expectedVersion}` 修改信息 |
+| PUT `/scenes/{sceneId}/enabled` | `{enabled,expectedVersion,reason}` 启停并审计 |
+| DELETE `/scenes/{sceneId}?expectedVersion=N` | 清理场景全部文件；成功 204，失败可重试 |
+| GET `/scenes/{sceneId}/files/{fileId}` | 单文件结果核对 |
+| PUT `/scenes/{sceneId}/files/{fileId}/content` | 原始字节流上传与校验 |
+| GET / HEAD `/scenes/{sceneId}/files/{fileId}/content` | 管理员读取已完成文件，支持 Range |
 
-操作人从登录身份取得。关键变更写入 `ar_audit`，动作为 `VERSION_CREATE`、`VERSION_EDIT`、`VERSION_PUBLISH`、`VERSION_DELETE_REQUEST`、`VERSION_DELETE`、`VERSION_DELETE_FAILED`，以及场景动作和上传结果动作，可在“场景操作记录”查看。业务 JSON 错误沿用 `AR_<status>`/`message`/`traceId`；文件 Range 416 无正文，不能要求所有失败都有 JSON。
+业务错误为真实 HTTP 状态与 `code/message/traceId`，文件 416 无正文。重复创建的请求键对应不同信息/清单为 409，已删除或正在删除为 410；不恢复旧场景。
 
-## 创建、上传与恢复
+## 上传、访问与恢复
 
-1. 创建版本时一次登记全部文件。首次 201；同 `requestKey` 且说明和排序后的路径/大小/摘要完全相同返回 200 与原版本；任一不同返回 409；已整版删除的版本迟到重试返回 410，不复活。
-2. 版本创建后文件清单固定，需要改变任何文件或路径时创建新版本。只有说明可编辑。
-3. 服务端逐段读取文件，同一次读取中校验实际字节数与 SHA256，超过声明大小立即拒绝；只有校验通过才能无覆盖提交为正式 `.bin`，提交后直接标记 `AVAILABLE`，不再重读。
-4. 同一文件并发处理返回 409。已 `AVAILABLE` 的文件重复上传只核对记录、文件存在和长度后返回原记录。大小或摘要不符返回 422，存储 IO 失败返回 503，均保存 `FAILED` 与原因，新尝试递增 `attempts`。
-5. 上传按文件恢复：先查询状态，`AVAILABLE` 跳过，`UPLOADING` 显示处理中，`FAILED`/`PENDING` 重新完整上传该文件。该文件若留有校验不符的 `.ready` 或未确认 `.bin`，重新上传会先删除这份未确认遗留，再接收新正文；已确认可用的正式文件不覆盖。传输超时只表示结果未确认，不自动改成失败；没有自动重试、全量轮询或分片协议。
-6. 启动先恢复未完成整版删除，再只对 `PENDING`/`UPLOADING`/`FAILED` 且有遗留数据的记录恢复：完整且校验通过的 `.ready` 或已落盘未确认的文件至多验证一次后补记可用。校验不符的遗留保持失败，不在启动时删除。中断的 `UPLOADING` 变 `FAILED`，没有遗留数据的 `PENDING` 保持不变。`AVAILABLE` 不全量重算摘要。恢复审计标明 `performedBy=SYSTEM_RECONCILIATION`。
+1. 管理页在一个详情面板填写名称、说明并选择文件，分块计算摘要，然后创建场景；名称草稿按账号保存。上传工具也使用相同接口。
+2. 网页固定三路上传不同文件；单文件失败不阻断其余文件。发送进度与已确认入库数分别显示；结果不确定先查询单文件状态。
+3. 已 `AVAILABLE` 文件不覆盖、不重传；`UPLOADING` 先核对，`PENDING/FAILED` 重传原文件。刷新页面后重新选择原始完整集合，路径、大小、摘要一致才续做。当前是按文件恢复，没有分片上传协议。
+4. 服务端按“短事务登记 → 事务外文件 IO → 短事务确认并审计”处理。所有文件就绪后可见条件自然成立，不需要网页再请求发布；关闭网页不会留下“文件已入库但未发布”的步骤。
+5. 停用后客户端列表隐藏，后续详情/文件请求 404；管理员仍可查看。已开始的文件流允许结束，本地已有文件无法通过停用撤回。
+6. 删除先提交意图并停止公开，再删除各文件所有存储阶段，最后删文件行并完成回执。存储 IO 失败返回 503，显示删除失败；重试或启动恢复继续清理。活动上传期间删除 409，删除不截断已开始的下载。
+7. 启动先续做删除，再盘点未完成文件。有完整遗留且验证通过则补记可用；中断且无完整字节的上传记失败。已确认文件不全量重算摘要，系统恢复记审计。
 
-文件列表、版本详情、发布和管理员 GET/HEAD 不读取其他文件内容，也不计算内容摘要。已可用文件的同长度磁盘损坏不会被服务端发现，由下载端校验 SHA256 发现。当前支持一个 Spring Boot 实例和一个私有本地存储卷。
+## 客户端与完整下载
 
-## 发布与整版删除
+匿名路由仅为列表 GET、详情 GET、文件 GET/HEAD。其余写请求不开放；管理员 Token 不发送到匿名读取接口。
 
-1. 同场景只有一个当前发布指针。发布只检验全部文件 `AVAILABLE`，不解析模型、不重算摘要；未完成返回 400，有处理中文件或删除意图返回 409。
-2. 目标已是当前发布版本时直接返回 200，不更新修订号、发布时间、指针或审计。实际切换时比较 `expectedSceneVersion`，不符返回 409；成功后递增场景 `lock_version` 并写一条 `VERSION_PUBLISH` 审计。
-3. 替换发布后旧版本可查看或整版删除；当前发布版本禁止删除，不保留历史分发快照。场景停用或逻辑删除后不递归删除模型。
-4. 整版删除先持久化删除意图和 `VERSION_DELETE_REQUEST` 审计，再逐 UUID 删除存储内容；全部成功才在事务内删除文件行、版本行、完成回执并写 `VERSION_DELETE` 审计。IO 失败返回 503，版本保留并显示 `DELETE_FAILED`，再次 DELETE 重试；完成后重复 DELETE 为 204。文件处理中 409。
-
-## 匿名客户端读取与完整下载
-
-内部 Demo 客户端不登录，只读当前已发布版本。`ClientSceneController`/`ClientSceneService` 仅在 `ar.storage.enabled=true` 时注册，没有类级角色；`SecurityConfig` 对下面三个路由的 GET 和文件 HEAD 逐条放行，其余 `/api/v1/client/**` 路径及任何写方法仍要求登录或被拒绝（匿名得 401/403），不存在 `/access` 之类返回成功的占位接口。客户端路径直接访问网关，不带 `/prod-api` 前缀。
-
-| 方法与路径 | 用途 |
+| 路径 | 返回 |
 |---|---|
-| GET `/api/v1/client/scenes?name=&limit=20&offset=0` | `{items,total}`；每项 `id,name,versionId,versionNo`。只含启用、未删除且有完整当前发布版本的场景；limit 1–100；空目录返回 200 与空数组 |
-| GET `/api/v1/client/scenes/{sceneId}` | `{sceneId,name,versionId,versionNo,files[{fileId,relativePath,bytes,sha256,contentType,downloadPath}],fileCount,totalBytes}`；`files` 是该版本的完整集合，客户端按自身逻辑以 `relativePath` 选择所需文件。无发布、停用、删除均 404；不返回 `storageKey` 或磁盘路径 |
-| GET / HEAD `/api/v1/client/scenes/{sceneId}/versions/{versionId}/files/{fileId}/content/{fileName}` | 文件字节，支持强 ETag、单段 Range（`a-b`、`a-`、后缀 `-n`）、If-Range |
+| `/api/v1/client/scenes` | `{items:[{id,name}],total}` |
+| `/api/v1/client/scenes/{sceneId}` | `{sceneId,name,files,fileCount,totalBytes}` |
+| `/api/v1/client/scenes/{sceneId}/files/{fileId}/content/{fileName}` | 固定文件 GET/HEAD，使用详情中的 `downloadPath` |
 
-- 目录和详情只读数据库，不打开模型文件，不计算摘要。`fileName` 是实际 basename 的 URI 编码，只用于保留文件后缀并与记录比对，不参与磁盘路径；不符 404。含 `%` 或 `;` 的文件名无法进入 URL，创建版本时直接返回 400。
-- 判定顺序：场景可见、版本归属、文件 `AVAILABLE` 且无删除意图；`versionId` 不再等于当前发布指针返回 **409**，客户端须重新获取详情，不能混用新旧版本；错误归属或不存在 404；记录存在但存储缺失或长度不符 409。下载前不重算 SHA256，强 ETag 为登记摘要。已开始的旧版本字节流允许完成，其后的旧版本请求 409。
-- 响应读锁持有到流结束，整版删除取写锁，不会截断正在读取的文件。`Content-Type` 只按扩展名：json 为 `application/json`，jpg/jpeg/png/webp、wav、webm 对应 MIME，模型和未知为 `application/octet-stream`，不嗅探内容。客户端响应不带 `attachment` 文件名，`Cache-Control: no-store, no-transform`；管理员下载保留 `attachment`。
-- Range、If-Range、HEAD 和状态码处理统一见 [客户端接口](21-client-api.md)；合法但无法满足的 Range 返回 416 与 `Content-Range: bytes */size`，无正文；HEAD 忽略 Range 且不发送正文。永久回归为 `HttpRangeTest`。
+文件大小、SHA256、MIME 和相对路径在清单返回。Range/If-Range/200/206/416 与下载端校验规则见[客户端接口](21-client-api.md)。文件缺失或长度不符为 409，不再有“版本替换”错误。响应仍为 `no-store, no-transform`，尚未接 CDN。
 
-完整下载参考工具 `scripts/download_scene.py --base-url URL --scene-id UUID --output DIR`（Python 标准库，匿名）下载当前发布版本的全部文件，目录为 `<DIR>/<sceneId>/<versionId>/`：`payload/` 是相对路径的根，`.download-state.json` 在写任何字节之前原子建立并记录固定清单与已完成集合，`.transfer/` 存放 `.part`、验证器和锁，`ready.json` 在全部文件校验后才原子写入。同名 `.tmp` 只有带本次任务状态时才接管；非空且无法确认归属的临时目录直接拒绝，不删除。同命令可在被杀或断网后继续：已完成且长度匹配的文件不再请求、不重哈希；其余沿用 `artifact_transfer.download` 的 Range + If-Range，206 校验起点后追加，200 截断重写，摘要不符删除该 `.part`、不就绪、下次只重下该文件。锁为操作系统文件锁（`fcntl`/`msvcrt`），残留的空锁文件不会阻塞。遇 409 工具停止（退出码 3）、不自动重试并保留旧目录；该退出码/提示沿用“版本变化”的命名，但服务端也可能因文件不可用返回 409。重新取详情后只有 `versionId` 改变才进入新版本目录，未改变不能假定重跑即可恢复，见 [客户端接口](21-client-api.md)。它是联调参考，不是 Android/iOS 下载 SDK；按需选择文件由客户端实现。
+`scripts/download_scene.py --base-url URL --scene-id UUID --output DIR` 将全部文件下载至 `<DIR>/<sceneId>/payload/`，控制区和 `ready.json` 与正文分开；完整性通过才标记就绪。重复执行可续传，错误场景或清单不复用本地任务。已有播放器应消费详情文件清单；用户已确认有播放器，实际代码位置和播放接入证据另行核对。
 
-## 后台
-
-新建场景：输入非空名称后可按 Enter 或点“保存”，提交时去掉首尾空白，提交期间不会重复创建；中文输入法的确认 Enter 不触发提交。未提交名称按账号保存在当前浏览器 localStorage，关闭弹窗、离开页面或刷新后再点“新建场景”会恢复；只有创建接口确认成功才清空，失败保留原文。编辑已有场景不会覆盖或清空新建草稿。清除浏览器站点数据会清除该草稿。
-
-入口：场景列表每行的 **版本与文件**，地址栏参数为 `sceneId`、`versionId`。面板顶部固定当前发布卡片，下方是版本列表和所选版本详情（平铺文件清单）；点击“导入资源目录”选择目录，或点击“导入文件”多选任意文件，随后填写版本说明并“开始导入”。两种入口共用流程：登记全部所选文件 → 每个文件用 `hash.worker.js` 按 2 MiB 块计算一次 SHA256 → 创建一个版本 → 固定三路并发上传缺失文件。单个文件请求失败不阻断其余文件，完成后完整列出“请求失败”和“结果未确认”；发送字节百分比与已入库数分开显示。停止会中止全部在途 PUT，等待这些请求的一次状态核对结束后退出传输状态。已存在版本可点击“重新选择目录”或“重新选择文件”继续：必须选择完整原始集合，路径、大小和摘要都必须一致，每轮重新查询状态，只发送 `FAILED`/`PENDING`，跳过 `AVAILABLE`/`UPLOADING`。未刷新页面且仍保留原文件时可直接“继续上传”。服务端只登记正在处理的文件 UUID，同一文件在途返回 409，不同文件不因分段锁碰撞互相拒绝；SHA256 仍随每个请求流式校验，命令行导入工具不改。
-
-2026-10-30 操作更新：目录导入和任意多文件导入（包括续传）全部确认入库后，页面再次读取版本状态；只有后端返回 READY 且所有文件 AVAILABLE，才无确认弹窗地调用现有发布接口，自动替换当前发布指针，原版本保留为历史。发送进度 100%、失败、处理中、结果未确认或取消都不触发自动发布。采用本轮上传开始时的场景修订号；发布 409 或其他失败不自动重试、不重新上传，保留就绪文件并提示用户确认当前指针后手动发布。历史版本手动发布入口保留。
-
-“版本名”经用户澄清即现有“版本说明”，未新增字段；导入前可填，发布后仍可修改，不改变版本号、固定文件清单或发布指针。自动发布由后台页面衔接，后端创建、上传、发布 API 契约保持分离；关闭页面不构成服务端自动发布承诺。
+## 历史记录（旧多版本基线）
 
 
 以下带日期的检查与部署条目是历史记录，不代表本轮或当前日常实例已重新验收；部署状态与源端数据保护要求以 [基础设施手册](10-local-infrastructure.md) 为主。
@@ -127,25 +105,13 @@
 
 上述文件互斥是单 Spring Boot 进程内的活动文件集合，不是集群限流；多个页面会共同消耗本机网络、磁盘和计算资源。本轮只修复反馈显示，未新增全站调度或改变 409 策略。
 
-## 配置与运行
+## 配置与验证
 
-- `AR_STORAGE_ENABLED=true` 开启入库接口；关闭时路由不注册。`AR_STORAGE_ROOT` 指向私有目录或容器持久卷。
-- `AR_STORAGE_MAX_BYTES`：单文件上限，必填正整数，后端登记和实际流式写入共同检查。本机 `scripts/local_demo.py` 默认 256 MiB；真实样包验收设 1073741824。
-- `AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）：单版本文件数与总字节上限，Compose 与 `config/compose.env.example` 提供。旧 `AR_STORAGE_COLLECTION_*`、ZIP 缓存配置已删除。
-- Nginx 对 `/prod-api/api/v1/scene-versions/{versionId}/files/{fileId}/content` 关闭请求/响应缓冲和网关字节限制，超时 300s；其余业务接口保持 20m 限制。管理员下载必须携带登录身份，令牌不放进 URL。`/api/v1/client/` 以同源、路径不改写、关闭响应缓冲、超时 300s 代理到后端；不开放任何磁盘目录，不增加 CORS 配置。
+- `AR_STORAGE_ENABLED=true` 开启场景文件接口，`AR_STORAGE_ROOT` 为私有根目录。
+- `AR_STORAGE_MAX_BYTES` 限制单文件；`AR_STORAGE_SCENE_MAX_FILES` 与 `AR_STORAGE_SCENE_MAX_BYTES` 限制场景，替换旧版本命名配置，部署时显式迁移。
+- Nginx 对 `/prod-api/api/v1/scenes/{sceneId}/files/{fileId}/content` 关闭请求/响应缓冲和网关字节限制，其他接口保持原限制；私有目录不公开。
+- Java 由 `scripts/check_java.py --module ruoyi-admin --package` 检查，前端由 `scripts/agent_check.py --profile frontend` 检查。实际 HTTP/浏览器入库流程使用[隔离验收](13-harness.md)，不得操作日常实例。
+- Python 上传参考 `scripts/import_scene_package.py`：首次以名称、说明和包根创建场景，或以 `--scene-id` 继续已有上传；状态文件放包外，避免把状态本身上传。参数以 `--help` 为准。
+- 真实播放须使用已有播放器和真实产物验证；合成字节、SHA256 和 HTTP 200 不证明渲染。现阶段仍为单 Spring Boot 实例及本地存储；对象存储、CDN、用户审核和云端 GPU 不属于本轮。
 
-## 验收
-
-- 契约与链接：按 [Harness](13-harness.md) 运行 quick；只有契约本身变化时才修改生成源并重新生成，不以验证时重生成掩盖漂移。
-- 隔离实例：Linux 的完整 prepare、HTTP/浏览器 verify 与 stop 命令集中在 [Harness](13-harness.md)“使用”节，必须提供 `.local/` 下的 `--report-dir` 和同源码已测试 Jar、有效 frontend dist；核对缺镜像时的构建副作用与授权。不要将本页导入示例用于日常实例。Windows 原生运行时（`review.py`、harness ingestion）继续提供数据库和私有存储故障注入。
-- 无需服务的永久回归为 `scripts/test_download_scene.py`、`scripts/test_artifact_transfer.py`；`HttpRangeTest`、`ClientSceneServiceTest` 在 `ruoyi-ar` 中。阶段 4 的 `.local/stage4_gate.py` 仅是当时隔离实例门禁记录，不是 clone 后保证存在的仓库入口。
-- 真实样包导入联调：`scripts/import_scene_package.py --base-url http://127.0.0.1:18082 --scene-id UUID --package-root DIR --state-file FILE --credentials-file FILE [--version-id UUID] [--report FILE]`。该脚本只支持**隔离 HTTP 网关根 URL**，不带 `/prod-api`（脚本自动追加），不支持 HTTPS；这不是允许将公网凭据改用明文传输。凭据使用本任务隔离实例的私有文件，状态与报告放 `.local/` 且位于包根之外，不打印口令或令牌。
-- 导入脚本复用创建/上传 API，导入包根下的每个普通文件，拒绝符号链接和空目录。每文件预哈希一次，状态记录 `requestKey` 与 `versionId`（不是 `versionNo`）；同命令或 `--version-id` 续传时重新哈希核对同一清单，跳过 AVAILABLE、不重发 UPLOADING、重传 FAILED/PENDING。口令和令牌只在内存；脚本不自动发布，页面自动发布行为见“后台”节。
-- 旧 `prepare_reference_viewer.py`、`verify_4dgs.py` 与参考播放器目录当前不在 `scripts/` 中，不能作为可执行验收入口。其旧描述基线上的准备、播放、JFR 与真实样包结果统一见 [真实样包验收记录](20-4dgs-sample-validation.md)；这些历史命令不适用当前 0.5.0，不在本轮恢复或维护。
-- 合成模型字节不是可渲染 4DGS 内容，只验证管理与传输契约；浏览器播放、Android/iOS 真机、手机网络和音画主观效果不在这些检查内。
-
-阶段与证据见 [任务记录](tasks/active/2026-10-29-4dgs-resource-refactor.md)。[保留证据索引](evidence/README.md)中的旧入库 JSON 是历史快照，不代表当前代码。
-
-## 明确未实现
-
-后台内嵌场景预览、单独下线、对象存储、CDN、共享依赖与 catalog 解析未实现；版本中的视频文件可经匿名接口读取，不代表后台已有预览界面。参考播放器适配自 2026-10-29 去掉描述后不可用，此前桌面 Chrome 播放结果见 [验收记录](20-4dgs-sample-validation.md)（历史记录），不等于手机或 Unity 原生加载验收。Android/iOS 下载 SDK 尚未提供（`scripts/download_scene.py` 只是下载联调参考）；手机真机播放与音频同步未验证。空目录不保留。
+旧浏览器播放器和旧描述接口验收见[历史样包记录](20-4dgs-sample-validation.md)。本次的测试、运行命令与未验证项只记录于[验证记录](06-validation.md)，不沿用旧测试数字。

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.ar.module.scene.mapper.SceneDeletionMapper">
+    <select id="deleting" resultType="boolean">
+        select exists(select 1 from ar_scene_deletion
+                      where scene_id = cast(#{id} as uuid) and completed_at is null)
+    </select>
+
+    <select id="deletionCompleted" resultType="boolean">
+        select exists(select 1 from ar_scene_deletion
+                      where scene_id = cast(#{id} as uuid) and completed_at is not null)
+    </select>
+
+    <select id="deletionExists" resultType="boolean">
+        select exists(select 1 from ar_scene_deletion where scene_id = cast(#{id} as uuid))
+    </select>
+
+    <select id="deletionRequestKeyExists" resultType="boolean">
+        select exists(select 1 from ar_scene_deletion where request_key = cast(#{requestKey} as uuid))
+    </select>
+
+    <select id="deletedSceneRequestKeyExists" resultType="boolean">
+        select exists(select 1 from ar_scene
+                      where request_key = cast(#{requestKey} as uuid) and deleted_at is not null)
+    </select>
+
+    <insert id="requestDeletion">
+        insert into ar_scene_deletion(scene_id, request_key, actor_id, actor_name)
+        values(cast(#{id} as uuid), cast(#{requestKey} as uuid), #{actor}, #{actorName})
+    </insert>
+
+    <update id="retryDeletion">
+        update ar_scene_deletion set failure_reason = null, actor_id = #{actor}, actor_name = #{actorName}
+        where scene_id = cast(#{id} as uuid) and completed_at is null
+    </update>
+
+    <select id="deletionActor" resultType="com.ruoyi.ar.module.scene.model.SceneRows$Actor">
+        select scene_id::text as "sceneId", actor_id as "actorId", actor_name as "actorName"
+        from ar_scene_deletion where scene_id = cast(#{id} as uuid) and completed_at is null
+    </select>
+
+    <update id="failDeletion">
+        update ar_scene_deletion set failure_reason = #{reason}
+        where scene_id = cast(#{id} as uuid) and completed_at is null
+    </update>
+
+    <update id="completeDeletion">
+        update ar_scene_deletion set completed_at = now(), failure_reason = null
+        where scene_id = cast(#{id} as uuid)
+    </update>
+
+    <select id="pendingDeletions" resultType="string">
+        select scene_id::text from ar_scene_deletion where completed_at is null order by scene_id
+    </select>
+</mapper>

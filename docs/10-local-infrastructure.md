@@ -4,11 +4,11 @@
 
 ## 当前实现与交付边界
 
-本阶段已提供四个服务的 Docker Compose 配置：Nginx、Spring Boot、PostgreSQL 17、Redis。业务能力包含账号、场景、成品版本、文件入库与审计。管理员可在后台导入资源目录并上传文件；匿名客户端可只读已发布版本。
+本地源码提供 Nginx、Spring Boot、PostgreSQL 17、Redis 四服务 Compose；场景直接关联固定模型文件，上传校验完成即对启用场景开放匿名读取，没有独立发布流程。日常部署版本以本页带日期记录为准。
 
-`ArtifactStorage` 和 `LocalArtifactStorage` 提供 `store`/`recover`、读取、删除和盘点。正常入库同一次读取完成大小/SHA256 校验并无覆盖提交，恢复时仅验证未完成记录的遗留字节。存储组件经场景版本服务接入管理员上传、数据库登记与下载，不开放文件目录。文件确认入库不等于业务发布。
+`ArtifactStorage`/`LocalArtifactStorage` 处理流式大小与 SHA256 校验、无覆盖提交、读取、删除和未完成字节恢复。场景服务负责固定清单、可见性与审计，私有目录不公开。
 
-成品版本导入、逐文件上传、发布指针和整版删除已实现，详见 [资源入库闭环](12-resource-ingestion.md)；匿名客户端读取（网关 `/api/v1/client/`）已实现，下载授权不依赖令牌或签名地址。旧候选契约和七表脚本不会参与容器初始化。
+2026-11-06 切换到单场景模型需要 V018 升级和新客户端路径，见[入库闭环](12-resource-ingestion.md)。旧数据库、模型与审计必须保留，日常迁移和重建服务需另行批准。
 
 ## 启动
 
@@ -32,7 +32,7 @@ Compose/准备脚本在未覆盖参数时仍默认 `127.0.0.1:18081`；隔离验
 
 内网开放时设置 `AR_BIND_ADDRESS` 为实际内网地址，并限定宿主防火墙来源。客户端服务地址可配置，管理前端使用同源 `/prod-api/`，匿名读取使用 `/api/v1/client/`；仓库内 gateway 提供 HTTP，公网 TLS 在中继终止。
 
-`AR_STORAGE_MAX_BYTES`（单文件上限）是必填正整数，应按最大模型文件设置；`AR_STORAGE_VERSION_MAX_FILES`（默认 1000）和 `AR_STORAGE_VERSION_MAX_BYTES`（默认 4294967296）限制单个版本。上传使用原始字节流，由服务端检查上限；Nginx 对精确的 `scene-versions/{versionId}/files/{fileId}/content` 路径关闭请求/响应缓冲和网关字节限制，其他接口保持 20m 限制。启动先恢复未完成整版删除，再只核对有遗留数据的未完成文件，不全量重算可用文件。
+新源码使用 `AR_STORAGE_MAX_BYTES` 限制单文件，`AR_STORAGE_SCENE_MAX_FILES`（默认 1000）和 `AR_STORAGE_SCENE_MAX_BYTES`（默认 4294967296）限制场景；替换旧版本命名配置时显式更新私有部署配置。Nginx 对 `/prod-api/api/v1/scenes/{sceneId}/files/{fileId}/content` 关闭请求/响应缓冲和字节限制，其余接口保持 20m。启动先恢复场景删除，再核对未完成上传，不全量重算可用文件。以上不构成已经升级日常实例的记录。
 
 ## 持久卷与权限
 
@@ -55,7 +55,7 @@ PostgreSQL 当前延续 Demo 的初始化/运行同账号模式，该账号拥�
 
 ### 云端独立实例（2026-10-30）
 
-用户授权在 `http://81.71.154.125:18081/` 新建独立部署，SSH 别名 `innovation`，运行用户 `daily`，目录 `/home/daily/innovation-ar-resource-platform`。运行 Compose 不含构建步骤，当前镜像为 backend `parallel-upload-69f8904`、gateway `auto-publish-20261030t124437z`、PostgreSQL `17.6-bookworm`、Redis `7.4.5-alpine3.21`。本次 gateway 复用已验收 dist 打包，包含尚未提交的自动发布/Enter/草稿功能；来源指纹与实际镜像摘要见服务器 `releases/auto-publish-20261030t124437z/source.json`、`release.json`，不能将基线提交 `8ee5581` 当作完整功能源码提交。初次部署的 `manifest.json` 和 `multi-file-ebf930c` 镜像保留为历史/回退材料。
+用户授权在 `http://81.71.154.125:18081/` 新建独立部署，SSH 别名 `innovation`，运行用户 `daily`，目录 `/home/daily/innovation-ar-resource-platform`。运行 Compose 不含构建步骤，2026-10-30 初始镜像为 backend `parallel-upload-69f8904`、gateway `auto-publish-20261030t124437z`、PostgreSQL `17.6-bookworm`、Redis `7.4.5-alpine3.21`。本次 gateway 复用已验收 dist 打包，包含尚未提交的自动发布/Enter/草稿功能；来源指纹与实际镜像摘要见服务器 `releases/auto-publish-20261030t124437z/source.json`、`release.json`，不能将基线提交 `8ee5581` 当作完整功能源码提交。初次部署的 `manifest.json` 和 `multi-file-ebf930c` 镜像保留为历史/回退材料。
 
 初次部署使用全新数据库和文件卷。用户随后将范围明确为**仅迁移账号**，并选择将旧域名切到云端：现已迁移完整 `sys_user`、用户角色/岗位关联，两个原日常账号继续启用且密码不变，退役 bootstrap 仍停用/删除，不能使用云端生成的引导密码登录。没有迁移源端场景、版本、文件、业务审计或登录会话；云端原验收审计保留。HTTP IP 入口是明文，推荐 HTTPS 域名；中继到云端的上游仍是 HTTP，尚未配置端到端 TLS、自动备份或 CDN。
 
@@ -68,7 +68,15 @@ docker compose --env-file config/compose.env up -d --no-build --pull never --wai
 docker compose --env-file config/compose.env stop
 ```
 
-单文件上限 1 GiB，每版本最多 1000 文件 / 4 GiB；ZIP 原样上传，由 Unity 下载后解压。该服务器已实测多文件真实入库与管理员完整/Range 下载，未验证 Unity 解压、手机播放或大文件带宽。部署及验收证据见 [验证记录](06-validation.md)「云端独立 Docker 部署」。
+单文件上限 1 GiB，每场景最多 1000 文件 / 4 GiB；ZIP 原样上传，由 Unity 下载后解压。该服务器已实测多文件真实入库与管理员完整/Range 下载，未验证 Unity 解压、手机播放或大文件带宽。部署及验收证据见 [验证记录](06-validation.md)「云端独立 Docker 部署」。
+
+### 2026-11-06 单场景固定文件上线
+
+用户在该日验收本地实现后要求“去掉列表的文件列后部署”，授权把 `feat/admin-scene-files` 的成果上线日常云端。当前镜像为 backend `single-scene-20261106`（镜像 ID `d71dbe848133`）、gateway `single-scene-20261106`（`6cd1108b3c66`），归档 `releases/single-scene-20261106/images.tar.gz`，SHA256 `ad88f6e8d2af3b828042c9917c9d675f8428ce46c86b74ed9e7e109ebadfc9e8`，来源为本机 worktree 的同一构建产物。`compose.yaml` 与 `config/compose.env` 同时把 `AR_STORAGE_VERSION_MAX_*` 改名为 `AR_STORAGE_SCENE_MAX_*`，值不变；改动前副本保存在同一 `releases/single-scene-20261106/` 目录。
+
+上线前备份：`backups/single-scene-20261106/before-v018.dump`（`pg_dump -Fc`，SHA256 `a0f9d2ca712efa2f079aa5e2f1e0b0190348d57827ec01cf6ec808999be967a3`），含账号数据，不外发。V018 只搬移业务行，不改写 payload 文件；云端实测 13 场景（7 启用）、7 文件、73 审计、0 孤儿文件、4 条删除回执，`flyway_schema_history` 记为成功。Redis 重启会丢登录会话，已登录用户需重新登录。
+
+回退：V018 是破坏式切换，不能只把应用标签改回旧版。获准回退时先停止写入，把镜像标签改回 `knife4j-20261104`，并用上述 dump 还原数据库（会丢弃上线后的新数据）；未执行过回退演练。
 
 账号迁移备份：源端 `.local/migrations/accounts-cloud-20261030/source-before.dump`，云端 `/home/daily/innovation-ar-resource-platform/backups/accounts-20261030/target-before.dump`（均含敏感账号数据，不外发）；nginx 原配置位于 `root@elma-gohan.xyz:/root/4dgs-before-cloud-accounts-20261030.conf`。本机旧容器与应用镜像已清理，但卷仍在；获准回退时先停止云端写入并保全新增数据，核对 `.local/releases/cloud-81.71.154.125-20261030/images.tar.gz.sha256` 后 `docker image load --input .local/releases/cloud-81.71.154.125-20261030/images.tar.gz`，再将 backend `parallel-upload-69f8904` 和 gateway `multi-file-ebf930c` 打回本机 Compose 所用的 `infra-v1` 标签，重建服务以挂回原卷。随后恢复隧道及中继原配置，`nginx -t`、reload。云端已有新增写入时，不能直接恢复旧快照或切回本机丢弃它们；回退恢复演练未执行。
 

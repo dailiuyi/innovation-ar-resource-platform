@@ -1,9 +1,13 @@
-// 对应 SceneService / SceneVersionService 写入 ar_audit 的动作；仅转换展示文案。
+// 对应后端写入 ar_audit 的动作；仅转换展示文案。
+// VERSION_* 等旧文案保留，用于读取不可变的历史操作记录。
 const auditActionLabels = Object.freeze({
   CREATE: '创建场景',
   UPDATE: '编辑场景',
   DELETE: '删除场景',
   SET_ENABLED: '设置场景启用状态',
+  SCENE_DELETE_REQUEST: '请求删除场景',
+  SCENE_DELETE: '删除场景及文件',
+  SCENE_DELETE_FAILED: '场景删除失败',
   VERSION_CREATE: '创建版本',
   VERSION_EDIT: '编辑版本说明',
   VERSION_PUBLISH: '发布版本',

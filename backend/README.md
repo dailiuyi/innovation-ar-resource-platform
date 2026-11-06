@@ -10,7 +10,7 @@
 | `ruoyi-framework` | Spring Security、Token、Web/MyBatis/Redis 配置、审计与请求拦截 |
 | `ruoyi-system` | 账号、固定管理员角色、菜单、字典、登录和操作日志的现有依赖 |
 | `ruoyi-common` | 框架实际使用的公共模型、异常与工具 |
-| `ruoyi-ar` | 场景、版本与匿名客户端模块，以及文件存储和协议工具 |
+| `ruoyi-ar` | 场景固定文件、上传与恢复、启停删除、匿名资源分发，以及存储和协议工具 |
 
 AR 代码从 [分层目录](ruoyi-ar/README.md) 或 [业务代码导读](../docs/23-code-review-guide.md) 开始。业务模块内部按 Controller → Service → Manager → Mapper，跨模块只调用 Service；基础 CRUD 复用 MyBatis-Plus，自定义 SQL 留在 Mapper XML。不要为层数增加空接口、无用实体或转换器。
 
@@ -31,7 +31,7 @@ AR 按 Controller → Service → Manager → Mapper 分层；根包 `storage/co
 
 MyBatis-Plus 3.5.18 Boot 3 starter 替换原 starter；自动配置统一构建 SqlSessionFactory，删除原手工扫描工厂，注册 PostgreSQL UUID 类型处理器。原 XML 和若依 PageHelper 保留，不同时启用两套分页拦截器。
 
-场景 Mapper 基于已有 SceneDO 复用 insert/selectById；修订号更新、启停和软删除仍为显式 XML，避免通用写操作漏掉版本检查、停用与审计。版本 Mapper 按版本元数据/发布、文件、删除回执拆分，39 条自定义 SQL 语义和 Service 事务边界不变。客户端与版本查询投影不为了继承 BaseMapper 再增加实体或通用 Service。
+2026-11-06 单场景模型改造后，`module/scene` 负责信息和文件生命周期，`module/client` 负责匿名读取；SQL 按场景、文件、删除回执拆分并留在 XML，Service 保持短事务与事务外 IO。原业务版本模块及发布指针已移除，V018 保留文件身份并把历史模型迁为停用场景。MyBatis-Plus 配置与 UUID 类型处理器继续沿用，查询 record 不为通用 CRUD 增加无用实体。
 
 ## 验证与运行
 
@@ -43,7 +43,7 @@ python3 scripts/harness.py doctor --profile quick
 python3 scripts/harness.py check --profile quick
 ```
 
-Java 检查产出 `backend/ruoyi-admin/target/ruoyi-admin.jar`。测试与 quick 不等于 HTTP 或浏览器验收；隔离运行流程见 [开发工作流](../docs/development-workflow.md) 和 [Harness](../docs/13-harness.md)。账号变更需账号专项，场景/文件变更需对应入库、发布、下载和恢复检查。
+Java 检查产出 `backend/ruoyi-admin/target/ruoyi-admin.jar`。测试与 quick 不等于 HTTP 或浏览器验收；隔离运行流程见 [开发工作流](../docs/development-workflow.md) 和 [Harness](../docs/13-harness.md)。场景文件变更需上传即发布、启停、资源分发、物理删除及恢复检查。用户确认已有客户端已跑通解压/解码，本轮不扩展为播放器开发。
 
 应用仅加载 `ruoyi-admin/src/main/resources/db/demo` 下的 Flyway 迁移。框架清理不删除历史迁移、生产表或数据，不重置账号/权限。登录凭据、Token 密钥、数据库密码通过私密环境配置提供，不写入源码。
 

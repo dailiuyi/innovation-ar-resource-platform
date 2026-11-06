@@ -13,18 +13,17 @@ from urllib.parse import quote
 import download_scene
 from download_scene import SceneError
 
-SCENE = str(uuid.uuid4())
-
 
 def blob(seed, size):
     return bytes((seed * 31 + i) % 251 for i in range(size))
 
 
 class FakeApi:
-    """Serves one published version and its files; behaviour per file id can be changed mid-test."""
+    """Serves one scene's fixed file list and its files; behaviour per file id can be changed mid-test."""
 
     def __init__(self):
-        self.version = str(uuid.uuid4())
+        self.scene = str(uuid.uuid4())
+        self.disabled = False
         self.files = {}      # relativePath -> {"id", "data"}
         self.requests = []   # (method, path, range, authorization)
         self.mode = {}       # fileId -> "ignore_range" | "corrupt" | "cut:<n>" | "conflict"
@@ -46,9 +45,8 @@ class FakeApi:
             name = path.rsplit("/", 1)[-1]
             files.append({"fileId": item["id"], "relativePath": path, "bytes": len(item["data"]),
                           "sha256": hashlib.sha256(item["data"]).hexdigest(), "contentType": "application/octet-stream",
-                          "downloadPath": f"/api/v1/client/scenes/{SCENE}/versions/{self.version}/files/{item['id']}/content/{quote(name)}"})
-        return {"sceneId": SCENE, "name": "t", "versionId": self.version, "versionNo": 1,
-                "files": files, "fileCount": len(files),
+                          "downloadPath": f"/api/v1/client/scenes/{self.scene}/files/{item['id']}/content/{quote(name)}"})
+        return {"sceneId": self.scene, "name": "t", "files": files, "fileCount": len(files),
                 "totalBytes": sum(len(i["data"]) for i in self.files.values())}
 
     def content_requests(self, path=None):
@@ -65,7 +63,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         api = self.server.api
         api.requests.append(("GET", self.path, self.headers.get("Range"), self.headers.get("Authorization")))
-        if self.path == f"/api/v1/client/scenes/{SCENE}":
+        if self.path == f"/api/v1/client/scenes/{api.scene}":
+            if api.disabled:
+                self.send_error(404)
+                return
             body = json.dumps(api.detail()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -73,14 +74,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        match = re.fullmatch(rf"/api/v1/client/scenes/{SCENE}/versions/([^/]+)/files/([^/]+)/content/.+", self.path)
-        item = next((i for i in api.files.values() if match and i["id"] == match[2]), None)
-        if not match or item is None:
+        match = re.fullmatch(rf"/api/v1/client/scenes/{api.scene}/files/([^/]+)/content/.+", self.path)
+        item = next((i for i in api.files.values() if match and i["id"] == match[1]), None)
+        if api.disabled or not match or item is None:
             self.send_error(404)
             return
         mode = api.mode.get(item["id"], "")
-        if mode == "conflict" or match[1] != api.version:
-            body = b'{"code":"AR_409","message":"changed"}'
+        if mode == "conflict":
+            body = b'{"code":"AR_409","message":"stored file missing or length mismatch"}'
             self.send_response(409)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -124,13 +125,13 @@ class DownloadSceneTest(unittest.TestCase):
         self.server.server_close()
         self.temporary.cleanup()
 
-    def run_tool(self):
-        return download_scene.run(self.base, SCENE, self.out, log=lambda message: None)
+    def run_tool(self, scene=None):
+        return download_scene.run(self.base, scene or self.api.scene, self.out, log=lambda message: None)
 
-    def task_dir(self, version=None):
-        return self.out / SCENE / (version or self.api.version)
+    def task_dir(self, scene=None):
+        return self.out / (scene or self.api.scene)
 
-    def test_every_file_of_the_version_with_exact_payload_layout(self):
+    def test_every_file_of_the_scene_with_exact_payload_layout(self):
         payload = self.run_tool()
         task = self.task_dir()
         self.assertEqual(payload, task / "payload")
@@ -140,8 +141,8 @@ class DownloadSceneTest(unittest.TestCase):
         for path, item in self.api.files.items():
             self.assertEqual((payload / path).read_bytes(), item["data"])
         ready = json.loads((task / "ready.json").read_text())
-        self.assertEqual((ready["sceneId"], ready["versionId"]), (SCENE, self.api.version))
-        self.assertNotIn("variantId", ready)
+        self.assertEqual(ready["sceneId"], self.api.scene)
+        self.assertNotIn("versionId", ready)
         self.assertEqual(ready["totalBytes"], 150000 + 120000 + 200000 + 13 + 5000)
         self.assertEqual(sorted(p.name for p in (task / ".transfer").iterdir() if p.suffix in (".part", ".json")), [])
         self.assertTrue(all(r[3] is None for r in self.api.requests), "client must be anonymous")
@@ -153,7 +154,7 @@ class DownloadSceneTest(unittest.TestCase):
             self.run_tool()
         task = self.task_dir()
         state = json.loads((task / ".download-state.json").read_text())
-        self.assertEqual((state["sceneId"], state["versionId"]), (SCENE, self.api.version))
+        self.assertEqual(state["sceneId"], self.api.scene)
         self.assertEqual(sorted(state["completed"]), sorted(self.api.file_id(p) for p in (
             "common/poster.jpg", "common/settings.json", "high/00.c.ply")))
         self.assertFalse((task / "ready.json").exists())
@@ -191,15 +192,13 @@ class DownloadSceneTest(unittest.TestCase):
         self.api.mode[self.api.file_id("standard/00.c.ply")] = "cut:1000"
         with self.assertRaises(Exception):
             self.run_tool()
-        self.assertTrue(list((self.out / SCENE).glob("*.lock")))
+        self.assertTrue((self.out / (self.api.scene + ".lock")).exists())
         self.assertTrue(list((self.task_dir() / ".transfer").glob("*.lock")))
         self.api.mode.clear()
         self.run_tool()  # would raise "another download is running" if file existence meant a lock
 
     def test_live_lock_is_reported_not_stolen(self):
-        scene_dir = self.out / SCENE
-        scene_dir.mkdir(parents=True)
-        with download_scene.os_lock(scene_dir / (self.api.version + ".lock")):
+        with download_scene.os_lock(self.out / (self.api.scene + ".lock")):
             with self.assertRaisesRegex(SceneError, "another download"):
                 self.run_tool()
         self.assertEqual(self.api.content_requests(), [])
@@ -236,27 +235,26 @@ class DownloadSceneTest(unittest.TestCase):
         self.assertEqual(len(self.api.content_requests(bad)), 1)
         self.assertTrue((task / "ready.json").exists())
 
-    def test_version_change_stops_with_409_and_never_mixes_versions(self):
-        old_version = self.api.version
+    def test_storage_conflict_stops_without_ready_or_retry_loop(self):
         self.api.mode[self.api.file_id("standard/01.c.ply")] = "conflict"
         with self.assertRaises(SceneError) as caught:
             self.run_tool()
-        self.assertEqual(caught.exception.code, 3)
-        old_task = self.task_dir()
-        self.assertFalse((old_task / "ready.json").exists())
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("unavailable", str(caught.exception))
+        task = self.task_dir()
+        self.assertFalse((task / "ready.json").exists())
         self.assertEqual(len(self.api.content_requests("standard/01.c.ply")), 1)  # no automatic retry loop
-        # V2 is published: new ids, changed bytes in the same relative path.
-        self.api.mode.clear()
-        self.api.version = str(uuid.uuid4())
-        self.api.add("standard/00.c.ply", blob(9, 150000))
-        self.api.add("standard/01.c.ply", blob(8, 120000))
-        payload = self.run_tool()
-        new_task = self.task_dir()
-        self.assertNotEqual(old_task, new_task)
-        self.assertEqual((payload / "standard/00.c.ply").read_bytes(), self.api.files["standard/00.c.ply"]["data"])
-        self.assertFalse((old_task / "ready.json").exists())
-        self.assertEqual(json.loads((old_task / ".download-state.json").read_text())["versionId"], old_version)
-        self.assertEqual((old_task / "payload" / "standard" / "00.c.ply").read_bytes(), blob(1, 150000))
+        self.assertTrue((task / ".download-state.json").exists())
+
+    def test_disabled_scene_is_an_explicit_404(self):
+        self.api.disabled = True
+        with self.assertRaises(SceneError) as caught:
+            self.run_tool()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("404", str(caught.exception))
+        self.assertIn("disabled", str(caught.exception))
+        self.assertEqual(self.api.content_requests(), [])
+        self.assertFalse(self.task_dir().exists())
 
     def test_non_empty_directory_without_state_is_refused(self):
         task = self.task_dir()
@@ -267,7 +265,7 @@ class DownloadSceneTest(unittest.TestCase):
         self.assertEqual((task / "keep.txt").read_text(), "mine")
 
     def test_unowned_staging_directory_is_kept(self):
-        staging = self.out / SCENE / (self.api.version + ".tmp")
+        staging = self.out / (self.api.scene + ".tmp")
         staging.mkdir(parents=True)
         (staging / "keep.txt").write_text("mine")
         with self.assertRaisesRegex(SceneError, "not empty"):
@@ -284,13 +282,45 @@ class DownloadSceneTest(unittest.TestCase):
         self.assertEqual(self.api.content_requests("standard/00.c.ply"), [])
         self.assertTrue((payload / "common" / "settings.json").exists())
 
+    def test_changed_manifest_for_the_same_scene_is_not_mixed(self):
+        self.run_tool()
+        task = self.task_dir()
+        original = (task / "payload" / "standard" / "00.c.ply").read_bytes()
+        (task / "ready.json").unlink()
+        self.api.add("standard/00.c.ply", blob(9, 150000))
+        with self.assertRaisesRegex(SceneError, "different or unreadable download state"):
+            self.run_tool()
+        self.assertEqual((task / "payload" / "standard" / "00.c.ply").read_bytes(), original)
+        self.assertFalse((task / "ready.json").exists())
+
+    def test_another_scene_is_a_separate_task_with_its_own_identity(self):
+        first = self.run_tool()
+        first_scene = self.api.scene
+        other = str(uuid.uuid4())
+        self.api.scene = other
+        self.api.files.clear()
+        self.api.add("only.bin", b"other")
+        second = self.run_tool()
+        self.assertEqual(first, self.out / first_scene / "payload")
+        self.assertNotEqual(first, second)
+        self.assertEqual(second, self.out / other / "payload")
+        self.assertEqual((second / "only.bin").read_bytes(), b"other")
+        ready = json.loads((self.out / other / "ready.json").read_text())
+        self.assertEqual(ready["sceneId"], other)
+        self.assertNotIn("versionId", ready)
+
+    def test_unsafe_relative_path_is_refused_before_writing(self):
+        self.api.add("../escape.bin", b"x")
+        with self.assertRaises(ValueError):
+            self.run_tool()
+        self.assertEqual(self.api.content_requests(), [])
+
     def test_command_line_exit_codes(self):
-        self.assertEqual(download_scene.main(["--base-url", self.base, "--scene-id", SCENE,
+        self.assertEqual(download_scene.main(["--base-url", self.base, "--scene-id", self.api.scene,
                                               "--output", str(self.out)]), 0)
-        self.api.mode[self.api.file_id("standard/01.c.ply")] = "conflict"
-        self.api.version = str(uuid.uuid4())
-        self.assertEqual(download_scene.main(["--base-url", self.base, "--scene-id", SCENE,
-                                              "--output", str(self.out)]), 3)
+        self.api.disabled = True
+        self.assertEqual(download_scene.main(["--base-url", self.base, "--scene-id", self.api.scene,
+                                              "--output", str(self.out)]), 1)
 
 
 if __name__ == "__main__":
