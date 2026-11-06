@@ -80,6 +80,12 @@ docker compose --env-file config/compose.env stop
 
 账号迁移备份：源端 `.local/migrations/accounts-cloud-20261030/source-before.dump`，云端 `/home/daily/innovation-ar-resource-platform/backups/accounts-20261030/target-before.dump`（均含敏感账号数据，不外发）；nginx 原配置位于 `root@elma-gohan.xyz:/root/4dgs-before-cloud-accounts-20261030.conf`。本机旧容器与应用镜像已清理，但卷仍在；获准回退时先停止云端写入并保全新增数据，核对 `.local/releases/cloud-81.71.154.125-20261030/images.tar.gz.sha256` 后 `docker image load --input .local/releases/cloud-81.71.154.125-20261030/images.tar.gz`，再将 backend `parallel-upload-69f8904` 和 gateway `multi-file-ebf930c` 打回本机 Compose 所用的 `infra-v1` 标签，重建服务以挂回原卷。随后恢复隧道及中继原配置，`nginx -t`、reload。云端已有新增写入时，不能直接恢复旧快照或切回本机丢弃它们；回退恢复演练未执行。
 
+### 2026-11-06 场景面板瘦身（仅前端）
+
+用户要求“合并到 main、提交、部署并推送”后，云端只替换 gateway：镜像 `innovation-ar-resource-platform-gateway:scene-panel-20261106`（ID `8941f506cb88`），由提交 `ae8c11f` 的 `deploy/gateway.Dockerfile` 本机构建，归档 `releases/scene-panel-20261106/gateway.tar.gz`，SHA256 `ef6e703d0ea48ff19a6c22cfb2af5d2e50fa8bf33f8dc360de3adfd2b6df2a36`。backend、PostgreSQL、Redis 和卷未动，无数据库迁移，因此未另做备份。`compose.yaml` 仅改 gateway 标签，改前副本为同目录 `compose.yaml.before`。`http://81.71.154.125:18081` 与 `https://4dgs.elma-gohan.xyz` 均返回新前端资源 `ScenePanel-CSdUGdgc.js`，gateway 健康检查通过；未登录检查页面，视觉由用户验收。
+
+回退：把 `compose.yaml` 的 gateway 标签改回 `single-scene-20261106`，再执行 `docker compose --env-file config/compose.env up -d --no-build --pull never --no-deps --wait gateway`；该旧镜像仍在云端。
+
 
 ## 存储组件约定
 
